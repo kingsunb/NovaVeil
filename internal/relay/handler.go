@@ -60,6 +60,17 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			return
 		}
 
+		// 协议自动检测: 部分客户端(如 ZCode)将原生 Anthropic Messages 格式请求
+		// 发往 /v1/chat/completions 端点。OpenAI Chat 解析器会静默丢弃顶层 system
+		// 字段并破坏 input_schema 工具定义, 导致上游收到空壳请求返回空响应。
+		// 检测到 Anthropic 格式标记时切换为 Anthropic 入站转换器, 避免数据丢失。
+		format := format
+		inbound := inbound
+		if format == llm.APIFormatOpenAIChatCompletion && looksLikeAnthropicMessages(raw.Body) {
+			format = llm.APIFormatAnthropicMessage
+			inbound = anthropic.NewInboundTransformer()
+		}
+
 		// 此处只读取选组和分流所需字段; 完整协议校验由同协议上游或跨协议 pipeline 完成。
 		// gjson 单字段提取: 完整 json.Unmarshal 会为每个请求构建整棵泛型解析树,
 		// 对多 MB 长上下文请求体是纯粹的每请求浪费。
@@ -1173,4 +1184,25 @@ func sanitizeRequestBody(raw *httpclient.Request) {
 			raw.Body = updated
 		}
 	}
+}
+
+// looksLikeAnthropicMessages 报告请求体是否为 Anthropic Messages API 格式。
+// 用于 /v1/chat/completions 端点的协议自动检测: 部分客户端(如 ZCode)将原生
+// Anthropic 格式请求发往 OpenAI Chat 端点, OpenAI Chat 解析器无法正确处理
+// 顶层 system 字段和 input_schema 工具定义。
+//
+// 检测标记(任一即判定为 Anthropic):
+//   - 顶层 "system" 字段存在(Anthropic 将 system 放在顶层, OpenAI Chat 用 messages[].role:"system")
+//   - tools 中存在 "input_schema"(Anthropic)而非 "function.parameters"(OpenAI Chat)
+func looksLikeAnthropicMessages(body []byte) bool {
+	// Anthropic 的顶层 system 字段: 字符串或数组。OpenAI Chat 不使用此字段。
+	if gjson.GetBytes(body, "system").Exists() {
+		return true
+	}
+	// Anthropic 工具用 input_schema; OpenAI Chat 工具用 function.parameters。
+	// 检查第一个工具即可——同一请求内所有工具格式一致。
+	if gjson.GetBytes(body, "tools.0.input_schema").Exists() {
+		return true
+	}
+	return false
 }

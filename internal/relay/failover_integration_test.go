@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/looplj/axonhub/llm"
+	"github.com/tidwall/gjson"
 )
 
 var (
@@ -690,6 +692,130 @@ func TestAnthropicFinishWithoutMessageStopDelivered(t *testing.T) {
 	state := requestStateOf(t, expectedID)
 	if state.Status != StatusSuccess {
 		t.Fatalf("缺 message_stop 的完整流应以成功终态定稿, 实际 %s(%s)", state.Status, state.Error)
+	}
+}
+
+// TestAnthropicBodyToOpenAIChatEndpoint 验证协议自动检测:
+// 客户端将原生 Anthropic Messages 格式请求发往 /v1/chat/completions 端点时,
+// NovaVeil 检测到 Anthropic 格式标记(顶层 system 字段、input_schema 工具定义)
+// 并切换为 Anthropic 入站转换器, 避免 OpenAI Chat 解析器静默丢弃 system 和工具定义。
+// 修复前该场景产出空响应({"id":"","choices":null,...}), 修复后上游收到完整 Anthropic 请求,
+// 客户端收到正确格式的 Anthropic 响应。
+func TestAnthropicBodyToOpenAIChatEndpoint(t *testing.T) {
+	setupFailoverTest(t)
+
+	var upstreamBody string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		upstreamBody = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_detect","type":"message","role":"assistant","content":[{"type":"text","text":"hello back"}],"model":"it-m-detect","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":3}}`))
+	}))
+	defer upstream.Close()
+
+	channel := createIntegrationChannel(t, "it-anthropic-detect", model.ChannelProviderAnthropic, upstream.URL, "it-m-detect")
+	group := createIntegrationGroup(t, "it-failover-detect",
+		model.GroupRelayConfig{
+			MemberMaxAttempts:                     2,
+			MemberRetryIntervalSeconds:            1,
+			MemberNonStreamResponseTimeoutSeconds: 5,
+			MemberStreamFirstEventTimeoutSeconds:  5,
+			MemberCooldownSeconds:                 60,
+		},
+		integrationLeafItem(t, channel, "it-m-detect"))
+
+	// 关键: 使用 OpenAI Chat 端点 (/v1/chat/completions) 发送 Anthropic 格式请求体。
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"max_tokens":256,"system":[{"type":"text","text":"You are a helpful assistant."}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"tools":[{"name":"calc","description":"A calculator","input_schema":{"type":"object","properties":{"expr":{"type":"string"}}}}],"stream":false}`, group.Name)
+
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("客户端应收到 200, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	// 响应应为 Anthropic 格式(type:"message"), 而非 OpenAI Chat 格式(object:"chat.completion")。
+	respType := gjson.GetBytes(recorder.Body.Bytes(), "type").String()
+	if respType != "message" {
+		t.Fatalf("响应应为 Anthropic 格式(type=message), 实际 type=%q, body: %s", respType, recorder.Body.String())
+	}
+	content := gjson.GetBytes(recorder.Body.Bytes(), "content.0.text").String()
+	if content != "hello back" {
+		t.Fatalf("响应内容应为 'hello back', 实际: %s", recorder.Body.String())
+	}
+
+	// 上游应收到完整的 Anthropic 请求: 顶层 system 字段和 input_schema 工具定义都应保留。
+	if !strings.Contains(upstreamBody, `"system"`) {
+		t.Fatalf("上游请求应包含 system 字段, 实际: %s", upstreamBody)
+	}
+	if !strings.Contains(upstreamBody, `"input_schema"`) {
+		t.Fatalf("上游请求应包含 input_schema 工具定义, 实际: %s", upstreamBody)
+	}
+	if !strings.Contains(upstreamBody, "You are a helpful assistant") {
+		t.Fatalf("上游请求应包含 system 文本, 实际: %s", upstreamBody)
+	}
+}
+
+// TestAnthropicBodyToOpenAIChatEndpointStream 验证协议自动检测的流式场景:
+// ZCode 等客户端以 Anthropic 格式发送流式请求到 /v1/chat/completions 端点,
+// NovaVeil 应检测到 Anthropic 格式并以 Anthropic SSE 事件流返回(而非 OpenAI Chat 流)。
+func TestAnthropicBodyToOpenAIChatEndpointStream(t *testing.T) {
+	setupFailoverTest(t)
+
+	var upstreamBody string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		upstreamBody = string(raw)
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeUpstreamSSE(t, w, "message_start", `{"type":"message_start","message":{"id":"msg_detect_stream","type":"message","role":"assistant","content":[],"model":"it-m-detect-s","stop_reason":null,"usage":{"input_tokens":5,"output_tokens":0}}}`)
+		writeUpstreamSSE(t, w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+		writeUpstreamSSE(t, w, "content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"stream hello"}}`)
+		writeUpstreamSSE(t, w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+		writeUpstreamSSE(t, w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}`)
+		writeUpstreamSSE(t, w, "message_stop", `{"type":"message_stop"}`)
+	}))
+	defer upstream.Close()
+
+	channel := createIntegrationChannel(t, "it-anthropic-detect-s", model.ChannelProviderAnthropic, upstream.URL, "it-m-detect-s")
+	group := createIntegrationGroup(t, "it-failover-detect-s",
+		model.GroupRelayConfig{
+			MemberMaxAttempts:                     2,
+			MemberRetryIntervalSeconds:            1,
+			MemberNonStreamResponseTimeoutSeconds: 5,
+			MemberStreamFirstEventTimeoutSeconds:  5,
+			MemberCooldownSeconds:                 60,
+		},
+		integrationLeafItem(t, channel, "it-m-detect-s"))
+
+	// 关键: 使用 OpenAI Chat 端点发送 Anthropic 格式流式请求。
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"max_tokens":256,"system":"You are helpful.","messages":[{"role":"user","content":"hi"}],"stream":true}`, group.Name)
+
+	expectedID := nextRequestID()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("客户端应收到 200 流式响应, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	// 客户端应收到 Anthropic SSE 事件(message_start/content_block_delta), 而非 OpenAI Chat 流。
+	frames := parseSSEFrames(t, recorder.Body.Bytes())
+	if len(frames) == 0 {
+		t.Fatal("应收到流式帧, 实际为空")
+	}
+	firstType := frames[0].frameType()
+	if firstType != "message_start" {
+		t.Fatalf("首帧应为 Anthropic message_start, 实际 %q: %s", firstType, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "stream hello") {
+		t.Fatalf("客户端应收到完整内容, 实际: %s", recorder.Body.String())
+	}
+	// 上游应收到 Anthropic 格式请求(system 字段保留)。
+	if !strings.Contains(upstreamBody, `"system"`) {
+		t.Fatalf("上游请求应包含 system 字段, 实际: %s", upstreamBody)
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusSuccess {
+		t.Fatalf("流式请求应以成功终态定稿, 实际 %s(%s)", state.Status, state.Error)
 	}
 }
 
