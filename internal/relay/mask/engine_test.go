@@ -195,7 +195,8 @@ func TestEngine_MAC_ConsistentWithinSession(t *testing.T) {
 
 func TestEngine_USCC(t *testing.T) {
 	e := NewEngine(NewSessionStore())
-	const code = "913100007757804495"
+	// 91330100799655058B 为真实在册统一社会信用代码(阿里巴巴), 校验位 B 经 USCC 算法验证通过。
+	const code = "91330100799655058B"
 
 	// 开关关闭: 原样保留。
 	res, err := e.Apply("code "+code+" end", "s1", enable(), nil)
@@ -210,10 +211,10 @@ func TestEngine_USCC(t *testing.T) {
 	restored := RestoreString(res2.Masked, res2.Mapping)
 	assert.Equal(t, "code "+code+" end", restored)
 
-	// 校验位非法(篡改末位): 不命中, 原样保留。
-	res3, err := e.Apply("code 913100007757804496 end", "s3", enable("USCC"), nil)
+	// 校验位非法(篡改合法样例末位): 不命中, 原样保留。
+	res3, err := e.Apply("code 91330100799655058A end", "s3", enable("USCC"), nil)
 	require.NoError(t, err)
-	assert.Equal(t, "code 913100007757804496 end", res3.Masked, "校验位非法不脱敏")
+	assert.Equal(t, "code 91330100799655058A end", res3.Masked, "校验位非法不脱敏")
 	for _, m := range res3.Matches {
 		assert.NotEqual(t, "USCC", m.Label, "非法信用代码不应出现在命中明细")
 	}

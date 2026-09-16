@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 
 import { MaskMatches } from "./MaskMatches";
-import type { MaskTestMatch } from "@/lib/types";
+import type { MaskMatchSummary } from "@/lib/types";
 
-const matches: MaskTestMatch[] = [
-  { label: "PHONE", original: "13800138000", placeholder: "{{PHONE_bcdfgh}}" },
-  { label: "EMAIL", original: "user@example.com", placeholder: "{{EMAIL_ab12cd}}" },
-  { label: "SECRET", original: "sk-super-secret-key", placeholder: "{{SECRET_xy99z1}}" },
-  { label: "TERM", original: "内部代号X", placeholder: "{{TERM_qw3rty}}" },
+// 实施边界修订(文档 07): 日志命中明细只含 label + placeholder, 不含 original。
+const matches: MaskMatchSummary[] = [
+  { label: "PHONE", placeholder: "{{PHONE_bcdfgh}}" },
+  { label: "EMAIL", placeholder: "{{EMAIL_ab12cd}}" },
+  { label: "SECRET", placeholder: "{{SECRET_xy99z1}}" },
+  { label: "TERM", placeholder: "{{TERM_qw3rty}}" },
 ];
 
 describe("<MaskMatches />", () => {
@@ -21,7 +22,7 @@ describe("<MaskMatches />", () => {
     expect(c3.querySelector('[data-testid="mask-matches"]')).toBeNull();
   });
 
-  it("有命中时渲染标题、计数与每条占位符；原文默认折叠", () => {
+  it("有命中时渲染标题、计数与每条规则标签/占位符", () => {
     render(<MaskMatches matches={matches} />);
     const box = screen.getByTestId("mask-matches");
     expect(within(box).getByText("脱敏命中")).toBeTruthy();
@@ -34,23 +35,14 @@ describe("<MaskMatches />", () => {
     // 规则标签 Pill 可见
     expect(within(box).getByText("PHONE")).toBeTruthy();
     expect(within(box).getByText("SECRET")).toBeTruthy();
-    // 原文默认折叠：不直接展示，仅给「显示原文」按钮
-    expect(within(box).queryByText("13800138000")).toBeNull();
-    expect(within(box).getAllByText("显示原文")).toHaveLength(matches.length);
   });
 
-  it("点击「显示原文」展开命中原文，再点「收起」折叠", () => {
+  it("边界修订: 不渲染命中原文 / 不提供「显示原文」入口", () => {
     render(<MaskMatches matches={matches} />);
     const box = screen.getByTestId("mask-matches");
-    const expandBtns = within(box).getAllByText("显示原文");
-    fireEvent.click(expandBtns[0]!);
-    // 第一条原文展开可见
-    expect(within(box).getByText("13800138000")).toBeTruthy();
-    // 其余仍折叠
-    expect(within(box).queryByText("user@example.com")).toBeNull();
-    // 收起
-    fireEvent.click(within(box).getByText("收起"));
-    expect(within(box).queryByText("13800138000")).toBeNull();
+    // 无展开/收起交互
+    expect(within(box).queryByText("显示原文")).toBeNull();
+    expect(within(box).queryByText("收起")).toBeNull();
   });
 
   it("支持自定义标题（如错误日志的「触发规则」）", () => {

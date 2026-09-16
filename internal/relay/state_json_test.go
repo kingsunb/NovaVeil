@@ -161,7 +161,7 @@ func TestRequestStateJSONOmitsEmptyProxyAddr(t *testing.T) {
 }
 
 // TestRequestStateJSONMaskMatches 验证命中明细序列化(文档 07 §3.4):
-//   - 有命中时 JSON 含正确的 label/original/placeholder;
+//   - 有命中时 JSON 含正确的 label/placeholder(实施边界修订: 不含 original);
 //   - 无命中(nil)时 mask_matches 字段因 omitempty 不出现。
 func TestRequestStateJSONMaskMatches(t *testing.T) {
 	t.Run("populated matches serialize correctly", func(t *testing.T) {
@@ -173,8 +173,8 @@ func TestRequestStateJSONMaskMatches(t *testing.T) {
 			ClientIP:  "203.0.113.60",
 			Attempts:  []AttemptRecord{},
 			MaskMatches: []MaskMatch{
-				{Label: "PHONE", Original: "13800138000", Placeholder: "{{PHONE_abcd12}}"},
-				{Label: "TERM", Original: "机密项目", Placeholder: "{{TERM_ef3456}}"},
+				{Label: "PHONE", Placeholder: "{{PHONE_abcd12}}"},
+				{Label: "TERM", Placeholder: "{{TERM_ef3456}}"},
 			},
 		}
 		encoded, err := json.Marshal(state)
@@ -190,11 +190,15 @@ func TestRequestStateJSONMaskMatches(t *testing.T) {
 		if len(got.MaskMatches) != 2 {
 			t.Fatalf("mask_matches len = %d, want 2", len(got.MaskMatches))
 		}
-		if got.MaskMatches[0].Label != "PHONE" || got.MaskMatches[0].Original != "13800138000" || got.MaskMatches[0].Placeholder != "{{PHONE_abcd12}}" {
+		if got.MaskMatches[0].Label != "PHONE" || got.MaskMatches[0].Placeholder != "{{PHONE_abcd12}}" {
 			t.Fatalf("mask_matches[0] = %+v, want PHONE match", got.MaskMatches[0])
 		}
-		if got.MaskMatches[1].Label != "TERM" || got.MaskMatches[1].Original != "机密项目" || got.MaskMatches[1].Placeholder != "{{TERM_ef3456}}" {
+		if got.MaskMatches[1].Label != "TERM" || got.MaskMatches[1].Placeholder != "{{TERM_ef3456}}" {
 			t.Fatalf("mask_matches[1] = %+v, want TERM match", got.MaskMatches[1])
+		}
+		// 实施边界修订: 日志命中明细 JSON 不得包含 original 字段(后端数据最小化)。
+		if strings.Contains(string(encoded), `"original"`) {
+			t.Fatalf("mask_matches JSON 不应包含 original: %s", encoded)
 		}
 	})
 

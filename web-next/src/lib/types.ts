@@ -413,8 +413,8 @@ export interface BuildInfo {
   build_time: string;
 }
 
-/** Token 趋势档位：与后端 op.ValidUsageRange 对齐。 */
-export type TokenTrendRange = "24h" | "7d" | "30d" | "1y" | "3y" | "forever";
+/** Token 趋势档位：与后端 op.ValidUsageRange 对齐（前端不暴露 forever 全量档）。 */
+export type TokenTrendRange = "24h" | "7d" | "30d" | "1y" | "3y";
 
 /**
  * Token 用量趋势单点 —— /api/v1/update/token-trends?range=
@@ -532,11 +532,12 @@ export interface RequestState {
   sending: boolean;
   attempts?: AttemptRecord[];
   /**
-   * 本次请求脱敏命中的规则明细（文档 07）：仅在脱敏发生时由状态流下发，
-   * 元素形状与 /api/v1/mask/test 一致。旧版本进程 / 开关关闭时缺省或为空数组，
-   * 前端按可选处理，无命中时不渲染「脱敏命中」区域。
+   * 本次请求脱敏命中的规则明细（文档 07）：仅在脱敏发生时由状态流下发。
+   * 实施边界修订: 日志命中明细只含 label + placeholder 安全摘要, 不下发 original
+   * (查看日志原文不是已批准能力); 与预览接口 MaskTestMatch 类型分离。
+   * 旧版本进程 / 开关关闭时缺省或为空数组，前端按可选处理，无命中时不渲染。
    */
-  mask_matches?: MaskTestMatch[];
+  mask_matches?: MaskMatchSummary[];
 }
 
 export interface FailureSummary {
@@ -573,9 +574,10 @@ export interface ErrorLog {
   err_detail?: string;
   /**
    * 持久化错误日志携带的脱敏命中明细（文档 07 §3.2）：
+   * 实施边界修订: 只含 label + placeholder, 不持久化 original。
    * 仅在保留完整请求体的条目上附带，旧记录该字段缺省/空数组，天然兼容。
    */
-  mask_matches?: MaskTestMatch[];
+  mask_matches?: MaskMatchSummary[];
 }
 
 export interface ClientStats {
@@ -676,10 +678,17 @@ export interface MaskRuleMeta {
   default_enabled: boolean;
 }
 
-/** 脱敏测试命中明细，与后端 handlers.maskTestMatch 对齐。 */
+/** 脱敏测试命中明细，与后端 handlers.maskTestMatch 对齐（预览接口，含命中原文）。 */
 export interface MaskTestMatch {
   label: string;
   original: string;
+  placeholder: string;
+}
+
+/** 日志命中明细安全摘要（文档 07）：只含规则标签 + 占位符, 不含 original。
+ * 与 MaskTestMatch 分离: 预览接口可展示原文, 日志命中明细首期不下发/不持久化/不展示原文。 */
+export interface MaskMatchSummary {
+  label: string;
   placeholder: string;
 }
 

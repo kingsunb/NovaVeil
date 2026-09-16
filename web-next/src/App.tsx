@@ -14,15 +14,6 @@ import {
   Skeleton,
   TableSkeleton,
 } from "@/components/ui/skeleton";
-import {
-  CardGridSkeleton,
-  LoginSkeleton,
-  LogsSkeleton,
-  PageSkeleton,
-  SettingsSkeleton,
-  Skeleton,
-  TableSkeleton,
-} from "@/components/ui/skeleton";
 import { ForceChangePassword } from "@/components/auth/ForceChangePassword";
 import { loadFlags, shouldUseNewWeb, type Flags } from "@/lib/flags";
 import {
@@ -41,19 +32,6 @@ import {
 import { apiForbiddenEvent, apiUnauthorizedEvent } from "@/lib/api";
 import { useBuildVersionCheck } from "@/lib/version-check";
 import { clearStaleChunkReloadFlag } from "@/lib/app-recovery";
-import {
-  loadLoginPage,
-  loadDashboardPage,
-  loadChannelsPage,
-  loadCustomModelsPage,
-  loadGroupsPage,
-  loadModelEvalPage,
-  loadMaskPage,
-  loadKeysPage,
-  loadLogsPage,
-  loadSettingsPage,
-  loadChatPage,
-} from "@/lib/page-loaders";
 
 /**
  * 路由级代码分割 —— 每个 page 是独立 chunk
@@ -193,7 +171,6 @@ export default function App() {
   if (!isAuthenticated) {
     return (
       <Suspense fallback={<LoginSkeleton />}>
-      <Suspense fallback={<LoginSkeleton />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
@@ -216,7 +193,6 @@ export default function App() {
           path="/dashboard"
           element={
             <LazyPage fallback={<PageSkeleton />}>
-            <LazyPage fallback={<PageSkeleton />}>
               <DashboardPage />
             </LazyPage>
           }
@@ -224,7 +200,6 @@ export default function App() {
         <Route
           path="/channels"
           element={
-            <LazyPage fallback={<TableSkeleton />}>
             <LazyPage fallback={<TableSkeleton />}>
               <ChannelsPage />
             </LazyPage>
@@ -234,7 +209,6 @@ export default function App() {
           path="/custom-models"
           element={
             <LazyPage fallback={<TableSkeleton />}>
-            <LazyPage fallback={<TableSkeleton />}>
               <CustomModelsPage />
             </LazyPage>
           }
@@ -242,7 +216,6 @@ export default function App() {
         <Route
           path="/groups"
           element={
-            <LazyPage fallback={<CardGridSkeleton />}>
             <LazyPage fallback={<CardGridSkeleton />}>
               <GroupsPage />
             </LazyPage>
@@ -252,7 +225,6 @@ export default function App() {
           path="/model-eval"
           element={
             <LazyPage fallback={<TableSkeleton />}>
-            <LazyPage fallback={<TableSkeleton />}>
               <ModelEvalPage />
             </LazyPage>
           }
@@ -260,7 +232,6 @@ export default function App() {
         <Route
           path="/mask"
           element={
-            <LazyPage fallback={<TableSkeleton />}>
             <LazyPage fallback={<TableSkeleton />}>
               <MaskPage />
             </LazyPage>
@@ -270,7 +241,6 @@ export default function App() {
           path="/keys"
           element={
             <LazyPage fallback={<TableSkeleton />}>
-            <LazyPage fallback={<TableSkeleton />}>
               <KeysPage />
             </LazyPage>
           }
@@ -278,7 +248,6 @@ export default function App() {
         <Route
           path="/logs"
           element={
-            <LazyPage fallback={<LogsSkeleton />}>
             <LazyPage fallback={<LogsSkeleton />}>
               <LogsPage />
             </LazyPage>
@@ -288,7 +257,6 @@ export default function App() {
           path="/settings"
           element={
             <LazyPage fallback={<SettingsSkeleton />}>
-            <LazyPage fallback={<SettingsSkeleton />}>
               <SettingsPage />
             </LazyPage>
           }
@@ -296,7 +264,6 @@ export default function App() {
         <Route
           path="/chat"
           element={
-            <LazyPage fallback={<PageSkeleton />}>
             <LazyPage fallback={<PageSkeleton />}>
               <ChatPage />
             </LazyPage>

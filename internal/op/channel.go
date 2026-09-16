@@ -368,7 +368,7 @@ func ChannelEnabled(id int, enabled bool, ctx context.Context) error {
 	return nil
 }
 
-// ChannelDel 删除渠道及其模型，关联分组成员由数据库外键级联删除。
+// ChannelDel 删除渠道及其模型，关联分组成员与评估排序由应用层级联清理。
 func ChannelDel(id int, ctx context.Context) error {
 	if _, ok := channelCache.Get(id); !ok {
 		return fmt.Errorf("渠道不存在，请刷新页面后重试")
@@ -383,6 +383,9 @@ func ChannelDel(id int, ctx context.Context) error {
 				return err
 			}
 			if err := deleteItemsByChannelModels(tx, modelIDs); err != nil {
+				return err
+			}
+			if err := deleteEvalRanksByChannelModels(tx, modelIDs); err != nil {
 				return err
 			}
 		}
@@ -670,6 +673,9 @@ func syncChannelModels(tx *gorm.DB, channelID int, requested []model.ChannelMode
 	if err := deleteItemsByChannelModels(tx, deletedModelIDs); err != nil {
 		return err
 	}
+	if err := deleteEvalRanksByChannelModels(tx, deletedModelIDs); err != nil {
+		return err
+	}
 	if err := tx.Delete(&model.ChannelModel{}, deletedModelIDs).Error; err != nil {
 		return fmt.Errorf("删除渠道模型失败: %w", err)
 	}
@@ -700,6 +706,19 @@ func deleteItemsByChannelModels(tx *gorm.DB, channelModelIDs []int) error {
 	}
 	if err := tx.Where("channel_model_id IN ?", channelModelIDs).Delete(&model.GroupItem{}).Error; err != nil {
 		return fmt.Errorf("按渠道模型删除分组成员失败: %w", err)
+	}
+	return nil
+}
+
+// deleteEvalRanksByChannelModels 删除引用待删除渠道模型的评估排序条目。
+// model_eval_ranks.channel_model_id 不建外键(与历史记录解耦), 渠道模型删除时不会级联,
+// 残留条目会让「更新 auto 分组」因 ChannelModelGet 命中失败而整体中止, 故在此应用层级联清理。
+func deleteEvalRanksByChannelModels(tx *gorm.DB, channelModelIDs []int) error {
+	if len(channelModelIDs) == 0 {
+		return nil
+	}
+	if err := tx.Where("channel_model_id IN ?", channelModelIDs).Delete(&model.ModelEvalRank{}).Error; err != nil {
+		return fmt.Errorf("按渠道模型删除评估排序失败: %w", err)
 	}
 	return nil
 }

@@ -84,7 +84,7 @@ export function userBucket(seed: string): number {
 }
 
 /** 仅保存 0-99 的匿名桶，不保存身份或最终灰度决策。 */
-function getAnonymousBucket(): number {
+export function getAnonymousBucket(): number {
   if (anonymousBucket !== undefined) return anonymousBucket;
 
   let storage: Storage | undefined;
@@ -107,6 +107,21 @@ function getAnonymousBucket(): number {
     // 写入失败不影响当前页面的稳定分桶。
   }
   return anonymousBucket;
+}
+
+/**
+ * 重置匿名桶缓存（测试/运维强制刷新用）：清模块内存与 sessionStorage，
+ * 使下次 getAnonymousBucket 重新分桶。不影响具名用户的 userBucket。
+ */
+export function clearAnonymousBucket(): void {
+  anonymousBucket = undefined;
+  try {
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(ANONYMOUS_BUCKET_KEY);
+    }
+  } catch {
+    // 存储不可用时无副作用。
+  }
 }
 
 export function shouldUseNewWeb(flags: Flags, userId: string | null): boolean {

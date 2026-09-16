@@ -53,15 +53,18 @@ func applyRequestMask(body []byte, sessionKey string, groupMaskEnabled bool) ([]
 	return masked, res.Mapping, res.Matches, nil
 }
 
-// toMaskMatches 把引擎命中明细转换为状态流的命中明细形状(元素与 maskTestMatch 一致, 文档 07 §2.3)。
+// toMaskMatches 把引擎命中明细转换为状态流的命中明细形状。
 // 空输入返回 nil, 使 RequestState.MaskMatches 在无命中时不进 JSON(omitempty)。
+//
+// 实施边界修订(文档 07): 只透传 label + placeholder, 不透传 original(命中原文)。
+// 日志命中明细首期不下发原文, 后端数据最小化。
 func toMaskMatches(matches []mask.Match) []MaskMatch {
 	if len(matches) == 0 {
 		return nil
 	}
 	result := make([]MaskMatch, len(matches))
 	for i, m := range matches {
-		result[i] = MaskMatch{Label: m.Label, Original: m.Original, Placeholder: m.Placeholder}
+		result[i] = MaskMatch{Label: m.Label, Placeholder: m.Placeholder}
 	}
 	return result
 }

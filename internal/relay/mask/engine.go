@@ -361,3 +361,242 @@ func applyRuleSub(segment string, rule Rule, replMap map[string]string) string {
 	b.WriteString(segment[lastEnd:])
 	return b.String()
 }
+
+// ---- 跨规则候选收集与一次替换(文档 02 §五 重构) ----
+
+// maskCandidates 对 text 用多条 rules 收集命中候选, 重叠区间整体覆盖后一次替换。
+//
+// 与旧 applyRule(逐规则两遍收集/替换)的区别: 跨规则统一收集候选, 重叠区间按优先级
+// 选一组不重叠的, 一次替换完成, 避免短词截断完整凭据。优先级(排序键):
+//  1. origStart 升序(先出现的先选);
+//  2. 自定义词(TERM)优先——rules 中 TERM 已排在正则前, 同起点 TERM 先选;
+//  3. ruleIdx 升序(同起点同 term 性时按 rules 顺序);
+//  4. origEnd 降序(长匹配优先, 不以短词截断完整凭据)。
+//
+// 已有占位符片段跳过(不收集、不替换, 占位符原样保留)。seen 跨规则去重同一原文:
+// 同一原文只产出一条 Match(首次命中规则标签), 但在不重叠的多处位置都替换为同一占位符,
+// 保证多轮会话内同一实体占位符一致。
+func maskCandidates(text string, rules []Rule, mapping *Mapping, matches *[]Match, seen map[string]bool) string {
+	if text == "" || len(rules) == 0 {
+		return text
+	}
+	type cand struct {
+		origStart, origEnd int // 捕获组(应脱敏原文)在 text 中的绝对区间
+		isTerm             bool
+		ruleIdx            int
+		orig               string
+		rule               Rule
+	}
+	var cands []cand
+	// 仅在非占位符片段中收集候选(占位符原样保留, 不在其中收集, 避免自定义词把占位符劈开)。
+	for _, sr := range nonPlaceholderRanges(text) {
+		seg := text[sr[0]:sr[1]]
+		for i, rule := range rules {
+			if !ruleMayHit(seg, rule.Label) {
+				continue
+			}
+			validator := builtinValidators[rule.Label]
+			for _, loc := range rule.Pattern.FindAllStringSubmatchIndex(seg, -1) {
+				orig := captureGroup(seg, loc, rule.Group)
+				if orig == "" {
+					continue
+				}
+				if validator != nil && !validator(orig) {
+					continue
+				}
+				os, oe := captureGroupBounds(loc, rule.Group)
+				cands = append(cands, cand{
+					origStart: sr[0] + os,
+					origEnd:   sr[0] + oe,
+					isTerm:    rule.Label == "TERM",
+					ruleIdx:   i,
+					orig:      orig,
+					rule:      rule,
+				})
+			}
+		}
+	}
+	if len(cands) == 0 {
+		return text
+	}
+	// 排序: origStart 升序 → TERM 优先 → ruleIdx 升序 → origEnd 降序(长匹配优先)。
+	sort.SliceStable(cands, func(i, j int) bool {
+		a, b := cands[i], cands[j]
+		if a.origStart != b.origStart {
+			return a.origStart < b.origStart
+		}
+		if a.isTerm != b.isTerm {
+			return a.isTerm
+		}
+		if a.ruleIdx != b.ruleIdx {
+			return a.ruleIdx < b.ruleIdx
+		}
+		return a.origEnd > b.origEnd
+	})
+	// 贪心选不重叠区间: origStart < lastEnd(与已选重叠)的丢弃, 避免嵌套占位符。
+	var b strings.Builder
+	prev := 0
+	lastEnd := -1
+	for _, c := range cands {
+		if c.origStart < lastEnd {
+			continue // 与已选区间重叠, 跳过(被覆盖区域整体跳过, 不产生嵌套占位符)
+		}
+		b.WriteString(text[prev:c.origStart])
+		ph := mapping.Recall(c.orig, c.rule.Label)
+		if !seen[c.orig] {
+			seen[c.orig] = true
+			*matches = append(*matches, Match{Label: c.rule.Label, Original: c.orig, Placeholder: ph})
+		}
+		b.WriteString(ph)
+		prev = c.origEnd
+		lastEnd = c.origEnd
+	}
+	b.WriteString(text[prev:])
+	return b.String()
+}
+
+// nonPlaceholderRanges 返回 text 中非占位符片段的绝对区间 [start, end)。
+// 与 nonPlaceholderSegments 逻辑一致, 仅返回区间而非字符串, 供 maskCandidates 计算候选绝对位置。
+func nonPlaceholderRanges(text string) [][2]int {
+	locs := PlaceholderRe.FindAllStringIndex(text, -1)
+	if len(locs) == 0 {
+		return [][2]int{{0, len(text)}}
+	}
+	ranges := make([][2]int, 0, len(locs)+1)
+	lastEnd := 0
+	for _, loc := range locs {
+		if loc[0] > lastEnd {
+			ranges = append(ranges, [2]int{lastEnd, loc[0]})
+		}
+		lastEnd = loc[1]
+	}
+	if lastEnd < len(text) {
+		ranges = append(ranges, [2]int{lastEnd, len(text)})
+	}
+	return ranges
+}
+
+// captureGroupBounds 返回捕获组在 submatch index loc 中的相对区间 [start, end)。
+// group=0 取整匹配; group>0 取对应捕获组; 捕获组未参与匹配时返回 (-1,-1)。
+func captureGroupBounds(loc []int, group int) (int, int) {
+	if group == 0 {
+		return loc[0], loc[1]
+	}
+	return loc[2*group], loc[2*group+1]
+}
+
+// ---- JSON 感知扫描 ----
+
+// mapJSONStringValues 对合法 JSON 文本, 仅对解码后的字符串值调用 mask, 键名与非字符串字段
+// (number/bool/null)不变。用 token 流式重建紧凑 JSON, 保留键序与数字原字面量, 只替换命中的
+// 字符串值: 对紧凑输入, 除被脱敏的字符串值外字节逐字一致, 保证脱敏→还原 roundtrip 字节稳定
+// (网关不应因脱敏改变请求体格式)。解码失败或非单值时回退为对整段文本调用 mask(纯文本处理)。
+func mapJSONStringValues(body string, mask func(string) string) string {
+	dec := json.NewDecoder(strings.NewReader(body))
+	dec.UseNumber()
+	var b strings.Builder
+	if err := maskJSONStream(dec, &b, mask); err != nil {
+		return mask(body) // 解码失败回退纯文本
+	}
+	if dec.More() {
+		return mask(body) // 非单值(尾随垃圾), 回退纯文本
+	}
+	return b.String()
+}
+
+// maskJSONStream 读取一个 JSON 值并写入 b; 字符串值调用 mask, 键名与其他标量原样保留。
+func maskJSONStream(dec *json.Decoder, b *strings.Builder, mask func(string) string) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if d, ok := tok.(json.Delim); ok {
+		switch d {
+		case '{':
+			return maskJSONObject(dec, b, mask)
+		case '[':
+			return maskJSONArray(dec, b, mask)
+		}
+		return fmt.Errorf("mask: unexpected delim %q", d)
+	}
+	writeJSONScalar(b, tok, mask)
+	return nil
+}
+
+// maskJSONObject 读取对象内容并写入 b; 键原样(不脱敏), 值递归(字符串值 mask)。
+func maskJSONObject(dec *json.Decoder, b *strings.Builder, mask func(string) string) error {
+	b.WriteByte('{')
+	first := true
+	for dec.More() {
+		if !first {
+			b.WriteByte(',')
+		}
+		first = false
+		keyTok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, _ := keyTok.(string)
+		writeJSONString(b, key) // 键名不脱敏
+		b.WriteByte(':')
+		if err := maskJSONStream(dec, b, mask); err != nil {
+			return err
+		}
+	}
+	if _, err := dec.Token(); err != nil { // 消耗 '}'
+		return err
+	}
+	b.WriteByte('}')
+	return nil
+}
+
+// maskJSONArray 读取数组内容并写入 b; 元素递归(字符串值 mask)。
+func maskJSONArray(dec *json.Decoder, b *strings.Builder, mask func(string) string) error {
+	b.WriteByte('[')
+	first := true
+	for dec.More() {
+		if !first {
+			b.WriteByte(',')
+		}
+		first = false
+		if err := maskJSONStream(dec, b, mask); err != nil {
+			return err
+		}
+	}
+	if _, err := dec.Token(); err != nil { // 消耗 ']'
+		return err
+	}
+	b.WriteByte(']')
+	return nil
+}
+
+// writeJSONScalar 写标量 token; string 调用 mask, json.Number 原字面量, bool/null 原样。
+func writeJSONScalar(b *strings.Builder, tok json.Token, mask func(string) string) {
+	switch v := tok.(type) {
+	case string:
+		writeJSONString(b, mask(v))
+	case json.Number:
+		b.WriteString(v.String()) // 保留原数字字面量(UseNumber)
+	case bool:
+		if v {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
+	case nil:
+		b.WriteString("null")
+	}
+}
+
+// writeJSONString 写 JSON 字符串字面量(带引号 + 标准转义)。
+func writeJSONString(b *strings.Builder, s string) {
+	out, err := json.Marshal(s)
+	if err != nil {
+		// 不可达: 任意 string 都可 marshal; 兜底写裸串避免静默丢数据。
+		b.WriteByte('"')
+		b.WriteString(s)
+		b.WriteByte('"')
+		return
+	}
+	b.Write(out)
+}

@@ -183,9 +183,9 @@ func makeUSCC(front17 string) string {
 }
 
 func TestUsccOK(t *testing.T) {
-	assert.True(t, usccOK("913100007757804495"), "真实合法信用代码(校验位 5)")
+	assert.True(t, usccOK("91330100799655058B"), "真实在册信用代码(阿里巴巴, 校验位 B)")
 	assert.True(t, usccOK(makeUSCC("91350100M000100Y4")), "自生成校验位样例通过")
-	assert.False(t, usccOK("913100007757804496"), "篡改末位校验位不匹配")
+	assert.False(t, usccOK("91330100799655058A"), "篡改合法样例末位校验位不匹配")
 	assert.False(t, usccOK("91310000775780449I"), "含禁用字符非法")
 	assert.False(t, usccOK("91310000775780449"), "长度不足非法")
 	assert.False(t, usccOK("9131000077578044951"), "长度超 18 非法")

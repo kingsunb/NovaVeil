@@ -101,9 +101,9 @@ var BuiltinRules = []Rule{
 	},
 	{
 		Label:       "TOKEN",
-		Pattern:     regexp.MustCompile(`(?i)\bBearer\s+([A-Za-z0-9._~+/-]+=*)`),
+		Pattern:     regexp.MustCompile(`(?i)\bBearer\s+([A-Za-z0-9._~+/-]*[0-9._~+/-][A-Za-z0-9._~+/-]*=*)`),
 		Group:       1,
-		Description: "Bearer Token(只脱 token 值, 保留 Bearer 关键字)",
+		Description: "Bearer Token(只脱 token 值, 保留 Bearer 关键字); token 值须含至少一个非字母字符(数字/分隔符), 避免误脱敏 'bearer here' 等英文单词",
 	},
 	{
 		Label:       "MAC",

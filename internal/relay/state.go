@@ -60,11 +60,14 @@ const (
 	AttemptCanceled AttemptOutcome = "canceled" // 客户端取消或人工中止, 不计为渠道故障。
 )
 
-// MaskMatch 命中明细的单条记录, 元素形状与 maskTestMatch 一致(文档 07 §2.3),
-// 供日志详情展示"哪个占位符来自哪条规则、原文是什么"。
+// MaskMatch 命中明细的单条记录, 供日志详情展示"哪个占位符来自哪条规则"。
+//
+// 实施边界修订(文档 07): 日志命中明细首期只展示规则标签 + 占位符安全摘要,
+// 不下发/不持久化/不展示命中原文 original。查看日志原文不是已批准能力, 需另行
+// 安全决策; 后端数据最小化, 不能靠管理员鉴权或 CSS 模糊代替。
+// 预览接口(mask test)的 maskTestMatch 仍保留 original, 两者类型分离。
 type MaskMatch struct {
 	Label       string `json:"label"`       // 规则标签, 如 PHONE / EMAIL / SECRET / TERM
-	Original    string `json:"original"`    // 命中原文
 	Placeholder string `json:"placeholder"` // 替换占位符, 如 {{PHONE_bcdfgh}}
 }
 
