@@ -31,14 +31,13 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 
 type Range = TokenTrendRange;
 
-// 趋势档位按钮文案; 与后端 ValidUsageRange 的 24h/7d/30d/1y/3y/forever 对齐。
+// 趋势档位按钮文案; 与后端 ValidUsageRange 的 24h/7d/30d/1y/3y 对齐（不暴露 forever）。
 const RANGE_LABELS: Record<Range, string> = {
   "24h": "24 小时",
   "7d": "7 天",
   "30d": "30 天",
   "1y": "1 年",
   "3y": "3 年",
-  forever: "永久",
 };
 
 // 各档位对应的 KPI hint 文案; KPI 卡片共享同一窗口口径, hint 随档位联动。
@@ -48,20 +47,19 @@ const RANGE_HINTS: Record<Range, string> = {
   "30d": "近 30 天",
   "1y": "近 1 年",
   "3y": "近 3 年",
-  forever: "累计",
 };
 
 /**
  * 仪表盘 —— 参考 TokenArena 的 Usage 总览 / 详细指标 / 预计消耗 / 使用时长 / 热力图
  *  - 6 KPI（总请求 / 客户端 IP / 错误数 / Token 用量 / 预计消耗 / 使用时长），随趋势档位联动
- *  - Token 趋势（24h/7d/30d/1y/3y/forever，真实分桶时序），默认 forever
+ *  - Token 趋势（24h/7d/30d/1y/3y，真实分桶时序），默认 24h
  *  - Token 构成环形图（input/output/reasoning/cached 占比）
  *  - 使用热力图（GitHub 风格，每日 token 用量）
  *  - 模型 Top + 最近错误
  */
 export default function DashboardPage() {
-  // 默认 forever：KPI 显示全量统计，与趋势图默认档位一致。
-  const [range, setRange] = useState<Range>("forever");
+  // 默认 24h：KPI 与趋势图默认展示近 24 小时窗口。
+  const [range, setRange] = useState<Range>("24h");
   const navigate = useNavigate();
 
   // KPI 随趋势档位联动：queryKey 含 range，切换档位即重新拉取对应窗口的统计口径。
@@ -143,7 +141,7 @@ export default function DashboardPage() {
               value={range}
               onChange={setRange}
               options={
-                (["24h", "7d", "30d", "1y", "3y", "forever"] as Range[]).map(
+                (["24h", "7d", "30d", "1y", "3y"] as Range[]).map(
                   (r) => ({
                     value: r,
                     label: RANGE_LABELS[r],

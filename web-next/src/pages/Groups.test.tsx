@@ -224,6 +224,134 @@ describe("buildMemberDiff 行为（间接通过 add/remove 后保存）", () => 
   });
 });
 
+describe("手动模式当前成员：新增成员即可指定，保存才生效", () => {
+  // manual 分组 + 一个已保存成员（cm 100），使 cm 101 可作为新成员添加
+  const manualGroup = {
+    ...sampleGroup,
+    mode: "manual",
+    active_item_id: 1,
+    items: [
+      { id: 1, group_id: 10, channel_model_id: 100, ref_group_name: "", priority: 1 },
+    ],
+  };
+
+  it("选中未保存的新成员为「当前」→ 单选可用且选中；保存后才调 setActive，用解析出的新 id", async () => {
+    const user = userEvent.setup();
+    const calls: Array<{ url: string; body?: any }> = [];
+    // update 响应：新成员获得 id=2（priority 与提交一致）
+    const updatedGroup = {
+      ...manualGroup,
+      items: [
+        { id: 1, group_id: 10, channel_model_id: 100, ref_group_name: "", priority: 1 },
+        { id: 2, group_id: 10, channel_model_id: 101, ref_group_name: "", priority: 2 },
+      ],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : null;
+        calls.push({ url, body });
+        if (url.includes("/group/list")) return Promise.resolve(jsonOk([manualGroup]));
+        if (url.includes("/channel/list")) return Promise.resolve(jsonOk([sampleChannel]));
+        if (url.includes("/group/update") && init?.method === "POST")
+          return Promise.resolve(jsonOk(updatedGroup));
+        if (url.includes("/group/active/")) return Promise.resolve(jsonOk(updatedGroup));
+        if (url.includes("/group/cooldown/clear/")) return Promise.resolve(jsonOk(null));
+        return Promise.resolve(jsonOk(null));
+      }),
+    );
+
+    render(<GroupsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("gpt-4o-prod"));
+
+    await user.click(screen.getByRole("button", { name: /编辑/ }));
+    await waitFor(() => screen.getByRole("dialog"));
+
+    // 展开渠道并添加 gpt-4o-mini（cm 101）作为新成员
+    await user.click(screen.getByRole("button", { name: "渠道 openai-prod" }));
+    await user.click(screen.getByRole("button", { name: "添加 openai-prod gpt-4o-mini" }));
+
+    // 核心断言①：新成员（未保存，id=0）的「设为当前」单选未被禁用
+    const radioNew = screen.getByLabelText(/设为当前成员.*#101/);
+    expect(radioNew).not.toBeDisabled();
+
+    // 选中新成员为当前，并出现「保存后生效」提示
+    await user.click(radioNew);
+    expect(radioNew).toBeChecked();
+    expect(screen.getByText(/保存后生效/)).toBeInTheDocument();
+
+    // 核心断言②：选中后、保存前不调任何 active 接口（保存才生效）
+    expect(calls.find((c) => c.url.includes("/group/active/"))).toBeUndefined();
+
+    await user.click(screen.getByRole("button", { name: /^保存$/ }));
+
+    // 核心断言③：保存后 setActive 用新成员解析出的 id=2（既不是 0，也不是旧的 1）
+    await waitFor(() => {
+      const activeCall = calls.find((c) => c.url.includes("/group/active/"));
+      expect(activeCall).toBeTruthy();
+      expect((activeCall!.body as any).item_id).toBe(2);
+    });
+  });
+
+  it("新建 manual 分组：选中第二个未保存成员为「当前」→ 创建后 setActive 用对应 id（非默认第一个）", async () => {
+    const user = userEvent.setup();
+    const calls: Array<{ url: string; body?: any }> = [];
+    // create 响应：两个成员按 priority 获得 id=11 / 12
+    const createdGroup = {
+      id: 30,
+      name: "new-manual",
+      mode: "manual",
+      active_item_id: 0,
+      relay_config: { ...sampleGroup.relay_config },
+      items: [
+        { id: 11, group_id: 30, channel_model_id: 100, ref_group_name: "", priority: 1 },
+        { id: 12, group_id: 30, channel_model_id: 101, ref_group_name: "", priority: 2 },
+      ],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : null;
+        calls.push({ url, body });
+        if (url.includes("/group/list")) return Promise.resolve(jsonOk([]));
+        if (url.includes("/channel/list")) return Promise.resolve(jsonOk([sampleChannel]));
+        if (url.includes("/group/create") && init?.method === "POST")
+          return Promise.resolve(jsonOk(createdGroup));
+        if (url.includes("/group/active/")) return Promise.resolve(jsonOk(createdGroup));
+        return Promise.resolve(jsonOk(null));
+      }),
+    );
+
+    render(<GroupsPage />, { wrapper: Wrapper });
+    await user.click(screen.getByRole("button", { name: "新建分组" }));
+    await waitFor(() => screen.getByRole("dialog"));
+
+    // 新建默认 manual 模式；填名称
+    await user.type(screen.getByLabelText(/^名称/), "new-manual");
+
+    // 依次添加 gpt-4o(100) 与 gpt-4o-mini(101)
+    await user.click(screen.getByRole("button", { name: "渠道 openai-prod" }));
+    await user.click(screen.getByRole("button", { name: "添加 openai-prod gpt-4o" }));
+    await user.click(screen.getByRole("button", { name: "添加 openai-prod gpt-4o-mini" }));
+
+    // 选中第二个成员（#101）为当前
+    const radioSecond = screen.getByLabelText(/设为当前成员.*#101/);
+    await user.click(radioSecond);
+    expect(radioSecond).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /^保存$/ }));
+
+    // 创建后 setActive 用第二个成员的 id=12，而非默认的第一个 id=11
+    await waitFor(() => {
+      const activeCall = calls.find((c) => c.url.includes("/group/active/"));
+      expect(activeCall).toBeTruthy();
+      expect((activeCall!.body as any).item_id).toBe(12);
+    });
+  });
+});
+
 describe("分组卡片冷却/亲和实时倒计时", () => {
   function fireRuntime(payload: Record<string, unknown>) {
     act(() => {

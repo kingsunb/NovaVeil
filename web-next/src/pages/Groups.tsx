@@ -529,7 +529,11 @@ function GroupEditor({
   const [relayConfig, setRelayConfig] = useState<GroupRelayConfig>(
     DEFAULT_GROUP_RELAY_CONFIG,
   );
-  const [activeItemId, setActiveItemId] = useState(0);
+  // 手动模式选中的「当前成员」按 client_uid 记录，而非后端 id。
+  // 新增但尚未保存的成员 id=0，按 id 无法选中；client_uid 对草稿与已保存成员
+  // 都稳定（saved:id / new:n / auto:n），因此添加后即可指定，保存时再解析成
+  // 后端 id 调 setActive —— 保存才真正生效。
+  const [activeUid, setActiveUid] = useState<string | null>(null);
   // Tab 切分「成员」与「路由策略」两个独立页面，对齐 NovaVeil_api 编辑器布局。
   const [tab, setTab] = useState<"members" | "relay">("members");
   // 自动匹配：以分组名称为关键词，自动将名称包含该关键词的渠道模型加入分组成员。
@@ -571,13 +575,18 @@ function GroupEditor({
         ...DEFAULT_GROUP_RELAY_CONFIG,
         ...(group.relay_config ?? {}),
       });
-      setActiveItemId(group.active_item_id ?? 0);
       const sorted = [...(group.items ?? [])]
         .sort((a, b) => a.priority - b.priority)
         .map((item) => ({
           ...item,
           client_uid: item.client_uid ?? `saved:${item.id}`,
         }));
+      // active_item_id 是后端 id；映射到对应成员的 client_uid 作为本地选中态。
+      // 找不到（被删除/数据不一致）时为 null，保存时走回退逻辑。
+      const activeItem = sorted.find(
+        (it) => it.id === (group.active_item_id ?? 0),
+      );
+      setActiveUid(activeItem?.client_uid ?? null);
       setOriginalItems(sorted);
       setDraftItems(sorted);
       setAutoMatch(!!group.relay_config?.auto_match_models);
@@ -585,7 +594,7 @@ function GroupEditor({
       setName("");
       setMode("manual");
       setRelayConfig(DEFAULT_GROUP_RELAY_CONFIG);
-      setActiveItemId(0);
+      setActiveUid(null);
       setOriginalItems([]);
       setDraftItems([]);
       setAutoMatch(false);
@@ -738,6 +747,13 @@ function GroupEditor({
 
   const saveMut = useMutation({
     mutationFn: async () => {
+      // 解析手动模式当前选中的成员草稿（按 client_uid）。新增但未保存的成员
+      // id=0，只能用 client_uid 标识；保存时再解析成后端 id 调 setActive。
+      const selectedDraft =
+        mode === "manual" && activeUid
+          ? (draftItems.find((d) => d.client_uid === activeUid) ?? null)
+          : null;
+
       if (isNew) {
         const created = await api.createGroup({
           name,
@@ -752,12 +768,20 @@ function GroupEditor({
             priority: d.priority,
           })),
         });
-        // 新成员在创建请求时 id 都是 0；创建成功后默认把第一成员设为
-        // 手动模式当前成员，避免新建的 manual 分组没有可路由成员。
-        // setActive 的响应包含已生效的 active_item_id，作为最终实体返回。
+        // 新成员在创建请求里 id 都是 0；创建成功后把用户选中的成员设为手动模式
+        // 当前成员（避免新建的 manual 分组没有可路由成员）。选中成员是新增的，
+        // 创建后才拿到 id：按 priority（草稿内唯一）在响应里定位解析出 id。
+        // 未选或定位失败时回退到第一条成员。setActive 响应即最终实体。
         let latest = created;
-        if (mode === "manual" && created.items?.[0]?.id) {
-          latest = await api.setActiveGroupItem(created.id, created.items[0].id);
+        if (mode === "manual" && created.items?.length) {
+          const targetId = selectedDraft
+            ? created.items.find((it) => it.priority === selectedDraft.priority)
+                ?.id
+            : undefined;
+          const idToActivate = targetId ?? created.items[0]?.id;
+          if (idToActivate) {
+            latest = await api.setActiveGroupItem(created.id, idToActivate);
+          }
         }
         return latest;
       }
@@ -791,20 +815,32 @@ function GroupEditor({
         items_to_delete: diff.toDelete,
       });
       if (mode === "manual") {
-        // 若当前 active_item_id 指向未保存的新成员（id=0），保存后该 id 失效，
-        // 此时回退到第一条已保存成员；若没有已保存成员，清空当前成员。
-        const activeStillExists =
-          activeItemId > 0 &&
-          draftItems.some((item) => item.id === activeItemId);
-        if (activeStillExists) {
-          latest = await api.setActiveGroupItem(group!.id, activeItemId);
+        // 按 client_uid 跟踪的选中态分三种情况解析成后端 id：
+        //  1) 选中已保存成员（id>0）→ 直接 setActive；
+        //  2) 选中未保存新成员（id=0）→ update 后它获得 id，按 priority 在
+        //     响应里定位再 setActive；定位失败回退到第一条已保存成员；
+        //  3) 未选（含原 active 成员被删除）→ 回退到第一条已保存成员，否则清空。
+        if (selectedDraft && selectedDraft.id > 0) {
+          latest = await api.setActiveGroupItem(group!.id, selectedDraft.id);
+        } else if (selectedDraft) {
+          const createdItem = latest.items?.find(
+            (it) => it.priority === selectedDraft.priority,
+          );
+          if (createdItem?.id) {
+            latest = await api.setActiveGroupItem(group!.id, createdItem.id);
+          } else {
+            const fallback = draftItems.find((item) => item.id > 0);
+            latest = await api.setActiveGroupItem(
+              group!.id,
+              fallback?.id ?? null,
+            );
+          }
         } else {
           const fallback = draftItems.find((item) => item.id > 0);
-          if (fallback && fallback.id) {
-            latest = await api.setActiveGroupItem(group!.id, fallback.id);
-          } else {
-            latest = await api.setActiveGroupItem(group!.id, null);
-          }
+          latest = await api.setActiveGroupItem(
+            group!.id,
+            fallback?.id ?? null,
+          );
         }
       }
       return latest;
@@ -1029,13 +1065,15 @@ function GroupEditor({
                               <input
                                 type="radio"
                                 name="active-group-item"
-                                checked={it.id > 0 && activeItemId === it.id}
-                                disabled={it.id === 0}
-                                onChange={() => it.id > 0 && setActiveItemId(it.id)}
+                                checked={activeUid === it.client_uid}
+                                onChange={() => setActiveUid(it.client_uid)}
                                 aria-label={`设为当前成员 ${label}`}
                                 className="h-3.5 w-3.5 accent-primary"
                               />
                               当前
+                              {activeUid === it.client_uid && it.id === 0 && (
+                                <span className="text-ink-subtle">·保存后生效</span>
+                              )}
                             </label>
                           ) : null}
                           <MemberPositionInput

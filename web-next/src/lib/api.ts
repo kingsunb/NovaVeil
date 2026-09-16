@@ -567,7 +567,7 @@ export function normalizeTokenTrend(raw: unknown): TokenTrendPoint[] {
     .map((item) => ({ t: item.t, in: item.in, out: item.out }))
     // 兜底：防御个别项在过滤后仍可能未满足的边界（如时间戳非正）
     .filter((p) => p.t > 0 && p.in >= 0 && p.out >= 0)
-    .slice(-130); // 保留最新点: forever 档位后端返回 121 个点 (最旧→最新), 截断须保留最新而非最旧
+    .slice(-130); // 防御性截断: 保留最新点(最旧→最新), 避免异常长序列撑爆渲染
 }
 
 function isTokenTrendPoint(item: unknown): item is TokenTrendPoint {

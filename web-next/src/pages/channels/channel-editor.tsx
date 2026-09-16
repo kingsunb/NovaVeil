@@ -18,6 +18,7 @@ import {
   EyeOff,
   WandSparkles,
   Search,
+  ClipboardPaste,
 } from "lucide-react";
 
 import { api, APIError, parseHeaderTemplates } from "@/lib/api";
@@ -49,6 +50,8 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogBody,
+  DialogClose,
 } from "@/components/ui/dialog";
 
 
@@ -835,6 +838,8 @@ function CredTab({
   // 用户本会话明确清空的密钥行（按稳定 id / 掩码记录）：明文查询若在此之后
   // 才返回，不再自动回填，否则用户「清空 = 删除」的意图被静默撤销（审计 §1.8）。
   const clearedSecretIdsRef = useRef<Set<string>>(new Set());
+  // 批量添加密钥弹窗开关。
+  const [batchOpen, setBatchOpen] = useState(false);
   const secrets = useQuery({
     queryKey: ["channels", "keys", channelId],
     queryFn: () => api.getChannelKeys(channelId!),
@@ -915,6 +920,22 @@ function CredTab({
       draft.keys.filter((_, i) => i !== idx),
     );
   }
+  // 批量添加密钥去重基线：本会话已输入明文的行。与这些明文重复的粘贴行在前端
+  // 即跳过，避免后端 normalizeChannelKeys 的「存在重复密钥」校验让整批整体替换
+  // 失败。已保存但仅持掩码的行明文未知，前端无法预判，仍由后端兜底报错。
+  const existingKeySet = useMemo(
+    () =>
+      new Set(
+        draft.keys
+          .map((k) => (k.key ?? "").trim())
+          .filter((k) => k.length > 0),
+      ),
+    [draft.keys],
+  );
+  function handleBatchAdd(rows: ChannelKey[]) {
+    if (rows.length === 0) return;
+    update("keys", [...draft.keys, ...rows]);
+  }
   function addTag() {
     const t = newTag.trim();
     if (!t || draft.tags.includes(t)) return;
@@ -981,10 +1002,20 @@ function CredTab({
       <div>
         <div className="mb-2 flex items-center justify-between">
           <span className="text-xs font-medium text-ink-muted">上游 Key</span>
-          <Button variant="ghost" size="sm" onClick={addKey}>
-            <Plus className="h-3.5 w-3.5" aria-hidden />
-            添加
-          </Button>
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setBatchOpen(true)}
+            >
+              <ClipboardPaste className="h-3.5 w-3.5" aria-hidden />
+              批量添加
+            </Button>
+            <Button variant="ghost" size="sm" onClick={addKey}>
+              <Plus className="h-3.5 w-3.5" aria-hidden />
+              添加
+            </Button>
+          </div>
         </div>
         {draft.keys.length === 0 && (
           <p className="rounded-md bg-surface-subtle/60 px-3 py-2 text-xs text-ink-muted">
@@ -1109,7 +1140,117 @@ function CredTab({
           </div>
         </div>
       </div>
+
+      <BatchAddKeysDialog
+        open={batchOpen}
+        existingKeys={existingKeySet}
+        onConfirm={(rows) => {
+          handleBatchAdd(rows);
+          const added = rows.length;
+          toast.success(`已添加 ${added} 个密钥`);
+        }}
+        onClose={() => setBatchOpen(false)}
+      />
     </div>
+  );
+}
+
+// ---------------- 批量添加密钥弹窗 ----------------
+
+/**
+ * 批量添加密钥：一行一个密钥的粘贴入口。按行拆分、去首尾空白、丢弃空行，
+ * 再对「本会话已有明文 + 本批内部重复」去重后整体追加到渠道 keys 切片。
+ *
+ * 仅做前端去重以提升体验；已保存但仅持掩码的行明文未知，无法预判，仍由后端
+ * normalizeChannelKeys 的唯一性校验兜底（命中时整批替换失败并报错）。
+ */
+function BatchAddKeysDialog({
+  open,
+  existingKeys,
+  onConfirm,
+  onClose,
+}: {
+  open: boolean;
+  existingKeys: Set<string>;
+  onConfirm: (rows: ChannelKey[]) => void;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState("");
+  // 每次打开清空上次残留，避免误把旧粘贴内容再次提交。
+  useEffect(() => {
+    if (open) setText("");
+  }, [open]);
+
+  // 实时预览：逐行解析 → 去首尾空白 → 丢弃空行 → 去重(已有/本批内部)。
+  // total 含空行，skipped = 空行 + 重复行，让用户直观看到「粘贴了多少、可用多少」。
+  const { rows, total, skipped } = useMemo(() => {
+    const allLines = text.split(/\r?\n/);
+    const seen = new Set<string>();
+    const rows: ChannelKey[] = [];
+    let skipped = 0;
+    for (const raw of allLines) {
+      const line = raw.trim();
+      if (line.length === 0) {
+        skipped += 1;
+        continue;
+      }
+      if (existingKeys.has(line) || seen.has(line)) {
+        skipped += 1;
+        continue;
+      }
+      seen.add(line);
+      // 新 Key 的 ID 留空：后端按 secret 的 sha256 前 8 位生成稳定 ID。
+      rows.push({ id: "", original_id: "", key: line, remark: "" });
+    }
+    return { rows, total: allLines.length, skipped };
+  }, [text, existingKeys]);
+
+  function confirm() {
+    if (rows.length === 0) return;
+    onConfirm(rows);
+    onClose();
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent variant="dialog" size="lg">
+        <DialogHeader>
+          <DialogTitle>批量添加密钥</DialogTitle>
+          <DialogDescription>
+            一行一个密钥，空行自动忽略；与已有密钥重复的行会自动跳过。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody className="p-4 pt-3">
+          <Textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={"sk-abc123...\nsk-def456...\nsk-ghi789..."}
+            rows={10}
+            className="mono text-sm leading-relaxed"
+            aria-label="批量密钥文本"
+          />
+          <p className="mt-2 text-xs text-ink-muted">
+            共 {total} 行 · 可添加 {rows.length} 个
+            {skipped > 0 && ` · 跳过 ${skipped} 个重复/空行`}
+          </p>
+        </DialogBody>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="ghost" size="sm">
+              取消
+            </Button>
+          </DialogClose>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={confirm}
+            disabled={rows.length === 0}
+          >
+            添加{rows.length > 0 && ` (${rows.length})`}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

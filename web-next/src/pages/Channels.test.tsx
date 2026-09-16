@@ -377,6 +377,91 @@ describe("<ChannelsPage />", () => {
     // 卡片信息面板中显示密钥数量
     expect(card!.textContent).toContain("1 密钥");
   });
+
+  it("批量添加密钥：一行一个，追加到列表并随保存提交", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetch({ list: [sampleChannel] });
+    render(<ChannelsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("openai-prod"));
+    await user.click(screen.getByText("openai-prod"));
+    await waitFor(() => screen.getByRole("dialog"));
+
+    // 打开批量添加弹窗（Radix 嵌套模态：内层接管 dialog 角色，外层置 inert，
+    // 故不按 dialog 计数，改用弹窗内的 textarea 出现判定已打开）
+    await user.click(screen.getByRole("button", { name: "批量添加" }));
+    const ta = (await screen.findByLabelText(
+      "批量密钥文本",
+    )) as HTMLTextAreaElement;
+    await user.type(ta, "sk-batch-1\nsk-batch-2\nsk-batch-3");
+
+    // 实时预览：3 行全部可添加
+    await waitFor(() =>
+      expect(screen.getByText(/可添加 3 个/)).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /^添加 \(3\)$/ }));
+
+    // 弹窗关闭（textarea 消失）；密钥行由 1 增至 4（眼睛按钮计数）
+    await waitFor(() =>
+      expect(screen.queryByLabelText("批量密钥文本")).not.toBeInTheDocument(),
+    );
+    await waitFor(() => {
+      const eyes = screen.getAllByRole("button", {
+        name: /显示密钥|隐藏密钥/,
+      });
+      expect(eyes.length).toBe(4);
+    });
+
+    // 保存：更新请求 keys 含 1 个保留行(id=k1,空明文) + 3 个新增行(空 id,明文)
+    await user.click(screen.getByRole("button", { name: /^保存$/ }));
+    await waitFor(() => {
+      const updateCalls = fetchMock.mock.calls.filter(([url]) =>
+        String(url).includes("/channel/update"),
+      );
+      expect(updateCalls.length).toBeGreaterThanOrEqual(1);
+      const body = JSON.parse(
+        updateCalls[updateCalls.length - 1][1]?.body as string,
+      ) as { keys?: Array<{ id: string; key: string; remark: string }> };
+      expect(body.keys).toBeDefined();
+      expect(body.keys!.length).toBe(4);
+      // 已保存行：id 保留、明文留空（后端按 id 恢复旧 secret）
+      expect(body.keys![0]).toEqual({ id: "k1", key: "", remark: "" });
+      // 新增行：id 为空、明文为粘贴值（后端按 sha256 生成 id）
+      const newKeys = body.keys!.slice(1).map((k) => k.key);
+      expect(newKeys).toEqual(["sk-batch-1", "sk-batch-2", "sk-batch-3"]);
+      expect(body.keys!.slice(1).every((k) => k.id === "")).toBe(true);
+    });
+  });
+
+  it("批量添加密钥：空行与重复行自动跳过", async () => {
+    const user = userEvent.setup();
+    mockFetch({ list: [sampleChannel] });
+    render(<ChannelsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("openai-prod"));
+    await user.click(screen.getByText("openai-prod"));
+    await waitFor(() => screen.getByRole("dialog"));
+
+    await user.click(screen.getByRole("button", { name: "批量添加" }));
+    const ta = (await screen.findByLabelText(
+      "批量密钥文本",
+    )) as HTMLTextAreaElement;
+    // 含 1 个空行 + 1 个本批内重复
+    await user.type(ta, "sk-aaa\n\nsk-aaa\nsk-bbb");
+
+    // 共 4 行 · 可添加 2 个 · 跳过 2 个重复/空行
+    await waitFor(() =>
+      expect(screen.getByText(/可添加 2 个/)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/跳过 2 个/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^添加 \(2\)$/ }));
+    // 仅新增 2 把（原有 1 + 新增 2 = 3 个眼睛按钮）
+    await waitFor(() => {
+      const eyes = screen.getAllByRole("button", {
+        name: /显示密钥|隐藏密钥/,
+      });
+      expect(eyes.length).toBe(3);
+    });
+  });
 });
 
 describe("<ChannelsPage /> 渠道优先级行内编辑", () => {
