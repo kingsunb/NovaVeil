@@ -31,6 +31,7 @@ function makeChannel(overrides: Partial<Channel> = {}): Channel {
     proxy: false,
     auto_sync: false,
     opencode_compat: false,
+    pass_through_body_enabled: false,
     custom_header: [],
     model_limits: {},
     tags: [],

@@ -78,6 +78,7 @@ function emptyDraft(): Draft {
     sort: 0,
     rate_limit_rpm: 0,
     max_concurrent: 0,
+    pass_through_body_enabled: false,
   };
 }
 
@@ -2189,6 +2190,19 @@ function AdvancedTab({
         <Switch
           checked={draft.opencode_compat}
           onCheckedChange={(v) => update("opencode_compat", v)}
+        />
+      </div>
+
+      <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
+        <div>
+          <p className="text-sm font-medium text-ink">完全渠道透传</p>
+          <p className="text-xs text-ink-muted">
+            启用后任意客户端协议均原样透传至上游，不经协议转换；上游需自行兼容客户端协议格式
+          </p>
+        </div>
+        <Switch
+          checked={draft.pass_through_body_enabled}
+          onCheckedChange={(v) => update("pass_through_body_enabled", v)}
         />
       </div>
     </div>

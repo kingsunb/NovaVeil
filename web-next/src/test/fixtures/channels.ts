@@ -30,6 +30,7 @@ export const sampleChannel: Channel = {
   sort: 0,
   rate_limit_rpm: 60,
   max_concurrent: 5,
+  pass_through_body_enabled: false,
 };
 
 export const sampleChannelDisabled: Channel = {

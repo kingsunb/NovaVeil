@@ -96,6 +96,8 @@ export interface Channel {
   sort: number;
   rate_limit_rpm: number;
   max_concurrent: number;
+  /** 完全渠道透传: 启用后任意客户端协议均原样透传至上游, 不经协议转换。 */
+  pass_through_body_enabled: boolean;
 }
 
 export interface ChannelUpdateRequest {
@@ -121,6 +123,8 @@ export interface ChannelUpdateRequest {
   sort?: number;
   rate_limit_rpm?: number;
   max_concurrent?: number;
+  /** 完全渠道透传开关; nil 表示不修改。 */
+  pass_through_body_enabled?: boolean;
 }
 
 /** 前端统一的单模型测试结果；后端原始字段 elapsed_ms 会在 api 层归一化为 latency_ms。 */

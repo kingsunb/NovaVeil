@@ -616,6 +616,10 @@ export function normalizeChannelOne(raw: unknown): Channel | null {
       typeof channel.opencode_compat === "boolean"
         ? channel.opencode_compat
         : false,
+    pass_through_body_enabled:
+      typeof channel.pass_through_body_enabled === "boolean"
+        ? channel.pass_through_body_enabled
+        : false,
   } as unknown as Channel;
 }
 
