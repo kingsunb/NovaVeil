@@ -155,7 +155,10 @@ type streamEventVerdict struct {
 	hasAnswer    bool  // 事件是否承载最终回答信号(文本增量/工具调用), 推理内容不算。
 	hasReasoning bool  // 事件是否承载推理内容信号(reasoning_content)。
 	stopFinish   bool  // 任一 choice 携带 finish_reason=="stop"(自然终止); 仅 OpenAI Chat 判定。
-	finishSeen   bool  // 任一 choice 携带白名单内的非空 finish_reason(生成已完整结束); 仅 OpenAI Chat 判定。
+	finishSeen   bool  // 上游已声明生成完整结束: OpenAI Chat 为白名单内的非空 finish_reason;
+	//               Anthropic 为 message_delta 携带的白名单内非空 stop_reason。
+	//               用于区分"缺终止哨兵([DONE]/message_stop)的完整响应"与"真截断",
+	//               避免把完整响应误判为提前关闭导致客户端无谓重试(断流)。
 }
 
 // analyzeStreamEvent 按客户端协议解析一个流事件并一次性给出全部判定。
@@ -215,6 +218,12 @@ func analyzeStreamEvent(format llm.APIFormat, event *httpclient.StreamEvent) str
 		if parsed.Type == "message_delta" && parsed.Delta != nil && parsed.Delta.StopReason != nil {
 			if !validAnthropicStopReason(*parsed.Delta.StopReason) {
 				verdict.abnormalErr = fmt.Errorf("%w: stop_reason %q", errAbnormalFinish, *parsed.Delta.StopReason)
+			} else if *parsed.Delta.StopReason != "" {
+				// 非空且白名单内的 stop_reason = 上游已声明生成完整结束( analogous to OpenAI
+				// Chat 的 finish_reason)。部分 Anthropic 兼容上游(第三方代理/网关)发完
+				// message_delta 直接关流、不发 message_stop 哨兵, 该信号用于区分"缺哨兵的
+				// 完整响应"与"真截断", 避免把完整响应误判为提前关闭导致客户端无谓重试(断流)。
+				verdict.finishSeen = true
 			}
 		}
 		return verdict
@@ -420,8 +429,9 @@ var errZeroOutput = errors.New("upstream reported zero output tokens")
 // 对下游与中途断连无异, 提交后的流必须按失败终态定稿。客户端侧以静默截断收尾
 // (不补发终止帧, 见转发循环), 让支持「流缺终止事件即重连」的客户端感知失败并整体重试,
 // 而不是把残缺内容当作完成。
-// 豁免: OpenAI Chat 流已出现白名单内的非空 finish_reason(终止块)时, 上游只是没发
-// [DONE] 哨兵(如 MiniMax), 生成已完整结束, 按正常终态合成 [DONE] 收尾而非判截断。
+// 豁免: 上游已发白名单内的非空终止原因(OpenAI Chat 的 finish_reason / Anthropic 的
+// message_delta.stop_reason)时, 生成已完整结束, 只是缺终止哨兵([DONE]/message_stop),
+// 按正常终态合成哨兵帧收尾而非判截断。
 var errStreamEarlyClose = errors.New("upstream stream closed before the terminal event")
 
 // errStreamEarlyEof 表示上游在产出任何内容信号与协议终止事件之前就关闭了流(提前 EOF):

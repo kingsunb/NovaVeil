@@ -640,7 +640,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			noAnswerStop := false             // 思考-only 自然终止已命中: 终止块及其后尾帧不再写给客户端。
 			roundAnswered := false            // 整轮是否出现过最终回答信号(文本增量/工具调用)。
 			roundReasoned := false            // 整轮是否出现过推理内容信号(reasoning_content)。
-			roundFinished := false            // 整轮是否出现过白名单内的非空 finish_reason(仅 OpenAI Chat 判定)。
+			roundFinished := false            // 整轮是否出现过白名单内的非空终止原因(OpenAI Chat 的 finish_reason / Anthropic 的 message_delta.stop_reason)。
 			window := result.window
 			// 初始化必须为 false: 窗口内出现终止事件时(无内容流), 窗口可能携带多条事件
 			// (结构帧 + 终止帧 + usage 尾帧), 若以 terminated 起步会在写完第一帧后提前 break,
@@ -833,10 +833,12 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 而不是把空回答当作正常完成交付。
 				frameFailure = errNoAnswerStop
 			} else if firstErr == nil && !terminalSeen {
-				if format == llm.APIFormatOpenAIChatCompletion && roundFinished {
-					// 上游已发 finish_reason 终止块但不发 [DONE] 即关流(如 MiniMax):
+				if roundFinished {
+					// 上游已发白名单内的非空终止原因(OpenAI Chat 的 finish_reason /
+					// Anthropic 的 message_delta.stop_reason)但不发终止哨兵([DONE] /
+					// message_stop)即关流(如 MiniMax / 部分 Anthropic 兼容第三方代理):
 					// 生成已完整结束, 不判截断; terminalSeen 保持 false, 由下方补发
-					// 合成的正常终止帧([DONE])让客户端 SDK 规范收尾, 按成功定稿。
+					// 合成的正常终止帧让客户端 SDK 规范收尾, 按成功定稿。
 				} else {
 					// 上游在协议终止帧之前干净关闭连接(EOF 无错误): 与读错误型中断同样按失败定稿,
 					// 否则截断的答案会以正常 stop/end_turn 收尾, 客户端 SDK 把残缺内容当作完成。

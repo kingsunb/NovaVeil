@@ -630,6 +630,69 @@ func TestStreamFinishWithoutDoneSentinelDelivered(t *testing.T) {
 	}
 }
 
+// TestAnthropicFinishWithoutMessageStopDelivered 验证 Anthropic 协议缺 message_stop 哨兵的完整流:
+// 上游发出内容块与 message_delta(stop_reason=end_turn) 后直接干净关闭连接(不发 message_stop,
+// 部分 Anthropic 兼容第三方代理如此), message_delta 已声明生成完整结束, 不按提前关闭判失败:
+// 客户端收到合成的 message_delta + message_stop 规范收尾, 请求按成功定稿。
+// 修复前该场景被误判为 errStreamEarlyClose 静默截断, opencode/Codex 等客户端按「流缺终止事件
+// 即断开」无限重试, 表现为用户感知的"断流"。
+func TestAnthropicFinishWithoutMessageStopDelivered(t *testing.T) {
+	setupFailoverTest(t)
+
+	var hits atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeUpstreamSSE(t, w, "message_start", `{"type":"message_start","message":{"id":"msg_nostop","type":"message","role":"assistant","content":[],"model":"it-m-nostop","stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}`)
+		writeUpstreamSSE(t, w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+		writeUpstreamSSE(t, w, "content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`)
+		writeUpstreamSSE(t, w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+		writeUpstreamSSE(t, w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}`)
+		// 直接关闭连接, 不发送 message_stop 哨兵。
+	}))
+	defer upstream.Close()
+
+	channel := createIntegrationChannel(t, "it-nostop", model.ChannelProviderAnthropic, upstream.URL, "it-m-nostop")
+	group := createIntegrationGroup(t, "it-failover-nostop",
+		model.GroupRelayConfig{
+			MemberMaxAttempts:                     2,
+			MemberRetryIntervalSeconds:            1,
+			MemberNonStreamResponseTimeoutSeconds: 5,
+			MemberStreamFirstEventTimeoutSeconds:  5,
+			MemberCooldownSeconds:                 60,
+		},
+		integrationLeafItem(t, channel, "it-m-nostop"))
+
+	engine, path := newIntegrationEngine(llm.APIFormatAnthropicMessage)
+	body := fmt.Sprintf(`{"model":%q,"max_tokens":32,"messages":[{"role":"user","content":"hi"}],"stream":true}`, group.Name)
+	expectedID := nextRequestID()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("客户端应收到 200 流式响应, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "hello") {
+		t.Fatalf("客户端应收到完整内容, 实际: %s", recorder.Body.String())
+	}
+	frames := parseSSEFrames(t, recorder.Body.Bytes())
+	// 末帧应为合成的 message_stop, 而非静默截断(无终止帧)。
+	if len(frames) == 0 {
+		t.Fatal("应收到流式帧, 实际为空")
+	}
+	lastFrame := frames[len(frames)-1]
+	if lastFrame.frameType() != "message_stop" {
+		t.Fatalf("缺 message_stop 的完整流应由合成 message_stop 规范收尾, 实际末帧类型 %q: %s",
+			lastFrame.frameType(), lastFrame.data)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("完整响应不应触发重试, 上游应恰好承载一次, 实际 %d 次", got)
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusSuccess {
+		t.Fatalf("缺 message_stop 的完整流应以成功终态定稿, 实际 %s(%s)", state.Status, state.Error)
+	}
+}
+
 // TestStickyCooldownClearsSwitchesMember 验证会话粘合随冷却清除:
 // 粘合成员进入冷却后, 同 X-Session-Id 的下一个请求自动切换到其他成员并重建粘合。
 func TestStickyCooldownClearsSwitchesMember(t *testing.T) {
