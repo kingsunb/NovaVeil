@@ -32,3 +32,5 @@ Thumbs.db
 *.db
 *.db-wal
 *.db-shm
+node_modules/
+pnpm-lock.yaml

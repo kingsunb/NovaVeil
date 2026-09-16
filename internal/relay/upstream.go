@@ -519,6 +519,11 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 // 流耗尽且聚合用量明确为 0 时返回 errZeroOutput, 本轮尚未写给客户端, 可安全换目标重试。
 // 流在任何内容信号与协议终止事件之前耗尽(ended 且未 terminated)时返回包装 errStreamEarlyEof 的错误:
 // 上游提前 EOF 属于异常中断, 本轮尚未写给客户端, 按可重试失败处理而不是把空流交付给客户端。
+// 窗口内出现终止事件但全程无内容信号且无白名单内非空终止原因时同样返回 errStreamEarlyEof:
+// 转换 pipeline 的 outbound transformer(如 Anthropic)会向流追加合成终止事件( DoneResponse / [DONE] ),
+// 当上游返回 0 字节 SSE 时该合成事件成为流中唯一事件, 形态上看似正常结束实则空响应。此处拦截以触发重试而非交付空成功。
+// 豁免: 上游已发白名单内的非空终止原因(OpenAI Chat 的 finish_reason / Anthropic 的 stop_reason)时,
+// 即使无内容也视为合法的空完成(模型主动停止), 不拦截以免对合法空响应误判失败。
 // 用量缺失或聚合失败时不做判定, 与"只认明确上报的 0"的口径一致。
 // 窗口内累计事件数/字节数超过 streamWindowMaxEvents/streamWindowMaxBytes 时返回
 // errStreamWindowBudgetExceeded: 首个内容信号前的结构帧通常只有 1-3 个, 超过固定预算
@@ -526,6 +531,8 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 func readStreamWindow(ctx context.Context, format llm.APIFormat, inbound transformer.Inbound, events streams.Stream[*httpclient.StreamEvent]) ([]*httpclient.StreamEvent, bool, bool, error) {
 	var window []*httpclient.StreamEvent
 	var windowedBytes int
+	sawContent := false    // 窗口内是否出现过任何内容承载信号(文本增量/工具调用/推理内容)
+	sawFinishSeen := false // 窗口内是否出现过白名单内的非空终止原因(finish_reason/stop_reason)
 	for events.Next() {
 		event := events.Current()
 		if event == nil || len(event.Data) == 0 {
@@ -544,9 +551,28 @@ func readStreamWindow(ctx context.Context, format llm.APIFormat, inbound transfo
 			return nil, false, false, fmt.Errorf("%w: %s", verdict.abnormalErr, errBodySnippet(event.Data))
 		}
 		window = append(window, event)
+		if verdict.hasContent {
+			sawContent = true
+		}
+		if verdict.finishSeen {
+			sawFinishSeen = true
+		}
 		if verdict.terminal {
+			// 先检查上游是否明确上报了 0 输出用量(errZeroOutput), 该错误比 early_eof 更具体,
+			// 需在合成终止事件拦截之前返回以保留正确的错误分类。
 			if uerr := rejectZeroOutput(ctx, format, inbound, window); uerr != nil {
 				return nil, false, false, uerr
+			}
+			// 终止事件前未出现任何内容信号且未出现白名单内的非空终止原因:
+			// 上游返回了空流(0 字节 SSE), 转换 pipeline 的 outbound transformer 会
+			// 追加合成终止事件(如 [DONE]/DoneResponse), 使空流看起来像正常结束。
+			// rejectZeroOutput 此时因 usage 为 nil 已放行, 需在此拦截按 early_eof 处理
+			// 以触发重试或失败, 而不是把空响应当成功交付给客户端。
+			// 豁免: 上游已发白名单内的非空终止原因(finish_reason/stop_reason)时, 即使无内容
+			// 也视为合法的空完成(模型主动停止), 不拦截以免对合法空响应误判失败。
+			if !sawContent && !sawFinishSeen {
+				tail := errBodySnippet(event.Data)
+				return nil, false, false, fmt.Errorf("%w: terminal event without preceding content or finish signal, %d windowed event(s), tail: %s", errStreamEarlyEof, len(window), tail)
 			}
 			return window, true, true, nil
 		}

@@ -475,9 +475,11 @@ var errStreamBudgetExceeded = errors.New("upstream stream budget exceeded")
 // 白名单之外的取值(如 network_error/error/aborted)说明上游以非协议方式终止了生成,
 // 一律视为异常。content_filter 等 refusal 类终态同样判异常: 本项目把"成员产出可用回复"
 // 作为成功口径, 拒答式终态与其他白名单外取值一样换目标重试, 由其他成员给出有效响应。
+// "other" 予以放行: 部分上游(如第三方 OpenAI 兼容服务)在模型因非标准原因正常停止时
+// 使用该值, 它是合法的生成终止信号而非错误或拒答, 拦截只会对健康响应误判失败。
 func validChatFinishReason(reason string) bool {
 	switch reason {
-	case "", "stop", "length", "tool_calls", "function_call":
+	case "", "stop", "length", "tool_calls", "function_call", "other":
 		return true
 	default:
 		return false

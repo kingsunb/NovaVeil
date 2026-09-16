@@ -34,6 +34,7 @@ func TestValidChatFinishReason(t *testing.T) {
 		{"length", true},
 		{"tool_calls", true},
 		{"function_call", true},
+		{"other", true},
 		{"network_error", false},
 		{"error", false},
 		{"aborted", false},
@@ -138,7 +139,7 @@ func TestValidateResponseFinishWhitelist(t *testing.T) {
 
 	// 三种格式的统一 FinishReason 共用同一白名单。
 	for _, format := range []llm.APIFormat{llm.APIFormatOpenAIChatCompletion, llm.APIFormatAnthropicMessage, llm.APIFormatOpenAIResponse} {
-		for _, reason := range []string{"stop", "tool_calls", "function_call"} {
+		for _, reason := range []string{"stop", "tool_calls", "function_call", "other"} {
 			var response llm.Response
 			if err := json.Unmarshal(choice(reason), &response); err != nil {
 				t.Fatal(err)
