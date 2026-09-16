@@ -155,6 +155,43 @@ func TestSecretOK(t *testing.T) {
 	assert.False(t, secretOK("abcdef"), "纯字母拒绝")
 }
 
+func TestRule_MAC(t *testing.T) {
+	r := ruleByLabel(t, "MAC")
+	assert.NotEmpty(t, r.Pattern.FindString("mac 00:1A:2B:3C:4D:5E end"), "冒号格式整匹配")
+	assert.NotEmpty(t, r.Pattern.FindString("mac 00-1A-2B-3C-4D-5E end"), "连字符格式整匹配")
+	assert.NotEmpty(t, r.Pattern.FindString("mac 001A.2B3C.4D5E end"), "点三分组格式整匹配")
+	assert.Empty(t, r.Pattern.FindString("abc00:1A:2B:3C:4D:5E"), "前接字母数字不命中(\\b 边界)")
+	assert.Empty(t, r.Pattern.FindString("00:1A:2B:3C:4D:5Ef"), "后接字母数字不命中(\\b 边界)")
+}
+
+func TestRule_USCC(t *testing.T) {
+	r := ruleByLabel(t, "USCC")
+	assert.NotEmpty(t, r.Pattern.FindString("code 913100007757804495 end"), "18 位限字符集匹配")
+	assert.Empty(t, r.Pattern.FindString("91310000775780449I"), "含禁用字符 I 不命中")
+	assert.Empty(t, r.Pattern.FindString("91310000775780449"), "长度不足不命中")
+	assert.Empty(t, r.Pattern.FindString("9131000077578044951"), "长度超过 18 不命中(\\b 边界)")
+}
+
+// makeUSCC 用给定前 17 位自动补一个合法校验位(测试辅助)。31 个候选校验位中恰有一者通过。
+func makeUSCC(front17 string) string {
+	for _, c := range usccAlphabet {
+		if usccOK(front17 + string(c)) {
+			return front17 + string(c)
+		}
+	}
+	return front17 + "0"
+}
+
+func TestUsccOK(t *testing.T) {
+	assert.True(t, usccOK("913100007757804495"), "真实合法信用代码(校验位 5)")
+	assert.True(t, usccOK(makeUSCC("91350100M000100Y4")), "自生成校验位样例通过")
+	assert.False(t, usccOK("913100007757804496"), "篡改末位校验位不匹配")
+	assert.False(t, usccOK("91310000775780449I"), "含禁用字符非法")
+	assert.False(t, usccOK("91310000775780449"), "长度不足非法")
+	assert.False(t, usccOK("9131000077578044951"), "长度超 18 非法")
+	assert.False(t, usccOK("91310000775780449O"), "含禁用字符 O 非法")
+}
+
 func TestBuiltinRuleMeta_AllDefaultOff(t *testing.T) {
 	// 硬约束: 所有内置规则默认关闭。
 	for _, m := range BuiltinRuleMeta {

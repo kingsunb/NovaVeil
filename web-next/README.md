@@ -1,13 +1,13 @@
 # web-next · NovaVeil 控制台
 
-> NovaVeil 控制台前端（v0.2.0+）。
-> 设计依据见 [DESIGN.md](./DESIGN.md)。
+> NovaVeil 生产控制台前端。依赖声明与包版本以 [package.json](./package.json) 为准，设计文档的阶段编号不代表产品发布版本。
+> 设计依据见 [DESIGN.md](./DESIGN.md)；全项目入口见 [文档索引](../docs/README.md)。
 
 ## 状态
 
 | 阶段 | 状态 | 说明 |
 |---|---|---|
-| **v0.2.x 视觉重构 | ✅ | macOS 磨砂玻璃简白风（SF 字体栈 / 玻璃面 / Apple 阴影三层级） |
+| 生产前端视觉改进 | 已有实现，待验收收口 | 当前差异与验收清单见 [FOLLOW_UP.md](../docs/frontend-redesign/FOLLOW_UP.md)；不以历史设计阶段标记代替运行验证 |
 
 ## 快速开始
 
@@ -66,10 +66,12 @@ docker compose --profile web-next up -d
 
 ## 技术栈
 
-- **Vite 5** + **React 18** + **TypeScript 5**
-- **Tailwind 3** + shadcn/ui 风格原语（自维护 `components/ui/`）
+以下主版本依据 2026-09-16 的 `package.json` 声明；精确解析版本以锁文件为准，不代表本次已安装或构建。
+
+- **Vite 8** + **React 19** + **TypeScript 6**
+- **Tailwind 4** + shadcn/ui 风格原语（自维护 `components/ui/`）
 - **Radix UI**（Dialog / Slot / Switch）
-- **react-router-dom 6** 路由（页面级 lazy chunk）
+- **react-router-dom 7** 路由（页面级 lazy chunk）
 - **@tanstack/react-query 5** 数据获取
 - **@tanstack/react-virtual 3** 虚拟化（日志实时表）
 - **sonner** Toast · **lucide-react** 图标

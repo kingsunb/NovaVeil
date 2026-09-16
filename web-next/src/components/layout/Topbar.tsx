@@ -1,5 +1,5 @@
 import { useLocation } from "react-router-dom";
-import { Menu, Moon, Sun, LogOut } from "lucide-react";
+import { Menu, Moon, Sun, LogOut, Search } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 import { useAuth } from "@/store/auth";
 import { Button } from "@/components/ui/button";
@@ -33,7 +33,7 @@ const PAGE_HINTS: Record<string, string> = {
   "/settings": "外观、账户与系统",
 };
 
-export function Topbar({ onOpenNavigation }: TopbarProps) {
+export function Topbar({ onOpenCommand, onOpenNavigation }: TopbarProps) {
   const { resolved, toggle } = useTheme();
   const { username, logout } = useAuth();
   const { pathname } = useLocation();
@@ -60,7 +60,24 @@ export function Topbar({ onOpenNavigation }: TopbarProps) {
         )}
       </div>
 
-      <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={onOpenCommand}
+          aria-label="打开命令面板"
+          aria-keyshortcuts="Control+k Meta+k"
+          aria-haspopup="dialog"
+          title="打开命令面板（Ctrl/Cmd + K）"
+          className="h-11 w-11 shrink-0 rounded-control lg:w-auto lg:px-3"
+        >
+          <Search className="h-4 w-4" aria-hidden />
+          <span className="hidden lg:inline">命令面板</span>
+          <kbd className="hidden rounded border border-border px-1 text-[10px] text-ink-subtle lg:inline">
+            Ctrl/Cmd + K
+          </kbd>
+        </Button>
         <Button
           variant="ghost"
           size="icon"

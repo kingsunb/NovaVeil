@@ -77,14 +77,14 @@ func DefaultHeaderTemplates() []HeaderTemplate {
 				{HeaderKey: "accept", HeaderValue: "text/event-stream"},
 				{HeaderKey: "content-type", HeaderValue: "application/json"},
 				{HeaderKey: "originator", HeaderValue: "codex-tui"},
-				{HeaderKey: "user-agent", HeaderValue: "codex-tui/0.153.4 (Windows 10.0.26200; x86_64) WindowsTerminal (codex-tui; 0.153.4)"},
+				{HeaderKey: "user-agent", HeaderValue: "codex-tui/0.154.0 (Windows 10.0.26200; x86_64) WindowsTerminal (codex-tui; 0.154.0)"},
 			},
 		},
 		{
 			Name: "opencode",
 			Headers: []CustomHeader{
 				{HeaderKey: "x-opencode-client", HeaderValue: "desktop"},
-				{HeaderKey: "User-Agent", HeaderValue: "opencode/1.18.30"},
+				{HeaderKey: "User-Agent", HeaderValue: "opencode/1.18.31"},
 			},
 		},
 	}

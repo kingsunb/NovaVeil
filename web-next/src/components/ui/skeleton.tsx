@@ -60,6 +60,36 @@ export function PageSkeleton() {
   );
 }
 
+/** 登录页骨架：复用基础骨架条，不挂载可交互的表单控件。 */
+export function LoginSkeleton() {
+  return (
+    <div className="bg-gradient-subtle flex min-h-full items-center justify-center bg-background px-4">
+      <div
+        className="glass-panel glass-inset-highlight w-full max-w-[380px] rounded-card p-8 shadow-apple-lg"
+        role="status"
+        aria-label="加载中"
+      >
+        <div className="mb-8 flex flex-col items-center gap-3">
+          <Skeleton className="h-12 w-12 rounded-card" />
+          <Skeleton className="h-5 w-28" />
+          <Skeleton className="h-3 w-36" />
+        </div>
+        <div className="space-y-4">
+          {[0, 1].map((i) => (
+            <div key={i}>
+              <Skeleton className="mb-1.5 h-3 w-12" />
+              <Skeleton className="h-10 w-full rounded-control" />
+            </div>
+          ))}
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="h-10 w-full rounded-control" />
+        </div>
+        <Skeleton className="mx-auto mt-6 h-3 w-full" />
+      </div>
+    </div>
+  );
+}
+
 /** 表格骨架（Channels/Groups/Keys） */
 export function TableSkeleton({ rows = 6 }: { rows?: number }) {
   return (

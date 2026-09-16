@@ -14,6 +14,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { preloadPage } from "@/lib/page-loaders";
 import { BrandMark } from "@/components/ui/brand-mark";
 import { useSidebar } from "./useSidebar";
 

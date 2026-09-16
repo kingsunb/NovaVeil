@@ -5,6 +5,7 @@
 > 产出位置：`docs/frontend-redesign/`（原型，不改动生产代码）
 >
 > 阶段说明（2026-09-13）：本文保留原型阶段的背景、技术栈快照与约束，不代表当前生产前端进度。`web-next/` 的已有美化实现、与原型的差异、后续优先级和验收清单见 [FOLLOW_UP.md](FOLLOW_UP.md)。
+> 生产进度核对（2026-09-16）：列表编辑缓存回填、模型评估及分组排序、渠道模型批量操作的源码现状见 `FOLLOW_UP.md` §3.4；路由性能仍有未实施项，见 [ROUTE_TRANSITION_PERFORMANCE_PLAN.md](ROUTE_TRANSITION_PERFORMANCE_PLAN.md)。以下原型快照与历史约束不作追溯改写，源码存在不等于已验收。
 
 ---
 

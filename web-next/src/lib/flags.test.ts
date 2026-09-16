@@ -178,6 +178,150 @@ describe("shouldUseNewWeb", () => {
   });
 });
 
+describe("匿名会话灰度桶", () => {
+  const key = "nv-flags-anonymous-bucket";
+  const base: Flags = {
+    "new-web": true,
+    "rollout-percent": 50,
+    "sticky-bucket": true,
+    "ab-mode": "auto",
+    "legacy-path": "/legacy",
+  };
+
+  beforeEach(() => {
+    vi.resetModules();
+    sessionStorage.clear();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("首次生成数值桶，重复计算和清 flags 缓存不重新分桶", async () => {
+    const random = vi.spyOn(Math, "random").mockReturnValueOnce(0.42).mockReturnValue(0.9);
+    const flags = await import("./flags");
+    expect(flags.shouldUseNewWeb(base, null)).toBe(true);
+    expect(sessionStorage.getItem(key)).toBe("42");
+    flags.clearFlagsCache();
+    expect(flags.shouldUseNewWeb({ ...base }, null)).toBe(true);
+    expect(flags.shouldUseNewWeb(base, "")).toBe(true);
+    expect(random).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+
+  it("新模块复用 session 桶；清会话并开始新页面后允许重新分桶", async () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.42);
+    const first = await import("./flags");
+    expect(first.shouldUseNewWeb(base, null)).toBe(true);
+    vi.resetModules();
+    random.mockClear().mockReturnValue(0.9);
+    const reloaded = await import("./flags");
+    expect(reloaded.shouldUseNewWeb(base, null)).toBe(true);
+    expect(random).not.toHaveBeenCalled();
+    sessionStorage.clear();
+    vi.resetModules();
+    const newSession = await import("./flags");
+    expect(newSession.shouldUseNewWeb(base, null)).toBe(false);
+    expect(sessionStorage.getItem(key)).toBe("90");
+  });
+
+  it("持久化的是桶而非布尔值，配置更新即时重新比较阈值", async () => {
+    sessionStorage.setItem(key, "42");
+    const { shouldUseNewWeb: decide, clearFlagsCache: clear } = await import("./flags");
+    for (const [percent, expected] of [[0, false], [42, false], [42.5, true], [50, true], [100, true]] as const) {
+      clear();
+      expect(decide({ ...base, "rollout-percent": percent }, null)).toBe(expected);
+    }
+    expect(sessionStorage.getItem(key)).toBe("42");
+  });
+
+  it.each(["0", "99"])("合法极端桶 %s 保持 0%%/100%% 边界", async (value) => {
+    sessionStorage.setItem(key, value);
+    const random = vi.spyOn(Math, "random");
+    const { shouldUseNewWeb: decide } = await import("./flags");
+    expect(decide({ ...base, "rollout-percent": 0 }, null)).toBe(false);
+    expect(decide({ ...base, "rollout-percent": 100 }, null)).toBe(true);
+    expect(random).not.toHaveBeenCalled();
+  });
+
+  it.each(["", " ", "-1", "100", "1.5", "NaN", "Infinity", "null", "true", "{}", "01", "1e1", " 42 "])(
+    "拒绝非法存储值 %j 并替换为有效桶",
+    async (value) => {
+      sessionStorage.setItem(key, value);
+      const random = vi.spyOn(Math, "random").mockReturnValue(0.73);
+      const { shouldUseNewWeb: decide } = await import("./flags");
+      expect(decide(base, null)).toBe(false);
+      expect(decide(base, null)).toBe(false);
+      expect(sessionStorage.getItem(key)).toBe("73");
+      expect(random).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["unavailable", "getter", "read", "write", "ssr"])(
+    "%s 环境安全降级且同页面稳定",
+    async (failure) => {
+      const storage = {
+        getItem: vi.fn(() => null),
+        setItem: vi.fn(),
+      };
+      if (failure === "read") storage.getItem.mockImplementation(() => { throw new Error("read denied"); });
+      if (failure === "write") storage.setItem.mockImplementation(() => { throw new Error("quota"); });
+      if (failure === "ssr") {
+        vi.stubGlobal("window", undefined);
+      } else if (failure === "getter") {
+        vi.stubGlobal("window", { get sessionStorage() { throw new Error("SecurityError"); } });
+      } else {
+        vi.stubGlobal("window", { sessionStorage: failure === "unavailable" ? undefined : storage });
+      }
+      const random = vi.spyOn(Math, "random").mockReturnValueOnce(0).mockReturnValue(0.99);
+      const { shouldUseNewWeb: decide, clearFlagsCache: clear } = await import("./flags");
+      expect(decide(base, null)).toBe(true);
+      clear();
+      expect(decide(base, null)).toBe(true);
+      expect(decide({ ...base, "rollout-percent": 0 }, null)).toBe(false);
+      expect(decide({ ...base, "rollout-percent": 100 }, null)).toBe(true);
+      expect(random).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("rollback 优先于 force，force 优先于灰度，均不创建匿名桶", async () => {
+    const random = vi.spyOn(Math, "random");
+    const { shouldUseNewWeb: decide } = await import("./flags");
+    expect(decide({ ...base, "new-web": false, "ab-mode": "new" }, null)).toBe(false);
+    expect(decide({ ...base, "ab-mode": "new", "rollout-percent": 0 }, null)).toBe(true);
+    expect(decide({ ...base, "ab-mode": "old", "rollout-percent": 100 }, null)).toBe(false);
+    expect(random).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(key)).toBeNull();
+  });
+
+  it("具名用户仍按原 hash 分桶，登录和退出不覆盖匿名桶或存储身份", async () => {
+    sessionStorage.setItem(key, "42");
+    const random = vi.spyOn(Math, "random");
+    const { shouldUseNewWeb: decide } = await import("./flags");
+    expect(decide(base, null)).toBe(true);
+    for (const userId of ["admin", "user-x", "user-1"]) {
+      const bucket = userBucket(userId);
+      expect(decide({ ...base, "rollout-percent": bucket }, userId)).toBe(false);
+      expect(decide({ ...base, "rollout-percent": bucket + 1 }, userId)).toBe(true);
+    }
+    expect(decide(base, null)).toBe(true);
+    expect(random).not.toHaveBeenCalled();
+    expect(sessionStorage.length).toBe(1);
+    expect(sessionStorage.getItem(key)).toBe("42");
+  });
+
+  it.each([null, "user-x"])("关闭 sticky 时 %s 仍每次随机，不读取会话桶", async (userId) => {
+    sessionStorage.setItem(key, "42");
+    // 原 hash 算法下 '0' -> 48，'0.5' -> 95，结果确定而非概率断言。
+    const random = vi.spyOn(Math, "random").mockReturnValueOnce(0).mockReturnValueOnce(0.5);
+    const { shouldUseNewWeb: decide } = await import("./flags");
+    const flags = { ...base, "sticky-bucket": false };
+    expect(decide(flags, userId)).toBe(true);
+    expect(decide(flags, userId)).toBe(false);
+    expect(random).toHaveBeenCalledTimes(2);
+    expect(sessionStorage.getItem(key)).toBe("42");
+  });
+});
+
 describe("异常分支", () => {
   it("readLocalOverride 遇非法 JSON 静默返回 null", async () => {
     mockFetchOnce({});

@@ -38,6 +38,7 @@ var builtinValidators = map[string]Validator{
 	"EMAIL":  emailOK,
 	"JWT":    jwtOK,
 	"SECRET": secretOK,
+	"USCC":   usccOK,
 }
 
 // BuiltinRules 内置正则规则, 按 docs/脱敏开发/02 顺序排列。默认全关, 由调用方按 enabledRules 开启。
@@ -52,7 +53,7 @@ var BuiltinRules = []Rule{
 	},
 	{
 		Label:       "API_KEY",
-		Pattern:     regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{50,}|AIza[0-9A-Za-z_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|cli-[A-Za-z0-9_-]{10,}|ding-[A-Za-z0-9_-]{10,})`),
+		Pattern:     regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{50,}|AIza[0-9A-Za-z_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{20,}|cli-[A-Za-z0-9_-]{10,}|ding-[A-Za-z0-9_-]{10,})`),
 		Group:       0,
 		Description: "GitHub PAT / Google / Slack / Stripe / OpenAI / 钉钉 等凭据前缀",
 	},
@@ -64,7 +65,7 @@ var BuiltinRules = []Rule{
 	},
 	{
 		Label:       "PHONE",
-		Pattern:     regexp.MustCompile(`\b(?:\+?86[-\s]?)?1[3-9][0-9][-\s]?[0-9]{4}[-\s]?[0-9]{4}\b`),
+		Pattern:     regexp.MustCompile(`(?:\+86[-\s]?|\b(?:86[-\s]?)?)1[3-9][0-9][-\s]?[0-9]{4}[-\s]?[0-9]{4}\b`),
 		Group:       0,
 		Description: "国内手机号(含 +86 与分隔符, 校验排除全同号)",
 	},
@@ -88,7 +89,7 @@ var BuiltinRules = []Rule{
 	},
 	{
 		Label:       "SECRET",
-		Pattern:     regexp.MustCompile(`(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|密码|口令|令牌|密钥|秘钥|密匙|凭据|凭证|私钥|授权码|访问密钥|接口密钥)["'“”「」]?\s*[:=：＝]\s*["'“”「」]?([A-Za-z0-9!@#$%^&*_~+=-]{6,64})`),
+		Pattern:     regexp.MustCompile(`(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|密码|口令|令牌|密钥|秘钥|密匙|凭据|凭证|私钥|授权码|访问密钥|接口密钥)["'“”「」]?\s*[:=：＝]\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|“[^”]*”|「[^」]*」|[^\s"'“”「」,;{}\[\]]+)`),
 		Group:       1,
 		Description: "password=/token=/api_key= 赋值凭据(中英文关键词, 值须含数字/符号)",
 	},
@@ -100,9 +101,21 @@ var BuiltinRules = []Rule{
 	},
 	{
 		Label:       "TOKEN",
-		Pattern:     regexp.MustCompile(`[Bb]earer\s+([A-Za-z0-9_-]{8,})`),
+		Pattern:     regexp.MustCompile(`(?i)\bBearer\s+([A-Za-z0-9._~+/-]+=*)`),
 		Group:       1,
 		Description: "Bearer Token(只脱 token 值, 保留 Bearer 关键字)",
+	},
+	{
+		Label:       "MAC",
+		Pattern:     regexp.MustCompile(`\b(?:[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{4}(?:\.[0-9A-Fa-f]{4}){2})\b`),
+		Group:       0,
+		Description: "MAC 地址(6 组十六进制: 冒号/连字符 2-2-2-2-2-2 或点 4-4-4, \\b 边界, 无校验)",
+	},
+	{
+		Label:       "USCC",
+		Pattern:     regexp.MustCompile(`\b[0-9A-HJ-NP-RTUWXY]{18}\b`),
+		Group:       0,
+		Description: "统一社会信用代码(18 位 31 进制 + MOD 31 校验位)",
 	},
 }
 
@@ -119,6 +132,8 @@ var BuiltinRuleMeta = []RuleMeta{
 	{"SECRET", "赋值凭据(password= 等)", false},
 	{"JWT", "JWT", false},
 	{"TOKEN", "Bearer Token", false},
+	{"MAC", "MAC 地址", false},
+	{"USCC", "统一社会信用代码", false},
 }
 
 // ---- 校验函数(防误报), 译自 maskit transparent.py:410-612 ----
@@ -277,4 +292,57 @@ func secretOK(s string) bool {
 		}
 	}
 	return false
+}
+
+// ---- 统一社会信用代码(USCC)校验, 译自 GB 32100-2015 / GB/T 17710 MOD 31-3 ----
+
+// usccAlphabet 31 进制字符集(GB 32100-2015), 禁 I/O/S/V/Z。
+const usccAlphabet = "0123456789ABCDEFGHJKLMNPQRTUWXY"
+
+// usccWeight 为 GB 32100-2015 前 17 位自左向右的权重: 3^i mod 31 (i=0..16)。
+var usccWeight = [17]int{1, 3, 9, 27, 19, 26, 16, 17, 20, 29, 25, 13, 8, 24, 10, 30, 28}
+
+// usccVal 返回字符在 31 进制字符集中的值; 非法字符返回 -1。
+func usccVal(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'A' && c <= 'H':
+		return int(c-'A') + 10
+	case c >= 'J' && c <= 'N':
+		return int(c-'J') + 18
+	case c >= 'P' && c <= 'R':
+		return int(c-'P') + 23
+	case c == 'T' || c == 'U':
+		return int(c-'T') + 26
+	case c == 'W':
+		return 28
+	case c == 'X':
+		return 29
+	case c == 'Y':
+		return 30
+	default:
+		return -1
+	}
+}
+
+// usccOK 校验位 = (31 - Σ(前17位×权重) mod 31) mod 31。
+// 仅验证字符集与校验位, 不证明登记主体存在。
+func usccOK(s string) bool {
+	if len(s) != 18 {
+		return false
+	}
+	sum := 0
+	for i := 0; i < 17; i++ {
+		v := usccVal(s[i])
+		if v < 0 {
+			return false
+		}
+		sum += v * usccWeight[i]
+	}
+	check := usccVal(s[17])
+	if check < 0 {
+		return false
+	}
+	return check == (31-sum%31)%31
 }

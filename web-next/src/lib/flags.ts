@@ -17,6 +17,9 @@
 const DEFAULTS_URL = "/__flags/default.json";
 const RUNTIME_URL = "/__flags/runtime.json";
 const LS_KEY = "nv-flags-override";
+const ANONYMOUS_BUCKET_KEY = "nv-flags-anonymous-bucket";
+// 独立于 flags 配置缓存；存储不可用时也保持本页面生命周期内稳定。
+let anonymousBucket: number | undefined;
 
 export interface Flags {
   /** 全局 kill switch；false 时整个应用渲染回滚提示页 */
@@ -80,13 +83,41 @@ export function userBucket(seed: string): number {
   return Math.abs(h) % 100;
 }
 
+/** 仅保存 0-99 的匿名桶，不保存身份或最终灰度决策。 */
+function getAnonymousBucket(): number {
+  if (anonymousBucket !== undefined) return anonymousBucket;
+
+  let storage: Storage | undefined;
+  try {
+    if (typeof window !== "undefined") storage = window.sessionStorage;
+    const raw = storage?.getItem(ANONYMOUS_BUCKET_KEY);
+    // 只接受规范整数，拒绝空字符串、空白、NaN、越界值等。
+    if (raw != null && /^(?:0|[1-9]\d?)$/.test(raw)) {
+      anonymousBucket = Number(raw);
+      return anonymousBucket;
+    }
+  } catch {
+    // 禁用存储、SecurityError 或 SSR 时由模块内存兜底。
+  }
+
+  anonymousBucket = Math.floor(Math.random() * 100);
+  try {
+    storage?.setItem(ANONYMOUS_BUCKET_KEY, String(anonymousBucket));
+  } catch {
+    // 写入失败不影响当前页面的稳定分桶。
+  }
+  return anonymousBucket;
+}
+
 export function shouldUseNewWeb(flags: Flags, userId: string | null): boolean {
   if (!flags["new-web"]) return false;
   if (flags["ab-mode"] === "new") return true;
   if (flags["ab-mode"] === "old") return false;
-  // auto
-  const seed = flags["sticky-bucket"] && userId ? userId : Math.random().toString();
-  return userBucket(seed) < flags["rollout-percent"];
+  // auto：具名用户和非粘性模式沿用原算法，仅固定匿名粘性桶。
+  const bucket = flags["sticky-bucket"]
+    ? userId ? userBucket(userId) : getAnonymousBucket()
+    : userBucket(Math.random().toString());
+  return bucket < flags["rollout-percent"];
 }
 
 /** 取最新 flags（带缓存） */

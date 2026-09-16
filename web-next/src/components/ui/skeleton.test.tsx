@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-import { LogsSkeleton, SettingsSkeleton, TableSkeleton } from "./skeleton";
+import { LoginSkeleton, LogsSkeleton, SettingsSkeleton, TableSkeleton } from "./skeleton";
 
 describe("<Skeleton /> 族", () => {
+  it("LoginSkeleton：居中卡片占位，不引入可交互表单", () => {
+    const { container } = render(<LoginSkeleton />);
+    expect(screen.getByRole("status", { name: "加载中" })).toHaveClass("max-w-[380px]");
+    expect(container.firstChild).toHaveClass("items-center", "justify-center");
+    expect(container.querySelector("input, button, form")).toBeNull();
+  });
+
   it("SettingsSkeleton：单个 status 区域（左导航 + 表单骨架）", () => {
     render(<SettingsSkeleton />);
     expect(screen.getByRole("status", { name: "加载中" })).toBeInTheDocument();

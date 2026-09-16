@@ -1,6 +1,7 @@
 package mask
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -51,9 +52,9 @@ type MaskResult struct {
 
 // Apply 对 body 做脱敏, 返回脱敏文本、会话映射与命中明细。
 //
-// 执行顺序(详见 docs/脱敏开发/02 §五):
-//  1. 自定义敏感词(整词, 长词优先)——先整词再正则, 避免正则把敏感词拆碎后无法整词匹配;
-//  2. 内置正则规则(按 BuiltinRules 顺序), 仅 enabledRules 中开启者, 每条先做特征预检。
+// JSON 对象/数组/字符串仅扫描解码后的字符串值, 键名与非文本字段不变。
+// 其他输入按纯文本处理。所有规则在原文收集候选, 重叠区间整体覆盖后一次替换。
+// 同区间自定义词优先, 不以短词截断完整凭据; 已有占位符始终保留。
 //
 // Fail-closed: 任何 panic(如 crypto/rand 故障)转为 error, 调用方据此 rejectRequest, 绝不放行明文。
 func (e *Engine) Apply(body string, sessionKey string, enabledRules map[string]bool, terms []CustomTerm) (result MaskResult, err error) {
@@ -71,32 +72,31 @@ func (e *Engine) Apply(body string, sessionKey string, enabledRules map[string]b
 		return result, nil
 	}
 
-	masked := body
-
-	// 1. 自定义敏感词: 按长度降序(长词优先, 避免 "cat" 抢先吃掉 "category" 的前缀)。
-	sortedTerms := make([]CustomTerm, len(terms))
-	copy(sortedTerms, terms)
-	sort.SliceStable(sortedTerms, func(i, j int) bool { return len(sortedTerms[i].Value) > len(sortedTerms[j].Value) })
-	for _, t := range sortedTerms {
-		if t.Value == "" {
-			continue
+	var rules []Rule
+	for _, term := range terms {
+		if term.Value != "" {
+			rules = append(rules, Rule{Label: "TERM", Pattern: customTermRegex(term.Value)})
 		}
-		rule := Rule{Label: "TERM", Pattern: customTermRegex(t.Value), Group: 0, Description: "自定义敏感词"}
-		masked = applyRule(masked, rule, mapping, &result.Matches)
 	}
-
-	// 2. 内置正则规则: 仅开启者, 先特征预检再跑正则。
 	for _, rule := range e.rules {
-		if !enabledRules[rule.Label] {
-			continue
+		if enabledRules[rule.Label] {
+			rules = append(rules, rule)
 		}
-		if !ruleMayHit(masked, rule.Label) {
-			continue
-		}
-		masked = applyRule(masked, rule, mapping, &result.Matches)
 	}
-
-	result.Masked = masked
+	seen := make(map[string]bool)
+	maskText := func(text string) string {
+		return maskCandidates(text, rules, mapping, &result.Matches, seen)
+	}
+	result.Masked = body
+	if len(rules) != 0 {
+		trimmed := strings.TrimSpace(body)
+		// 裸数字仍按纯文本扫描, 保持 Apply("13800138000") 的既有用法。
+		if len(trimmed) > 0 && strings.ContainsAny(trimmed[:1], "{[\"") && json.Valid([]byte(body)) {
+			result.Masked = mapJSONStringValues(body, maskText)
+		} else {
+			result.Masked = maskText(body)
+		}
+	}
 	return result, nil
 }
 
@@ -182,6 +182,10 @@ func ruleMayHit(text, label string) bool {
 		return strings.Contains(text, "eyJ")
 	case "TOKEN":
 		return strings.Contains(strings.ToLower(text), "bearer")
+	case "MAC":
+		return strings.ContainsAny(text, ":-.")
+	case "USCC":
+		return hasNAlnum(text, 18)
 	}
 	return true
 }
@@ -200,6 +204,23 @@ func hasNDigits(text string, n int) bool {
 			if cnt >= n {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// hasNAlnum 判断文本是否含连续 n 位 ASCII 字母数字([A-Za-z0-9])。
+func hasNAlnum(text string, n int) bool {
+	cnt := 0
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+			cnt++
+			if cnt >= n {
+				return true
+			}
+		} else {
+			cnt = 0
 		}
 	}
 	return false

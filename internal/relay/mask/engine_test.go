@@ -153,3 +153,68 @@ func TestEngine_EmptyBody(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, res.Masked)
 }
+
+func TestEngine_MAC(t *testing.T) {
+	e := NewEngine(NewSessionStore())
+	const mac = "00:1A:2B:3C:4D:5E"
+
+	// 开关关闭: 原样保留。
+	res, err := e.Apply("mac "+mac+" end", "s1", enable(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "mac "+mac+" end", res.Masked, "开关关闭原样透传")
+
+	// 开关开启: 整体替换为占位符, 命中明细齐全, 还原往返一致。
+	res2, err := e.Apply("mac "+mac+" end", "s2", enable("MAC"), nil)
+	require.NoError(t, err)
+	assert.Contains(t, res2.Masked, "{{MAC_")
+	assert.NotContains(t, res2.Masked, mac)
+	var m *Match
+	for i := range res2.Matches {
+		if res2.Matches[i].Label == "MAC" {
+			m = &res2.Matches[i]
+			break
+		}
+	}
+	require.NotNil(t, m, "应存在 MAC 命中明细")
+	assert.Equal(t, mac, m.Original)
+	restored := RestoreString(res2.Masked, res2.Mapping)
+	assert.Equal(t, "mac "+mac+" end", restored)
+}
+
+func TestEngine_MAC_ConsistentWithinSession(t *testing.T) {
+	e := NewEngine(NewSessionStore())
+	const mac = "00:1A:2B:3C:4D:5E"
+	res, err := e.Apply("a "+mac+" b "+mac+" c", "s1", enable("MAC"), nil)
+	require.NoError(t, err)
+	phs := PlaceholderRe.FindAllString(res.Masked, -1)
+	require.Len(t, phs, 2, "两处出现应各替换为一个占位符")
+	assert.Equal(t, phs[0], phs[1], "同一 MAC 映射为同一占位符")
+	restored := RestoreString(res.Masked, res.Mapping)
+	assert.Equal(t, "a "+mac+" b "+mac+" c", restored)
+}
+
+func TestEngine_USCC(t *testing.T) {
+	e := NewEngine(NewSessionStore())
+	const code = "913100007757804495"
+
+	// 开关关闭: 原样保留。
+	res, err := e.Apply("code "+code+" end", "s1", enable(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "code "+code+" end", res.Masked)
+
+	// 开关开启: 替换为占位符, 还原往返一致。
+	res2, err := e.Apply("code "+code+" end", "s2", enable("USCC"), nil)
+	require.NoError(t, err)
+	assert.Contains(t, res2.Masked, "{{USCC_")
+	assert.NotContains(t, res2.Masked, code)
+	restored := RestoreString(res2.Masked, res2.Mapping)
+	assert.Equal(t, "code "+code+" end", restored)
+
+	// 校验位非法(篡改末位): 不命中, 原样保留。
+	res3, err := e.Apply("code 913100007757804496 end", "s3", enable("USCC"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "code 913100007757804496 end", res3.Masked, "校验位非法不脱敏")
+	for _, m := range res3.Matches {
+		assert.NotEqual(t, "USCC", m.Label, "非法信用代码不应出现在命中明细")
+	}
+}
