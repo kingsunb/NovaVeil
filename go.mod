@@ -13,7 +13,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.20.0
-	github.com/looplj/axonhub/llm v0.0.0-20260910044642-46687ed6337d
+	github.com/looplj/axonhub/llm v0.0.0-20260916050219-bd7144ecfcaf
 	github.com/samber/lo v1.53.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
