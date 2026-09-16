@@ -60,6 +60,14 @@ const (
 	AttemptCanceled AttemptOutcome = "canceled" // 客户端取消或人工中止, 不计为渠道故障。
 )
 
+// MaskMatch 命中明细的单条记录, 元素形状与 maskTestMatch 一致(文档 07 §2.3),
+// 供日志详情展示"哪个占位符来自哪条规则、原文是什么"。
+type MaskMatch struct {
+	Label       string `json:"label"`       // 规则标签, 如 PHONE / EMAIL / SECRET / TERM
+	Original    string `json:"original"`    // 命中原文
+	Placeholder string `json:"placeholder"` // 替换占位符, 如 {{PHONE_bcdfgh}}
+}
+
 // 客户端请求的完整进程内状态, 同时作为状态流的消息形状; 上半部分在请求到达时写入并在结束时定稿, 下半部分每轮循环覆盖。
 type RequestState struct {
 	ID        uint64    `json:"id"`         // 请求在当前进程内的唯一标识。
@@ -86,6 +94,7 @@ type RequestState struct {
 	RelayMode     string          `json:"relay_mode"`               // 最新一轮转发方式: passthrough 同协议透传, converted 跨协议转换。
 	ProxyAddr     string          `json:"proxy_addr,omitempty"`     // 最新一轮使用的渠道代理完整地址(密码打码, 含 {account} 解析出的别名); 未走渠道代理为空。
 	Masked        bool            `json:"masked,omitempty"`         // 本次请求是否执行了脱敏(请求体占位符替换), 面板据此展示脱敏标记。
+	MaskMatches   []MaskMatch     `json:"mask_matches,omitempty"`   // 脱敏命中明细, 仅在脱敏发生时有值; 旧版本/开关关闭/未命中时为空, 前端据此决定是否渲染命中区(文档 07 §3.1)。
 	Sending       bool            `json:"sending"`                  // 最新一轮是否仍在等待上游响应。
 	Error         string          `json:"error,omitempty"`          // 最新一轮的失败原因, 请求结束后即为最终错误。
 	Class         ErrClass        `json:"class,omitempty"`          // 终态错误分类, 请求结束后写入。
@@ -164,11 +173,14 @@ func newRequestState(model, body, clientIP, apiKeyRaw, keyName string) *RequestS
 	return request
 }
 
-// updateBody 替换请求体为脱敏后的版本, 使日志/审计/对话留存只记录脱敏后内容,
-// 不保留原始明文(凭据安全红线, 文档 04 §五)。
-func (r *RequestState) updateBody(masked string) {
+// applyMaskResult 用脱敏后的请求体替换状态中的原始明文, 同时记录命中明细并发布一次
+// 请求状态, 使已打开的日志详情实时收到命中信息(文档 07 §3.1)。
+// 命中明细只属于当前请求这一次 Apply 的结果; 不把原始请求体写回 body(凭据安全红线, 文档 04 §五)。
+func (r *RequestState) applyMaskResult(masked string, matches []MaskMatch) {
 	mu.Lock()
 	r.body = masked
+	r.MaskMatches = matches
+	publishRequestLocked(r)
 	mu.Unlock()
 }
 
@@ -213,6 +225,7 @@ func (r RequestState) MarshalJSON() ([]byte, error) {
 		RelayMode      string          `json:"relay_mode"`
 		ProxyAddr      string          `json:"proxy_addr,omitempty"`
 		Masked         bool            `json:"masked,omitempty"`
+		MaskMatches    []MaskMatch     `json:"mask_matches,omitempty"`
 		Sending        bool            `json:"sending"`
 		Error          string          `json:"error,omitempty"`
 		Class          ErrClass        `json:"class,omitempty"`
@@ -233,6 +246,7 @@ func (r RequestState) MarshalJSON() ([]byte, error) {
 		TargetChannel: r.TargetChannel, TargetModel: r.TargetModel, KeyLabel: r.KeyLabel,
 		ThinkingLevel: r.ThinkingLevel, ClientFormat: r.ClientFormat, UpstreamType: r.UpstreamType,
 		RelayMode: r.RelayMode, ProxyAddr: r.ProxyAddr, Masked: r.Masked,
+		MaskMatches: r.MaskMatches,
 		Sending: r.Sending, Error: r.Error, Class: r.Class, Attempts: attempts,
 	})
 }
@@ -557,8 +571,21 @@ func (r *RequestState) finish(body, responseBody string, status Status, class Er
 	// 用量分桶落库: sanitize 修正后的用量 UPSERT 累加到 (小时 × 目标模型) 桶,
 	// 失败/取消终态同样计入(上游已真实消耗), 单行同步写不阻塞其他请求的转发;
 	// 落库错误仅告警, 不影响定稿路径。
+	// 提取 reasoning/cache token 与 cost 从 llm.Usage 的明细字段, duration 从请求耗时。
 	if usage != nil {
-		op.RecordUsageBucket(r.TargetModel, usage.PromptTokens, usage.CompletionTokens)
+		var reasoning, cached int64
+		var cost float64
+		if usage.CompletionTokensDetails != nil {
+			reasoning = usage.CompletionTokensDetails.ReasoningTokens
+		}
+		if usage.PromptTokensDetails != nil {
+			cached = usage.PromptTokensDetails.CachedTokens
+		}
+		if usage.Cost != nil {
+			cost = *usage.Cost
+		}
+		durationMs := time.Since(r.StartedAt).Milliseconds()
+		op.RecordUsageBucket(r.TargetModel, usage.PromptTokens, usage.CompletionTokens, reasoning, cached, cost, durationMs)
 	}
 
 	mu.Lock()

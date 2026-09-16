@@ -17,27 +17,41 @@ import { cn } from "@/lib/utils";
 import { preloadPage } from "@/lib/page-loaders";
 import { BrandMark } from "@/components/ui/brand-mark";
 import { useSidebar } from "./useSidebar";
+import {
+  loadChannelsPage,
+  loadChatPage,
+  loadCustomModelsPage,
+  loadDashboardPage,
+  loadGroupsPage,
+  loadKeysPage,
+  loadLogsPage,
+  loadMaskPage,
+  loadModelEvalPage,
+  loadSettingsPage,
+} from "@/lib/route-loaders";
 
 interface NavItem {
   to: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
+  /** 路由 chunk 预加载 loader；hover/focus 时调用，幂等（§3.3） */
+  load?: () => Promise<unknown>;
 }
 
 const OPERATIONS: NavItem[] = [
-  { to: "/dashboard", label: "总览", icon: GaugeCircle },
-  { to: "/channels", label: "渠道", icon: LayoutGrid },
-  { to: "/custom-models", label: "自定义模型", icon: Bot },
-  { to: "/groups", label: "分组", icon: UsersRound },
-  { to: "/model-eval", label: "模型评估", icon: FlaskConical },
-  { to: "/mask", label: "脱敏", icon: ShieldCheck },
-  { to: "/chat", label: "对话", icon: MessageSquare },
+  { to: "/dashboard", label: "总览", icon: GaugeCircle, load: loadDashboardPage },
+  { to: "/channels", label: "渠道", icon: LayoutGrid, load: loadChannelsPage },
+  { to: "/custom-models", label: "自定义模型", icon: Bot, load: loadCustomModelsPage },
+  { to: "/groups", label: "分组", icon: UsersRound, load: loadGroupsPage },
+  { to: "/model-eval", label: "模型评估", icon: FlaskConical, load: loadModelEvalPage },
+  { to: "/mask", label: "脱敏", icon: ShieldCheck, load: loadMaskPage },
+  { to: "/chat", label: "对话", icon: MessageSquare, load: loadChatPage },
 ];
 
 const ACCESS: NavItem[] = [
-  { to: "/keys", label: "API 密钥", icon: KeyRound },
-  { to: "/logs", label: "日志", icon: Activity },
-  { to: "/settings", label: "设置", icon: SettingsIcon },
+  { to: "/keys", label: "API 密钥", icon: KeyRound, load: loadKeysPage },
+  { to: "/logs", label: "日志", icon: Activity, load: loadLogsPage },
+  { to: "/settings", label: "设置", icon: SettingsIcon, load: loadSettingsPage },
 ];
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
@@ -122,6 +136,10 @@ function NavGroup({
           // 否则读屏用户丢失整个主导航（审计 4.17）。
           aria-label={item.label}
           onClick={onNavigate}
+          // 桌面 hover / 键盘 focus 时预加载目标 chunk（§3.3）。移动端无 hover，
+          // 点击仍走 lazy() 的正常加载路径；loader 幂等，重复触发只请求一次。
+          onMouseEnter={item.load ? () => void item.load!() : undefined}
+          onFocus={item.load ? () => void item.load!() : undefined}
           className={({ isActive }) =>
             cn(
               "flex min-h-10 items-center gap-2.5 rounded-control px-2 text-[13px] font-medium tracking-tight transition-all duration-150",

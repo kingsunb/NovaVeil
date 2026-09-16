@@ -8,7 +8,7 @@
 #
 # 用法:
 #   1) 选定要部署的镜像 (例如 pin 到 digest):
-#        export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api:0.01@sha256:<digest>'
+#        export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api:0.1.0@sha256:<digest>'
 #      若只 pin 版本号则省略 @sha256 部分, 但请记下残余风险: 同名 tag 可被重新发布。
 #   2) 创建外部数据卷并预配权限:
 #        sudo install -d -o 10001 -g 10001 -m 0700 /var/lib/novaveil
@@ -22,12 +22,12 @@
 # 推荐的 HTTPS 终止方式见 docs/SECURE_DEPLOYMENT.md。
 
 x-image: &image
-  image: ${NOVAVEIL_IMAGE:?NOVAVEIL_IMAGE is required (e.g. ghcr.io/kingsunb/novaveil-api:0.01@sha256:<digest>)}
+  image: ${NOVAVEIL_IMAGE:?NOVAVEIL_IMAGE is required (e.g. ghcr.io/kingsunb/novaveil-api:0.1.0@sha256:<digest>)}
 
 # 独立前端镜像（可选）：仅在 --profile web-next 时使用。
 # 默认部署方式是 Go 内嵌前端（novaveil 服务已包含控制台），无需此镜像。
 x-web-next-image: &web-next-image
-  image: ${NOVAVEIL_WEB_NEXT_IMAGE:?NOVAVEIL_WEB_NEXT_IMAGE is required for the web-next profile (e.g. ghcr.io/kingsunb/novaveil-web-next:0.01@sha256:<digest>)}
+  image: ${NOVAVEIL_WEB_NEXT_IMAGE:?NOVAVEIL_WEB_NEXT_IMAGE is required for the web-next profile (e.g. ghcr.io/kingsunb/novaveil-web-next:0.1.0@sha256:<digest>)}
 
 services:
   novaveil:

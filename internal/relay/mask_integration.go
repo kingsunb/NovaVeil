@@ -13,25 +13,26 @@ import (
 )
 
 // maskEngine 进程级脱敏引擎, 内置会话映射表随会话粘合过期回收。
-// 开关关闭时 ApplyBytes 内部短路, 仅一次 bool 判断开销。
+// 开关关闭时 applyRequestMask 短路, 仅一次 bool 判断开销。
 var maskEngine = mask.NewEngine(mask.NewSessionStore())
 
 // maskSessionStore 引擎内置会话映射表, 供请求结束后回收映射防止内存泄漏。
 var maskSessionStore = maskEngine.SessionStore()
 
-// applyRequestMask 对请求体执行脱敏, 返回脱敏后字节与映射表。
-// 全局开关或分组开关任一关闭时直接原样返回, 映射表为 nil, 零开销(文档 01 §二、04 §1.4)。
-// 开关均开但未命中任何敏感信息时同样返回 nil 映射: 占位符未插入, 响应不会含占位符,
+// applyRequestMask 对请求体执行脱敏, 返回脱敏后字节、映射表与命中明细。
+// 全局开关或分组开关任一关闭时直接原样返回, 映射表为 nil, 命中明细为 nil, 零开销(文档 01 §二、04 §1.4)。
+// 开关均开但未命中任何敏感信息时同样返回 nil 映射与 nil 明细: 占位符未插入, 响应不会含占位符,
 // 还原为 no-op, 调用方据此跳过脱敏标记, 避免对无敏感内容的请求误标"已脱敏"。
 // 脱敏异常时返回 error, 调用方须走 fail-closed 拒绝请求, 绝不放行明文(文档 05 §八)。
-func applyRequestMask(body []byte, sessionKey string, groupMaskEnabled bool) ([]byte, *mask.Mapping, error) {
+// 命中明细只属于当前请求这一次 Apply 的结果, 按引擎返回顺序(已按唯一原文去重保序)原样使用(文档 07 §3.1)。
+func applyRequestMask(body []byte, sessionKey string, groupMaskEnabled bool) ([]byte, *mask.Mapping, []mask.Match, error) {
 	cfg, err := op.MaskConfigGet()
 	if err != nil {
 		// 配置读取失败按 fail-closed 处理: 若全局开关本就关着则无需阻断, 但无法判定故拒绝。
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if !cfg.Enabled || !groupMaskEnabled {
-		return body, nil, nil // 短路: 任一开关关即跳过, 零正则开销
+		return body, nil, nil, nil // 短路: 任一开关关即跳过, 零正则开销
 	}
 	terms := make([]mask.CustomTerm, 0, len(cfg.CustomTerms))
 	for _, t := range cfg.CustomTerms {
@@ -39,16 +40,30 @@ func applyRequestMask(body []byte, sessionKey string, groupMaskEnabled bool) ([]
 			terms = append(terms, mask.CustomTerm{Value: v, Category: t.Category})
 		}
 	}
-	masked, mapping, err := maskEngine.ApplyBytes(body, sessionKey, cfg.BuiltinRuleSwitch, terms)
+	res, err := maskEngine.Apply(string(body), sessionKey, cfg.BuiltinRuleSwitch, terms)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	masked := []byte(res.Masked)
 	// 未命中任何敏感信息: 请求体未变, 占位符未插入, 响应不会含占位符, 还原为 no-op。
 	// 返回 nil 映射使调用方跳过脱敏标记与还原器, 日志不对此请求展示"已脱敏"。
 	if bytes.Equal(masked, body) {
-		return masked, nil, nil
+		return masked, nil, nil, nil
 	}
-	return masked, mapping, nil
+	return masked, res.Mapping, res.Matches, nil
+}
+
+// toMaskMatches 把引擎命中明细转换为状态流的命中明细形状(元素与 maskTestMatch 一致, 文档 07 §2.3)。
+// 空输入返回 nil, 使 RequestState.MaskMatches 在无命中时不进 JSON(omitempty)。
+func toMaskMatches(matches []mask.Match) []MaskMatch {
+	if len(matches) == 0 {
+		return nil
+	}
+	result := make([]MaskMatch, len(matches))
+	for i, m := range matches {
+		result[i] = MaskMatch{Label: m.Label, Original: m.Original, Placeholder: m.Placeholder}
+	}
+	return result
 }
 
 // restoreNonStream 对非流式响应体执行占位符还原。

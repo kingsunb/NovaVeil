@@ -227,8 +227,7 @@ export default function ChannelsPage() {
     setImportText("");
   }
 
-  // 兼容旧逻辑：外部仍传 File 内容导入，
-  // 但导入按钮改为弹窗后，文件选择替换成另一种交互入口。
+  // 文件选择入口：读取 .txt 文件原文，转交 onImportText 发起导入。
   async function onImportFile(file: File) {
     setImporting(true);
     try {
@@ -250,7 +249,7 @@ export default function ChannelsPage() {
     try {
       const result: ChannelImportResult = await api.importChannels(text);
       const summary = `成功 ${result.success} 个，失败 ${result.failed} 个。导入只恢复名称、地址与密钥，需再补模型与分组。`;
-      if (result.errors.length) {
+      if (result.errors?.length) {
         toast.error(summary, { description: result.errors.join("\n") });
       } else {
         toast.success(summary);
@@ -604,7 +603,12 @@ export default function ChannelsPage() {
         open={importDialog}
         onOpenChange={(o) => !o && onImportClose()}
       >
-        <DialogContent variant="dialog" size="lg">
+        <DialogContent
+          variant="dialog"
+          size="lg"
+          onInteractOutside={(e) => importing && e.preventDefault()}
+          onEscapeKeyDown={(e) => importing && e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>导入渠道</DialogTitle>
             <DialogDescription>

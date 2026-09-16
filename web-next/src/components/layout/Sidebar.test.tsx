@@ -1,8 +1,27 @@
-import { describe, expect, it, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, expect, it, beforeEach, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
+import {
+  loadChannelsPage,
+  loadDashboardPage,
+  loadLogsPage,
+} from "@/lib/route-loaders";
+
+vi.mock("@/lib/route-loaders", () => ({
+  loadLoginPage: vi.fn(() => Promise.resolve({ default: () => null })),
+  loadDashboardPage: vi.fn(() => Promise.resolve({ default: () => null })),
+  loadChannelsPage: vi.fn(() => Promise.resolve({ default: () => null })),
+  loadCustomModelsPage: vi.fn(() => Promise.resolve({ default: () => null })),
+  loadGroupsPage: vi.fn(() => Promise.resolve({ default: () => null })),
+  loadModelEvalPage: vi.fn(() => Promise.resolve({ default: () => null })),
+  loadMaskPage: vi.fn(() => Promise.resolve({ default: () => null })),
+  loadKeysPage: vi.fn(() => Promise.resolve({ default: () => null })),
+  loadLogsPage: vi.fn(() => Promise.resolve({ default: () => null })),
+  loadSettingsPage: vi.fn(() => Promise.resolve({ default: () => null })),
+  loadChatPage: vi.fn(() => Promise.resolve({ default: () => null })),
+}));
 
 const KEY = "nv-sidebar-collapsed";
 
@@ -60,5 +79,32 @@ describe("<Sidebar />", () => {
     localStorage.setItem(KEY, "1");
     renderSidebar();
     expect(screen.getByLabelText("展开侧栏")).toBeInTheDocument();
+  });
+});
+
+describe("<Sidebar /> 路由 chunk 预加载 (§3.3)", () => {
+  beforeEach(() => {
+    localStorage.removeItem(KEY);
+    vi.clearAllMocks();
+  });
+
+  it("hover 导航项触发对应 loader 预加载", () => {
+    renderSidebar();
+    fireEvent.mouseEnter(screen.getByLabelText("总览"));
+    expect(vi.mocked(loadDashboardPage)).toHaveBeenCalled();
+    fireEvent.mouseEnter(screen.getByLabelText("渠道"));
+    expect(vi.mocked(loadChannelsPage)).toHaveBeenCalled();
+  });
+
+  it("focus 导航项同样触发预加载（键盘可达）", () => {
+    renderSidebar();
+    fireEvent.focus(screen.getByLabelText("日志"));
+    expect(vi.mocked(loadLogsPage)).toHaveBeenCalled();
+  });
+
+  it("未 hover 的路由 loader 不被调用", () => {
+    renderSidebar();
+    fireEvent.mouseEnter(screen.getByLabelText("总览"));
+    expect(vi.mocked(loadLogsPage)).not.toHaveBeenCalled();
   });
 });

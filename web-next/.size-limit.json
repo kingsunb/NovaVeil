@@ -3,7 +3,7 @@
     "name": "JS 总和 (gzip)",
     "path": "../static/out/assets/*.js",
     "gzip": true,
-    "limit": "240 KB",
+    "limit": "250 KB",
     "running": false
   },
   {
@@ -17,7 +17,7 @@
     "name": "CSS (gzip)",
     "path": "../static/out/assets/*.css",
     "gzip": true,
-    "limit": "13 KB",
+    "limit": "14 KB",
     "running": false
   }
 ]

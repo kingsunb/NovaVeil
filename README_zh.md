@@ -42,7 +42,7 @@ wget https://raw.githubusercontent.com/kingsunb/NovaVeil/master/docker-compose.y
 sudo install -d -o 10001 -g 10001 -m 0700 /var/lib/novaveil
 docker volume create --driver local \
   --opt type=none --opt o=bind --opt device=/var/lib/novaveil novaveil-data
-export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api:v0.01@sha256:<manifest-digest>'
+export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api:v0.1.0@sha256:<manifest-digest>'
 docker compose pull
 docker compose up -d
 ```

@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // SettingKeyErrorRetentionDays 错误日志保留天数的设置键(默认 3, 0=永久保留)。
 // 遵循 setting.go 的 KV 键枚举模式; 因本文件为错误日志功能的自包含定义,
@@ -54,4 +57,5 @@ type ErrorLog struct {
 	ErrBrief        string    `json:"err_brief" gorm:"size:512"`               // ≤256 字节截断
 	RequestBody     string    `json:"request_body,omitempty" gorm:"type:text"` // 原始请求体截断(64KB, JSON 感知截断保留合法结构)
 	ErrDetail       string    `json:"err_detail,omitempty" gorm:"type:text"`   // 完整错误文本(含上游响应体), ≤64KB 截断; 面板按需展开
+	MaskMatches     json.RawMessage `json:"mask_matches,omitempty" gorm:"type:text"` // 脱敏命中明细(JSON 数组 [{label,original,placeholder}]), 仅在保留完整请求体的条目上附带; 旧记录为空天然兼容(文档 07 §3.2). 用 json.RawMessage 以便 API 响应输出为 JSON 数组而非字符串.
 }

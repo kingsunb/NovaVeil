@@ -190,12 +190,12 @@ SQLite/MySQL/PostgreSQL 里渠道 Key、API Key 都是明文。备份导出同�
 
 | 位置 | 值 |
 |------|----|
-| `main.go` 注释 / README Docker 镜像 | v0.01 |
+| `main.go` 注释 / README Docker 镜像 | v0.1.0 |
 | `CHANGELOG.md` 最新发布 | 0.2.0（2026-08-30） |
-| `web-next/package.json` | 0.2.0 |
+| `web-next/package.json` | 0.1.0 |
 | `CHANGELOG.md` `[Unreleased]` | 「暂无面向用户的未发布变更」 |
 
-0.01 相对 0.2.0 的协议转换、脱敏、对话页、熔断等用户可见变化没有记进 changelog。发版与排障会对不上。
+0.1.0 相对 0.2.0 的协议转换、脱敏、对话页、熔断等用户可见变化没有记进 changelog。发版与排障会对不上。
 
 ### L-2 统计接口挂在 `/api/v1/update/`
 

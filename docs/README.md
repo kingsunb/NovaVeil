@@ -18,6 +18,7 @@
 | [DEVELOPMENT_routing.md](DEVELOPMENT_routing.md) | 请求路由与故障转移开发文档 |
 | [STABILITY_UX_BASELINE.md](STABILITY_UX_BASELINE.md) | 稳定性与 UX 验收基线 |
 | [FEATURES.md](FEATURES.md) | 功能需求清单（REQ/BUG 记录与设计意图） |
+| [FREELLMAPI_PROVIDERS.md](FREELLMAPI_PROVIDERS.md) | FreeLLMAPI 免费 LLM 供应商清单（48 个供应商，含适配器与配额信息） |
 
 ## 脱敏开发（实现说明与后续规划）
 

@@ -40,7 +40,7 @@ same `/app/data` volume.
 Prefer a digest-qualified reference:
 
 ```bash
-export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api:v0.01@sha256:<manifest-digest>'
+export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api:v0.1.0@sha256:<manifest-digest>'
 docker compose pull
 docker compose up -d
 ```
@@ -49,7 +49,7 @@ A version tag without a digest is easier to operate but can be republished. Reco
 the resolved digest in the change ticket before deployment:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/kingsunb/novaveil-api:v0.01
+docker buildx imagetools inspect ghcr.io/kingsunb/novaveil-api:v0.1.0
 ```
 
 The runtime base is pinned to the Alpine 3.21.7 multi-platform OCI index digest

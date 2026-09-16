@@ -30,9 +30,9 @@ describe("compareBuild", () => {
 
   it("commit 缺失时回退版本号比较", () => {
     // 版本一致（含 v 前缀归一化）
-    expect(compareBuild("", "unknown", "v0.01", "0.01")).toBe("match");
+    expect(compareBuild("", "unknown", "v0.1.0", "0.1.0")).toBe("match");
     // 版本不同
-    expect(compareBuild("", "", "v0.00", "v0.01")).toBe("mismatch");
+    expect(compareBuild("", "", "v0.0.0", "v0.1.0")).toBe("mismatch");
   });
 
   it("任一侧不可判定（空/dev/unknown）时返回 unknown，不告警", () => {
@@ -41,7 +41,7 @@ describe("compareBuild", () => {
     expect(compareBuild("dev", "dev", "dev", "dev")).toBe("unknown");
     expect(compareBuild("", "unknown", "dev", "unknown")).toBe("unknown");
     // 后端可判定、前端不可判定 → unknown
-    expect(compareBuild("", "bb04581", "", "v0.01")).toBe("unknown");
+    expect(compareBuild("", "bb04581", "", "v0.1.0")).toBe("unknown");
   });
 
   it("dev-<sha> 版本号可判定（与纯 dev 占位符区分）", () => {

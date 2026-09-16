@@ -166,6 +166,37 @@ export function SettingsSkeleton() {
   );
 }
 
+/** 登录页骨架 —— 居中磨砂卡片，与 LoginPage 同形状（品牌位 + 表单字段） */
+export function LoginSkeleton() {
+  return (
+    <div
+      className="flex min-h-full items-center justify-center px-4"
+      role="status"
+      aria-label="加载中"
+    >
+      <div className="glass-panel glass-inset-highlight w-full max-w-[380px] rounded-card p-8">
+        {/* 品牌位 */}
+        <div className="mb-8 flex items-center gap-2">
+          <Skeleton className="h-9 w-9 rounded-[10px]" />
+          <Skeleton className="h-5 w-28" />
+        </div>
+        {/* 用户名 */}
+        <Skeleton className="h-3 w-16" />
+        <Skeleton className="mt-1.5 h-10 w-full rounded-control" />
+        {/* 密码 */}
+        <Skeleton className="mt-4 h-3 w-16" />
+        <Skeleton className="mt-1.5 h-10 w-full rounded-control" />
+        {/* 记住我 + 登录按钮 */}
+        <div className="mt-5 flex items-center gap-2">
+          <Skeleton className="h-4 w-4 rounded" />
+          <Skeleton className="h-3 w-20" />
+        </div>
+        <Skeleton className="mt-6 h-10 w-full rounded-control" />
+      </div>
+    </div>
+  );
+}
+
 /** 日志页骨架（含虚拟化容器） */
 export function LogsSkeleton() {
   return (

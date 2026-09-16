@@ -1,0 +1,15 @@
+{
+  "name": "novaveil-agent-notes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "NovaVeil Agent Note 门禁脚本（方法源自 write-notes-like-deepseek / DeepSeek Harness）",
+  "scripts": {
+    "verify-agent-note-tree": "npx tsx scripts/agent-notes/verify-agent-note-tree.ts",
+    "verify-agent-note-format": "npx tsx scripts/agent-notes/verify-agent-note-format.ts",
+    "verify-archived": "npx tsx scripts/agent-notes/verify-archived-agent-notes.ts",
+    "verify-notes": "npx tsx scripts/agent-notes/verify-agent-note-tree.ts && npx tsx scripts/agent-notes/verify-agent-note-format.ts && npx tsx scripts/agent-notes/verify-archived-agent-notes.ts",
+    "archive-agent-note": "npx tsx scripts/agent-notes/archive-agent-note.ts",
+    "check-anchors": "npx tsx scripts/agent-notes/check-note-anchors.ts"
+  }
+}

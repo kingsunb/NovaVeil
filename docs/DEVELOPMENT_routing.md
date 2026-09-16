@@ -2,6 +2,8 @@
 
 本文档描述请求路由的核心流程，包括正常路由与会话粘合、半开探测与全部不可用恢复、以及存在正常渠道时的非阻塞半开探测；同时给出分组 Relay 配置项说明、会话标识约定、分组引用的失败语义与设计条目到实现的映射，是本主题的唯一权威文档。
 
+> 决策理由、备选方案与参考实现见 [Agent Note](../.agents/notes/implemented/architecture/2026-09-11-session-affinity-circuit-breaker-routing.md)。
+
 ---
 
 ## 一、正常请求与会话粘合
@@ -181,7 +183,7 @@
 
 ## 四、配置项说明
 
-分组 Relay 配置持久化在分组的 `RelayConfig` 字段中（数据库内以 JSON 存储，见 `internal/model/group.go` 的 `GroupRelayConfig`），保存时空值由 `NormalizeGroupRelayConfig` 按下表默认值补齐。前 6 个字段为既有配置，后 6 个字段由本次开发新增。
+分组 Relay 配置持久化在分组的 `RelayConfig` 字段中（数据库内以 JSON 存储，见 `internal/model/group.go` 的 `GroupRelayConfig`），保存时空值由 `NormalizeGroupRelayConfig` 按下表默认值补齐。
 
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -191,13 +193,13 @@
 | `member_stream_first_event_timeout_seconds` | int | 300 | 单个成员返回首个有效流事件的超时秒数。 |
 | `member_cooldown_seconds` | int | 60 | 单个成员耗尽尝试后被跳过的秒数，仅在故障转移模式生效。 |
 | `member_affinity_seconds` | int | 300 | 成员亲和时间：故障切换成功后继续保持当前成员的秒数；当前成员失败会立即结束亲和，0 表示不保持。 |
-| `session_sticky_enabled` | bool | false | 是否启用会话粘合：同一会话的请求在粘合有效期内固定使用同一成员。本次开发新增。 |
-| `session_sticky_seconds` | int | 300 | 会话粘合时长秒数，粘合成员每次业务成功后滑动续期。本次开发新增。 |
-| `cooldown_backoff_multiplier` | float64 | 2 | 半开探测失败后的冷却时间倍数，冷却等级每升一级乘一次，最小为 1 表示不退避。本次开发新增。 |
-| `cooldown_max_seconds` | int | 1800 | 成员冷却时间上限秒数，退避后不超过该值。本次开发新增。 |
-| `background_probe_enabled` | bool | false | 是否启用后台定时探测，对处于 OPEN 状态的成员周期性发起半开测试。本次开发新增。 |
-| `background_probe_interval_seconds` | int | 60 | 后台定时探测的执行间隔秒数。本次开发新增。 |
-| `max_request_rounds` | int | 60 | 单个请求的最大选路轮次（含引用跳过与等待重试），超限以客户端协议错误收尾，防失控轮转。本次开发新增。 |
+| `session_sticky_enabled` | bool | false | 是否启用会话粘合：同一会话的请求在粘合有效期内固定使用同一成员。 |
+| `session_sticky_seconds` | int | 300 | 会话粘合时长秒数，粘合成员每次业务成功后滑动续期。 |
+| `cooldown_backoff_multiplier` | float64 | 2 | 半开探测失败后的冷却时间倍数，冷却等级每升一级乘一次，最小为 1 表示不退避。 |
+| `cooldown_max_seconds` | int | 1800 | 成员冷却时间上限秒数，退避后不超过该值。 |
+| `background_probe_enabled` | bool | false | 是否启用后台定时探测，对处于 OPEN 状态的成员周期性发起半开测试。 |
+| `background_probe_interval_seconds` | int | 60 | 后台定时探测的执行间隔秒数。 |
+| `max_request_rounds` | int | 60 | 单个请求的最大选路轮次（含引用跳过与等待重试），超限以客户端协议错误收尾，防失控轮转。 |
 | `max_request_seconds` | int | 0 | 单个请求的整体安全截止时间秒数，0 表示不限(默认)；超时后同样以错误收尾。 |
 
 ---
@@ -239,7 +241,7 @@
 
 ### 与瞬态上游失败的对照
 
-设计依据是区分结构性失败与瞬态失败：重试预算只属于真实派发之后的瞬态上游错误，解析阶段的失败不消耗它。
+结构性解析失败与瞬态上游失败的处理对照如下：
 
 | | 结构性解析失败（引用跳过） | 瞬态上游失败 |
 | --- | --- | --- |
@@ -253,31 +255,23 @@
 
 该配置（默认 3 秒，各分组独立配置）只作用于真实派发后的成员级失败：同一成员失败但尚未达到 `member_max_attempts` 时，相邻两次尝试之间的退避等待秒数。它不是轮询间隔，也不参与引用解析——引用跳过不受它影响：解析失败既不等待该间隔，也不消耗任何重试预算。
 
-> 旧行为对照：本次修正之前，引用解析失败被当作该引用成员的一次失败计入统计，未达阈值时等待 `member_retry_interval_seconds` 后重试同一引用。这会把结构性问题伪装成瞬态故障，让请求平白等待并污染失败统计。
-
-### 与 OmniRoute 对照
-
-OmniRoute 的组合路由决策追踪把「派发前被跳过」与「真实派发」分开记录：`skipped_before_dispatch` 按 reason 白名单（provider_cooldown、model_lockout、availability 等）登记候选在派发前被排除的原因，只有真实发出的请求才记为 dispatched 并消耗调用预算。NovaVeil 的本次修正采用同一思想——引用解析失败属于派发前的结构性跳过，不应占用派发后才生效的重试与冷却预算。
-
 ---
 
-## 七、实现状态映射
+## 七、设计条目与实现位置
 
-设计条目与实现的对应关系如下。「既有能力」指本次开发前已存在的行为，「本次开发补齐」指由本次开发新增或接通的能力。
-
-| 设计条目 | 实现位置 | 状态 |
-| --- | --- | --- |
-| 故障转移模式按优先级扫描成员、跳过冷却中成员 | `internal/relay/route.go`（选路） | 既有能力 |
-| 冷却到期成员的单次探测占用，避免并发重复探测 | `internal/relay/route.go`（ProbeItemID 占用/归还） | 既有能力 |
-| 失败达到尝试次数进入冷却，成功解除冷却并开始亲和 | `internal/relay/route.go`（冷却） | 既有能力 |
-| 转发主循环：逐轮重读分组配置、选路、上游调用与成败上报 | `internal/relay/handler.go`（主循环） | 既有能力 |
-| 渠道内重试与重试间隔等待 | `internal/relay/handler.go`（主循环） | 既有能力 |
-| 会话粘合：解析 `X-Session-Id`、粘合命中与滑动续期 | `internal/relay/handler.go`（主循环）、`internal/relay/route.go`（粘合状态） | 本次开发补齐 |
-| 并行半开探测，取最先成功者为候选 | `internal/relay/prober.go`（异步与后台探测） | 本次开发补齐 |
-| 有正常渠道时的异步非阻塞探测 | `internal/relay/prober.go`（异步与后台探测） | 本次开发补齐 |
-| 后台定时探测（默认关闭，与请求触发共用同一探测锁） | `internal/task/probe.go`（后台任务）、`internal/relay/prober.go`（探测入口） | 本次开发补齐 |
-| 冷却加倍退避与最大冷却上限 | `internal/relay/route.go`（冷却）、`internal/relay/prober.go`（探测失败路径） | 本次开发补齐 |
-| 成员级响应超时生效（非流式完整响应 / 流式首事件） | `internal/relay/handler.go`（主循环） | 本次开发补齐 |
-| Relay 配置字段、默认值与空值补齐 | `internal/model/group.go`（配置） | 老字段既有，新字段本次开发新增 |
-| 全部成员不可用时的紧急兜底渠道：常规选路与整批探测均无果时，节流放行分组配置的最后防线成员 | `internal/relay/route.go`（`claimEmergencyLocked`，并发上限 `emergencyMaxConcurrent = 3`）、`internal/model/group.go`（`emergency_item_id` 配置项） | 本次开发补齐（bdf376e） |
-| 分组引用解析失败的跳过语义：立即排除该引用、尝试顶层下一优先级，不计失败不进冷却不等待，下个请求重新评估自动回流 | `internal/relay/handler.go`（主循环）、`internal/relay/route.go`（`resolveGroupRefChain`） | 本次修正（feat 分支合入，hash 待定） |
+| 设计条目 | 实现位置 |
+| --- | --- |
+| 故障转移模式按优先级扫描成员、跳过冷却中成员 | `internal/relay/route.go`（选路） |
+| 冷却到期成员的单次探测占用，避免并发重复探测 | `internal/relay/route.go`（ProbeItemID 占用/归还） |
+| 失败达到尝试次数进入冷却，成功解除冷却并开始亲和 | `internal/relay/route.go`（冷却） |
+| 转发主循环：逐轮重读分组配置、选路、上游调用与成败上报 | `internal/relay/handler.go`（主循环） |
+| 渠道内重试与重试间隔等待 | `internal/relay/handler.go`（主循环） |
+| 会话粘合：解析 `X-Session-Id`、粘合命中与滑动续期 | `internal/relay/handler.go`（主循环）、`internal/relay/route.go`（粘合状态） |
+| 并行半开探测，取最先成功者为候选 | `internal/relay/prober.go`（异步与后台探测） |
+| 有正常渠道时的异步非阻塞探测 | `internal/relay/prober.go`（异步与后台探测） |
+| 后台定时探测（默认关闭，与请求触发共用同一探测锁） | `internal/task/probe.go`（后台任务）、`internal/relay/prober.go`（探测入口） |
+| 冷却加倍退避与最大冷却上限 | `internal/relay/route.go`（冷却）、`internal/relay/prober.go`（探测失败路径） |
+| 成员级响应超时生效（非流式完整响应 / 流式首事件） | `internal/relay/handler.go`（主循环） |
+| Relay 配置字段、默认值与空值补齐 | `internal/model/group.go`（配置） |
+| 全部成员不可用时的紧急兜底渠道：常规选路与整批探测均无果时，节流放行分组配置的最后防线成员 | `internal/relay/route.go`（`claimEmergencyLocked`，并发上限 `emergencyMaxConcurrent = 3`）、`internal/model/group.go`（`emergency_item_id` 配置项） |
+| 分组引用解析失败的跳过语义：立即排除该引用、尝试顶层下一优先级，不计失败不进冷却不等待，下个请求重新评估自动回流 | `internal/relay/handler.go`（主循环）、`internal/relay/route.go`（`resolveGroupRefChain`） |

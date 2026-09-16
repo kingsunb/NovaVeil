@@ -2,7 +2,7 @@ data
 build
 static/out/*
 .vscode
-logs/
+/logs/
 
 # Local Go build artifacts
 novaveil

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   clearFlagsCache,
+  clearAnonymousBucket,
+  getAnonymousBucket,
   loadFlags,
   setLocalOverride,
   userBucket,
@@ -341,5 +343,84 @@ describe("异常分支", () => {
     });
     expect(() => setLocalOverride({ "ab-mode": "new" })).not.toThrow();
     if (desc) Object.defineProperty(localStorage, "setItem", desc);
+  });
+});
+
+describe("匿名灰度桶 (§3.4)", () => {
+  const base: Flags = {
+    "new-web": true,
+    "rollout-percent": 50,
+    "sticky-bucket": true,
+    "ab-mode": "auto",
+    "legacy-path": "/legacy",
+  };
+
+  beforeEach(() => {
+    clearAnonymousBucket();
+    sessionStorage.clear();
+  });
+  afterEach(() => {
+    // 先还原 sessionStorage 再清理：避免上一用例 stub 了 sessionStorage 后，
+    // 这里调用 .clear() 撞上残桩的 TypeError。
+    vi.unstubAllGlobals();
+    clearAnonymousBucket();
+    sessionStorage.clear();
+  });
+
+  it("sticky=true + userId=null：同一会话内分桶稳定（不再每次随机）", () => {
+    const flags: Flags = { ...base, "rollout-percent": 50, "sticky-bucket": true };
+    const r1 = shouldUseNewWeb(flags, null);
+    for (let i = 0; i < 100; i++) {
+      expect(shouldUseNewWeb(flags, null)).toBe(r1);
+    }
+  });
+
+  it("sticky=true + userId 提供：用 userId 分桶，不触碰匿名桶", () => {
+    sessionStorage.setItem("nv-anon-bucket", "should-not-be-used");
+    const flags: Flags = { ...base, "rollout-percent": 50, "sticky-bucket": true };
+    const r = shouldUseNewWeb(flags, "user-x");
+    // 同 userId 始终一致，且与匿名桶无关
+    for (let i = 0; i < 50; i++) {
+      expect(shouldUseNewWeb(flags, "user-x")).toBe(r);
+    }
+    expect(r).toBe(userBucket("user-x") < 50);
+  });
+
+  it("sticky=false + userId=null：保持每次随机（不使用匿名桶）", () => {
+    const flags: Flags = { ...base, "rollout-percent": 50, "sticky-bucket": false };
+    let hits = 0;
+    for (let i = 0; i < 1000; i++) {
+      if (shouldUseNewWeb(flags, null)) hits++;
+    }
+    const ratio = hits / 1000;
+    expect(ratio).toBeGreaterThan(0.4);
+    expect(ratio).toBeLessThan(0.6);
+  });
+
+  it("getAnonymousBucket：同会话返回同值；clearAnonymousBucket 后可重新分桶", () => {
+    const a = getAnonymousBucket();
+    expect(getAnonymousBucket()).toBe(a);
+    clearAnonymousBucket();
+    sessionStorage.clear();
+    const c = getAnonymousBucket();
+    // 重新生成的桶极大概率与旧值不同（Math.random 碰撞概率 ~0）
+    expect(c).not.toBe(a);
+  });
+
+  it("sessionStorage 不可用时用模块级 ref 兜底，同一周期内仍稳定", () => {
+    vi.stubGlobal("sessionStorage", {
+      getItem: () => {
+        throw new Error("denied");
+      },
+      setItem: () => {
+        throw new Error("denied");
+      },
+      removeItem: () => {
+        throw new Error("denied");
+      },
+    });
+    clearAnonymousBucket();
+    const a = getAnonymousBucket();
+    expect(getAnonymousBucket()).toBe(a);
   });
 });

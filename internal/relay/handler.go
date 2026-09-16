@@ -3,6 +3,7 @@ package relay
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -104,7 +105,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		var maskMapping *mask.Mapping
 		var streamRestorer *mask.StreamRestorer
 		if g, gErr := op.GroupGetByName(metadataModel); gErr == nil {
-			masked, mapping, mErr := applyRequestMask(raw.Body, sessionKey, g.RelayConfig.MaskEnabled)
+			masked, mapping, matches, mErr := applyRequestMask(raw.Body, sessionKey, g.RelayConfig.MaskEnabled)
 			if mErr != nil {
 				rejectRequest(c, inbound, fmt.Errorf("脱敏失败, 拒绝放行明文: %w", mErr))
 				return
@@ -115,8 +116,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				streamRestorer = mask.NewStreamRestorer(maskMapping)
 				request.Masked = true
 			}
-			// 用脱敏后的请求体替换状态中的原始明文, 使日志/审计/对话留存只记录脱敏后内容。
-			request.updateBody(string(masked))
+			// 用脱敏后的请求体替换状态中的原始明文, 同时记录命中明细并发布状态,
+			// 使日志/审计/对话留存只记录脱敏后内容, 日志详情实时收到命中信息(文档 07 §3.1)。
+			request.applyMaskResult(string(masked), toMaskMatches(matches))
 		}
 		// 有会话键的映射跨请求保留(多轮同一占位符), 由 SessionStore TTL 回收;
 		// 无会话键时 Apply 使用请求级 Mapping, 不入表, 请求结束即释放。
@@ -1078,9 +1080,16 @@ func recordErrorLog(request *RequestState) {
 	seq := counter.(*atomic.Int64).Add(1)
 
 	// 每类前 3 条保留完整请求体(不截断), 后续仅存摘要不含请求体, 控制磁盘增长。
+	// 命中明细的保留策略与请求体对齐: 仅在保留完整请求体的条目上附带, 控制落盘量(文档 07 §3.2)。
 	var reqBody string
+	var maskMatchesJSON json.RawMessage
 	if seq <= completeLogQuota {
 		reqBody = request.body
+		if len(request.MaskMatches) > 0 {
+			if data, mErr := json.Marshal(request.MaskMatches); mErr == nil {
+				maskMatchesJSON = json.RawMessage(data)
+			}
+		}
 	}
 
 	op.RecordErrorBucket(request.Model)
@@ -1101,6 +1110,7 @@ func recordErrorLog(request *RequestState) {
 		ErrBrief:        request.Error,
 		ErrDetail:       request.Error,
 		RequestBody:     reqBody,
+		MaskMatches:     maskMatchesJSON,
 	})
 	// 同类错误只保留最近 3 条, 避免同一问题刷屏挤掉其他类型的错误记录。
 	op.ErrorLogDedupPerClass(string(request.Class), 3)

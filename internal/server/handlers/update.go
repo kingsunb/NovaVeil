@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -53,6 +54,14 @@ func init() {
 		AddRoute(
 			router.NewRoute("/token-trends", http.MethodGet).
 				Handle(getTokenTrends),
+		).
+		AddRoute(
+			router.NewRoute("/usage-detail", http.MethodGet).
+				Handle(getUsageDetail),
+		).
+		AddRoute(
+			router.NewRoute("/usage-heatmap", http.MethodGet).
+				Handle(getUsageHeatmap),
 		)
 }
 
@@ -129,11 +138,12 @@ func getNowVersion(c *gin.Context) {
 	}
 
 	tokensByModel, byModelErr := op.UsageTotalsByModelRange(ctx, rangeKey)
+	detail, detailErr := op.UsageDetailByRange(ctx, rangeKey)
 	// stats_available 标识用量统计是否可读: KPI 聚合与按模型聚合任一失败即置 false,
 	// 让前端区分"无流量"(true 且全零)与"统计暂时不可用"(false)。
-	statsAvailable := kpiErr == nil && byModelErr == nil
+	statsAvailable := kpiErr == nil && byModelErr == nil && detailErr == nil
 	if !statsAvailable {
-		log.Warnf("usage stats unavailable: kpi=%v byModel=%v", kpiErr, byModelErr)
+		log.Warnf("usage stats unavailable: kpi=%v byModel=%v detail=%v", kpiErr, byModelErr, detailErr)
 	}
 	resp.Success(c, gin.H{
 		"version":             conf.Version,
@@ -146,6 +156,11 @@ func getNowVersion(c *gin.Context) {
 		"total_tokens_output": kpiOutput,
 		"tokens_by_model":     tokensByModel,
 		"stats_available":     statsAvailable,
+		// 详细指标: reasoning/cache token、预计消耗、使用时长
+		"reasoning_tokens":    detail.ReasoningTokens,
+		"cached_tokens":       detail.CachedTokens,
+		"total_cost":          detail.Cost,
+		"total_duration_ms":   detail.DurationMs,
 	})
 }
 
@@ -196,4 +211,44 @@ func updateFunc(c *gin.Context) {
 		return
 	}
 	resp.Success(c, "update success")
+}
+
+// getUsageDetail 返回指定时间窗口的详细指标: /usage-detail?range=24h|7d|30d|1y|3y|forever。
+// 包含 input/output/reasoning/cached token、预计消耗(cost)、使用时长(duration_ms)与请求计数。
+func getUsageDetail(c *gin.Context) {
+	rangeKey := c.Query("range")
+	if rangeKey == "" {
+		rangeKey = "forever"
+	}
+	if !op.ValidUsageRange(rangeKey) {
+		resp.Error(c, http.StatusBadRequest, "range 仅支持 24h / 7d / 30d / 1y / 3y / forever")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	detail, err := op.UsageDetailByRange(ctx, rangeKey)
+	available := err == nil
+	if !available {
+		log.Warnf("usage detail stats unavailable: %v", err)
+	}
+	resp.Success(c, gin.H{"detail": detail, "available": available})
+}
+
+// getUsageHeatmap 返回每日用量汇总: /usage-heatmap?days=365。
+// 供仪表盘 GitHub 风格热力图使用, days 默认 365, 范围 [7, 730]。
+func getUsageHeatmap(c *gin.Context) {
+	days := 365
+	if d := c.Query("days"); d != "" {
+		if n, err := strconv.Atoi(d); err == nil {
+			days = n
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	points, err := op.UsageHeatmapData(ctx, days)
+	available := err == nil
+	if !available {
+		log.Warnf("usage heatmap stats unavailable: %v", err)
+	}
+	resp.Success(c, gin.H{"points": points, "available": available})
 }

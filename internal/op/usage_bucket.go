@@ -27,8 +27,9 @@ var usageBucketNow = time.Now
 // 跳过条件: 数据库未初始化(无 DB 的单测环境)、模型名为空(未路由到的请求)、
 // 双零用量(上游未上报, 不写零行污染聚合)。
 // 负 token 是上游异常上报, 逐项钳为 0, 绝不把负增量 UPSERT 进累计值。
+// reasoning/cached 为推理与缓存命中 token, cost 为预计消耗(USD), durationMs 为请求耗时(毫秒)。
 // 失败仅 warn 降级: 用量统计允许少量丢失, 绝不因落库错误影响请求定稿路径。
-func RecordUsageBucket(targetModel string, input, output int64) {
+func RecordUsageBucket(targetModel string, input, output, reasoning, cached int64, cost float64, durationMs int64) {
 	gormDB := db.GetDB()
 	if gormDB == nil || targetModel == "" || (input <= 0 && output <= 0) {
 		return
@@ -39,15 +40,28 @@ func RecordUsageBucket(targetModel string, input, output int64) {
 	if output < 0 {
 		output = 0
 	}
+	if reasoning < 0 {
+		reasoning = 0
+	}
+	if cached < 0 {
+		cached = 0
+	}
+	if durationMs < 0 {
+		durationMs = 0
+	}
 	if input == 0 && output == 0 {
 		return
 	}
 	bucket := model.UsageBucket{
-		BucketAt:     usageBucketNow().UTC().Truncate(UsageBucketHour),
-		ModelName:    targetModel,
-		InputTokens:  input,
-		OutputTokens: output,
-		RequestCount: 1,
+		BucketAt:        usageBucketNow().UTC().Truncate(UsageBucketHour),
+		ModelName:       targetModel,
+		InputTokens:     input,
+		OutputTokens:    output,
+		ReasoningTokens: reasoning,
+		CachedTokens:    cached,
+		Cost:            cost,
+		DurationMs:      durationMs,
+		RequestCount:    1,
 	}
 	// ON CONFLICT (bucket_at, model_name) DO UPDATE 累加, 三方言由 GORM 自动适配;
 	// 只累加不覆盖, 并发定稿的多个请求各自 UPSERT 不会互相吞量。
@@ -57,9 +71,13 @@ func RecordUsageBucket(targetModel string, input, output int64) {
 			{Name: "model_name"},
 		},
 		DoUpdates: clause.Assignments(map[string]any{
-			"input_tokens":  gorm.Expr("input_tokens + ?", input),
-			"output_tokens": gorm.Expr("output_tokens + ?", output),
-			"request_count": gorm.Expr("request_count + ?", 1),
+			"input_tokens":     gorm.Expr("input_tokens + ?", input),
+			"output_tokens":    gorm.Expr("output_tokens + ?", output),
+			"reasoning_tokens": gorm.Expr("reasoning_tokens + ?", reasoning),
+			"cached_tokens":    gorm.Expr("cached_tokens + ?", cached),
+			"cost":             gorm.Expr("cost + ?", cost),
+			"duration_ms":      gorm.Expr("duration_ms + ?", durationMs),
+			"request_count":    gorm.Expr("request_count + ?", 1),
 		}),
 	}).Create(&bucket).Error
 	if err != nil {
@@ -385,4 +403,146 @@ func UsageBucketCleanExpired(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("清理过期用量分桶失败: %w", result.Error)
 	}
 	return result.RowsAffected, nil
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 详细指标 & 热力图查询 (参考 TokenArena 的 Usage 总览 / 详细指标 / 预计消耗 / 使用时长 / 热力图)
+// ──────────────────────────────────────────────────────────────────────────────
+
+// UsageDetailByRange 返回指定时间窗口内的详细指标汇总: input/output/reasoning/cached
+// token、预计消耗(cost)、使用时长(duration_ms)与请求计数, 供仪表盘详细指标卡片使用。
+// rangeKey 为 "forever" 时不加窗口条件(全表聚合); 其余档位按 usageWindows 的 span 过滤。
+// DB 查询失败返回零值与非 nil error; 数据库未初始化返回零值与 nil error(优雅降级)。
+func UsageDetailByRange(ctx context.Context, rangeKey string) (detail UsageDetail, err error) {
+	gormDB := db.GetDB()
+	if gormDB == nil {
+		return UsageDetail{}, nil
+	}
+	window, ok := usageWindows[rangeKey]
+	if !ok {
+		rangeKey = "forever"
+		window = usageWindows[rangeKey]
+	}
+	var row struct {
+		Input     int64
+		Output    int64
+		Reasoning int64
+		Cached    int64
+		Cost      float64
+		Duration  int64
+		ReqCnt    int64
+	}
+	sql := "SELECT COALESCE(SUM(input_tokens), 0) AS input, COALESCE(SUM(output_tokens), 0) AS output, " +
+		"COALESCE(SUM(reasoning_tokens), 0) AS reasoning, COALESCE(SUM(cached_tokens), 0) AS cached, " +
+		"COALESCE(SUM(cost), 0) AS cost, COALESCE(SUM(duration_ms), 0) AS duration, " +
+		"COALESCE(SUM(request_count), 0) AS req_cnt FROM usage_buckets"
+	var args []any
+	if rangeKey != "forever" {
+		since := usageBucketNow().UTC().Truncate(time.Hour).Add(-window.span)
+		sql += " WHERE bucket_at >= ?"
+		args = append(args, since)
+	} else if cutoff := usageRetentionCutoff(); !cutoff.IsZero() {
+		sql += " WHERE bucket_at >= ?"
+		args = append(args, cutoff)
+	}
+	err = gormDB.WithContext(ctx).Raw(sql, args...).Scan(&row).Error
+	if err != nil {
+		log.Warnf("aggregate usage detail by range failed: %v", err)
+		return UsageDetail{}, err
+	}
+	return UsageDetail{
+		InputTokens:     row.Input,
+		OutputTokens:    row.Output,
+		ReasoningTokens: row.Reasoning,
+		CachedTokens:    row.Cached,
+		Cost:            row.Cost,
+		DurationMs:      row.Duration,
+		RequestCount:    row.ReqCnt,
+	}, nil
+}
+
+// UsageDetail 详细指标汇总行, 供仪表盘详细指标卡片与 API 响应使用。
+type UsageDetail struct {
+	InputTokens     int64   `json:"input_tokens"`
+	OutputTokens    int64   `json:"output_tokens"`
+	ReasoningTokens int64   `json:"reasoning_tokens"`
+	CachedTokens    int64   `json:"cached_tokens"`
+	Cost            float64 `json:"cost"`
+	DurationMs      int64   `json:"duration_ms"`
+	RequestCount    int64   `json:"request_count"`
+}
+
+// UsageHeatmapPoint 热力图单点: date 为 UTC 日期(YYYY-MM-DD), tokens 为该日全部模型
+// 的 input+output 合计, cost 为该日预计消耗, count 为该日请求数。
+type UsageHeatmapPoint struct {
+	Date   string  `json:"date"`
+	Tokens int64   `json:"tokens"`
+	Cost   float64 `json:"cost"`
+	Count  int64   `json:"count"`
+}
+
+// UsageHeatmapData 返回最近 days 天的每日用量汇总, 供仪表盘 GitHub 风格热力图使用。
+// 按 UTC 日期分桶聚合, 无数据的日期输出零值点, 保证热力图日期连续。
+// days 默认 365, 上限 730(两年), 下限 7。DB 查询失败返回空切片与非 nil error;
+// 数据库未初始化返回空切片与 nil error(优雅降级)。
+func UsageHeatmapData(ctx context.Context, days int) ([]UsageHeatmapPoint, error) {
+	if days < 7 {
+		days = 7
+	}
+	if days > 730 {
+		days = 730
+	}
+	gormDB := db.GetDB()
+	if gormDB == nil {
+		return make([]UsageHeatmapPoint, 0), nil
+	}
+
+	now := usageBucketNow().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	start := today.AddDate(0, 0, -(days - 1))
+
+	// 查询窗口内的分桶, 按日期聚合
+	var rows []struct {
+		Date   string
+		Tokens int64
+		Cost   float64
+		Count  int64
+	}
+	err := gormDB.WithContext(ctx).Raw(
+		`SELECT DATE(bucket_at) AS date,
+		        COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens,
+		        COALESCE(SUM(cost), 0) AS cost,
+		        COALESCE(SUM(request_count), 0) AS count
+		 FROM usage_buckets
+		 WHERE bucket_at >= ?
+		 GROUP BY DATE(bucket_at)
+		 ORDER BY date ASC`,
+		start,
+	).Scan(&rows).Error
+	if err != nil {
+		log.Warnf("query usage heatmap failed: %v", err)
+		return make([]UsageHeatmapPoint, 0), err
+	}
+
+	// 构建日期 → 数据映射, 填充无数据日期为零值
+	byDate := make(map[string]UsageHeatmapPoint, len(rows))
+	for _, r := range rows {
+		byDate[r.Date] = UsageHeatmapPoint{
+			Date:   r.Date,
+			Tokens: r.Tokens,
+			Cost:   r.Cost,
+			Count:  r.Count,
+		}
+	}
+
+	points := make([]UsageHeatmapPoint, 0, days)
+	for i := 0; i < days; i++ {
+		d := start.AddDate(0, 0, i).Format("2006-01-02")
+		if p, ok := byDate[d]; ok {
+			points = append(points, p)
+		} else {
+			points = append(points, UsageHeatmapPoint{Date: d})
+		}
+	}
+	return points, nil
 }

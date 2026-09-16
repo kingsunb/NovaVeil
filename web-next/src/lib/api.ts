@@ -31,6 +31,8 @@ import type {
   StopAllState,
   TokenTrendPoint,
   TokenTrendRange,
+  UsageDetail,
+  UsageHeatmapPoint,
   UserStatus,
 } from "./types";
 import type {
@@ -754,6 +756,23 @@ export const api = {
       `/stats/token-trends?range=${encodeURIComponent(range)}`,
     );
     return normalizeTokenTrend(raw);
+  },
+  /** 详细指标（input/output/reasoning/cached/cost/duration）。 */
+  getUsageDetail: async (range: TokenTrendRange) => {
+    const raw = await http<unknown>(
+      `/stats/usage-detail?range=${encodeURIComponent(range)}`,
+    ) as { detail?: UsageDetail; available?: boolean };
+    return raw?.detail ?? {
+      input_tokens: 0, output_tokens: 0, reasoning_tokens: 0,
+      cached_tokens: 0, cost: 0, duration_ms: 0, request_count: 0,
+    };
+  },
+  /** 热力图数据（每日 token/cost/count 汇总）。 */
+  getUsageHeatmap: async (days = 365) => {
+    const raw = await http<unknown>(
+      `/stats/usage-heatmap?days=${days}`,
+    ) as { points?: UsageHeatmapPoint[]; available?: boolean };
+    return raw?.points ?? [];
   },
 
   // ----- 渠道 -----

@@ -15,6 +15,16 @@ type UsageBucket struct {
 	ModelName    string    `json:"model_name" gorm:"uniqueIndex:idx_usage_bucket_at_model,priority:2;size:255;not null"`
 	InputTokens  int64     `json:"input_tokens"`
 	OutputTokens int64     `json:"output_tokens"`
+	// ReasoningTokens 该桶覆盖的推理(reasoning/thinking) token 累计, 从
+	// llm.Usage.CompletionTokensDetails.ReasoningTokens 提取, 供仪表盘 Token 构成分析。
+	ReasoningTokens int64 `json:"reasoning_tokens"`
+	// CachedTokens 该桶覆盖的缓存命中 token 累计, 从
+	// llm.Usage.PromptTokensDetails.CachedTokens 提取, 供仪表盘缓存命中率分析。
+	CachedTokens int64 `json:"cached_tokens"`
+	// Cost 该桶覆盖的预计消耗(USD), 从 llm.Usage.Cost 提取, 供仪表盘成本估算。
+	Cost float64 `json:"cost"`
+	// DurationMs 该桶覆盖的请求总耗时(毫秒)累计, 供仪表盘使用时长分析。
+	DurationMs int64 `json:"duration_ms"`
 	// RequestCount 该桶覆盖的终态请求数(仅计有用量上报的请求, 与 InputTokens/OutputTokens
 	// 同次 UPSERT 累加)。供仪表盘"总请求"KPI 按时间窗口联动统计; 空模型/双零用量的请求
 	// 不落桶, 因此该计数是"有用量上报的请求数"的近似, 非 relay.TotalRequestCount 的全量口径。

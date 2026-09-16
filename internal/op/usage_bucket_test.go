@@ -46,8 +46,8 @@ func TestRecordUsageBucketAccumulates(t *testing.T) {
 	clearUsageBuckets(t)
 
 	// 同一 (小时, 模型) 桶两次终态累加成一行
-	RecordUsageBucket("gpt-4o", 100, 50)
-	RecordUsageBucket("gpt-4o", 30, 20)
+	RecordUsageBucket("gpt-4o", 100, 50, 10, 5, 0.001, 1200)
+	RecordUsageBucket("gpt-4o", 30, 20, 5, 0, 0.0005, 800)
 
 	// 相邻小时的桶独立成行
 	recordUsageAt(t, usageBucketTestNow.Add(time.Hour), "gpt-4o", 5, 5)
@@ -71,9 +71,9 @@ func TestRecordUsageBucketSkips(t *testing.T) {
 	clearUsageBuckets(t)
 
 	// 双零 / 空模型名 → 不写行
-	RecordUsageBucket("", 100, 50)
-	RecordUsageBucket("gpt-4o", 0, 0)
-	RecordUsageBucket("", 0, 0)
+	RecordUsageBucket("", 100, 50, 0, 0, 0, 0)
+	RecordUsageBucket("gpt-4o", 0, 0, 0, 0, 0, 0)
+	RecordUsageBucket("", 0, 0, 0, 0, 0, 0)
 
 	var count int64
 	if err := db.GetDB().Model(&model.UsageBucket{}).Count(&count).Error; err != nil {
@@ -175,7 +175,7 @@ func TestRecordUsageBucketClampsNegative(t *testing.T) {
 	clearUsageBuckets(t)
 
 	// 负输入 + 正常输出: 输入钳为 0, 输出正常累加, 不因负值跳到跳过条件
-	RecordUsageBucket("gpt-4o", -100, 50)
+	RecordUsageBucket("gpt-4o", -100, 50, 0, 0, 0, 0)
 
 	row := model.UsageBucket{}
 	if err := db.GetDB().Where("model_name = ?", "gpt-4o").First(&row).Error; err != nil {
@@ -228,8 +228,8 @@ func TestUsageKPIsByRange(t *testing.T) {
 	clearUsageBuckets(t)
 
 	// 当前小时两次终态累加: input=200/output=80/request_count=2(RecordUsageBucket 每次计 1)
-	RecordUsageBucket("gpt-4o", 120, 50)
-	RecordUsageBucket("gpt-4o", 80, 30)
+	RecordUsageBucket("gpt-4o", 120, 50, 0, 0, 0, 0)
+	RecordUsageBucket("gpt-4o", 80, 30, 0, 0, 0, 0)
 	// 窗口外的桶(26h 前): 不应计入 24h 窗口, 但计入 forever
 	recordUsageAt(t, usageBucketTestNow.Add(-26*time.Hour), "claude", 999, 999)
 

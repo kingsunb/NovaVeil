@@ -1,5 +1,6 @@
-# NovaVeil web-next Pre-commit Hook
-#  - 在 commit 前跑 typecheck + lint
+# NovaVeil Hooks
+#  - pre-commit: 跑 web-next typecheck + lint
+#  - pre-push: 跑 Agent Note 门禁（树结构 + 格式 + 归档封印）
 #  - 不跑 test / build / e2e（这些在 CI 跑，太慢）
 #  - 安装：pnpm dlx lefthook install
 min_version: 1.6.0
@@ -15,3 +16,10 @@ pre-commit:
       root: web-next
       glob: "web-next/src/**/*.{ts,tsx}"
       run: pnpm lint
+
+pre-push:
+  parallel: false
+  commands:
+    verify-agent-notes:
+      glob: ".agents/notes/**/*.md"
+      run: npx tsx scripts/agent-notes/verify-agent-note-tree.ts && npx tsx scripts/agent-notes/verify-agent-note-format.ts && npx tsx scripts/agent-notes/verify-archived-agent-notes.ts

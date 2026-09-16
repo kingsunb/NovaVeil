@@ -31,6 +31,7 @@ import { Select } from "@/components/ui/select";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { FormattedBody } from "@/components/ui/formatted-body";
+import { MaskMatches } from "@/components/logs/MaskMatches";
 import { cn, formatNumber, formatElapsedWithFirst, elapsedParts } from "@/lib/utils";
 import { QueryErrorBanner } from "@/components/ui/query-error";
 import { openSSE } from "@/lib/sse";
@@ -573,7 +574,7 @@ function LiveTable({
 
 function ErrorRow({ e }: { e: ErrorLog }) {
   const [open, setOpen] = useState(false);
-  const hasDetail = !!(e.err_detail || e.request_body);
+  const hasDetail = !!(e.err_detail || e.request_body || e.mask_matches?.length);
   return (
     <div className="px-4 py-2.5">
       <div
@@ -628,6 +629,9 @@ function ErrorRow({ e }: { e: ErrorLog }) {
               <FormattedBody content={e.err_detail} />
             </div>
           )}
+          {/* 触发规则：读取持久化的 mask_matches（文档 07 §3.3），
+              复用同一展示组件；无命中时不渲染。 */}
+          <MaskMatches matches={e.mask_matches} title="触发规则" />
           {!hasDetail && (
             <p className="text-[11px] text-ink-subtle">无更多详细信息</p>
           )}
@@ -850,10 +854,15 @@ function TraceSheet({
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-3">
               {leftTab === "body" ? (
-                <FormattedBody
-                  content={bodyLoading ? "" : body}
-                  loading={bodyLoading}
-                />
+                <div className="space-y-3">
+                  {/* 脱敏命中明细（文档 07 §3.3）：随 RequestState 状态流下发，
+                      无命中时不渲染；请求体仍展示占位符版本，保持不变。 */}
+                  <MaskMatches matches={req.mask_matches} />
+                  <FormattedBody
+                    content={bodyLoading ? "" : body}
+                    loading={bodyLoading}
+                  />
+                </div>
               ) : (
                 <RouteTab req={req} attempts={attempts} />
               )}

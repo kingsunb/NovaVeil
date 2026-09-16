@@ -214,7 +214,7 @@ func TestApplyRequestMaskContract(t *testing.T) {
 
 	t.Run("no match returns nil mapping", func(t *testing.T) {
 		body := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":"今天天气真好"}]}`)
-		masked, mapping, err := applyRequestMask(body, "sess-no-match", true)
+		masked, mapping, matches, err := applyRequestMask(body, "sess-no-match", true)
 		if err != nil {
 			t.Fatalf("applyRequestMask: %v", err)
 		}
@@ -224,11 +224,14 @@ func TestApplyRequestMaskContract(t *testing.T) {
 		if !bytes.Equal(masked, body) {
 			t.Errorf("无命中时请求体应原样返回, got: %s", masked)
 		}
+		if matches != nil {
+			t.Errorf("无命中时命中明细应为 nil, got: %v", matches)
+		}
 	})
 
 	t.Run("hit returns non-nil mapping", func(t *testing.T) {
 		body := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":"请检查机密项目的进度"}]}`)
-		masked, mapping, err := applyRequestMask(body, "sess-hit", true)
+		masked, mapping, matches, err := applyRequestMask(body, "sess-hit", true)
 		if err != nil {
 			t.Fatalf("applyRequestMask: %v", err)
 		}
@@ -238,6 +241,9 @@ func TestApplyRequestMaskContract(t *testing.T) {
 		if bytes.Equal(masked, body) {
 			t.Errorf("命中时请求体应被替换, 不应与原文相同")
 		}
+		if len(matches) == 0 {
+			t.Errorf("命中时命中明细应非空")
+		}
 		restored := restoreNonStream(masked, mapping)
 		if !bytes.Equal(restored, body) {
 			t.Errorf("还原后应恢复原文, got: %s", restored)
@@ -246,12 +252,15 @@ func TestApplyRequestMaskContract(t *testing.T) {
 
 	t.Run("group switch off returns nil mapping", func(t *testing.T) {
 		body := []byte(`{"content":"请检查机密项目的进度"}`)
-		_, mapping, err := applyRequestMask(body, "sess-group-off", false)
+		_, mapping, matches, err := applyRequestMask(body, "sess-group-off", false)
 		if err != nil {
 			t.Fatalf("applyRequestMask: %v", err)
 		}
 		if mapping != nil {
 			t.Errorf("分组开关关闭时映射表应为 nil")
+		}
+		if matches != nil {
+			t.Errorf("分组开关关闭时命中明细应为 nil")
 		}
 	})
 }

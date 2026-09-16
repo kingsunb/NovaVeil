@@ -495,6 +495,31 @@ describe("<ChannelsPage /> 渠道优先级行内编辑", () => {
     });
   });
 
+  it("优先级可设为 0（从非零值）", async () => {
+    const user = userEvent.setup();
+    const ch = { ...sampleChannel, id: 4, name: "sort-to-zero", sort: 7 };
+    const fetchMock = mockSortFetch([ch]);
+    render(<ChannelsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("sort-to-zero"));
+
+    const input = screen.getByLabelText("优先级 sort-to-zero") as HTMLInputElement;
+    expect(input.value).toBe("7");
+    await user.clear(input);
+    await user.type(input, "0");
+    await user.tab();
+
+    await waitFor(() => {
+      const updateCalls = fetchMock.mock.calls.filter(([url]) =>
+        String(url).includes("/channel/update"),
+      );
+      expect(updateCalls.length).toBeGreaterThanOrEqual(1);
+      const lastBody = JSON.parse(
+        updateCalls[updateCalls.length - 1][1]?.body as string,
+      ) as { sort: number };
+      expect(lastBody.sort).toBe(0);
+    });
+  });
+
   it("导入弹窗：输入文本并提交，请求体为 {text}，且不绕过弹窗", async () => {
     const user = userEvent.setup();
     const fetchMock = mockFetch({ list: [] });

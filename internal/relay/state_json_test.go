@@ -160,6 +160,63 @@ func TestRequestStateJSONOmitsEmptyProxyAddr(t *testing.T) {
 	}
 }
 
+// TestRequestStateJSONMaskMatches 验证命中明细序列化(文档 07 §3.4):
+//   - 有命中时 JSON 含正确的 label/original/placeholder;
+//   - 无命中(nil)时 mask_matches 字段因 omitempty 不出现。
+func TestRequestStateJSONMaskMatches(t *testing.T) {
+	t.Run("populated matches serialize correctly", func(t *testing.T) {
+		state := RequestState{
+			ID:        200,
+			Status:    StatusSuccess,
+			StartedAt: time.Unix(100, 0).UTC(),
+			Model:     "demo",
+			ClientIP:  "203.0.113.60",
+			Attempts:  []AttemptRecord{},
+			MaskMatches: []MaskMatch{
+				{Label: "PHONE", Original: "13800138000", Placeholder: "{{PHONE_abcd12}}"},
+				{Label: "TERM", Original: "机密项目", Placeholder: "{{TERM_ef3456}}"},
+			},
+		}
+		encoded, err := json.Marshal(state)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var got struct {
+			MaskMatches []MaskMatch `json:"mask_matches"`
+		}
+		if err := json.Unmarshal(encoded, &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(got.MaskMatches) != 2 {
+			t.Fatalf("mask_matches len = %d, want 2", len(got.MaskMatches))
+		}
+		if got.MaskMatches[0].Label != "PHONE" || got.MaskMatches[0].Original != "13800138000" || got.MaskMatches[0].Placeholder != "{{PHONE_abcd12}}" {
+			t.Fatalf("mask_matches[0] = %+v, want PHONE match", got.MaskMatches[0])
+		}
+		if got.MaskMatches[1].Label != "TERM" || got.MaskMatches[1].Original != "机密项目" || got.MaskMatches[1].Placeholder != "{{TERM_ef3456}}" {
+			t.Fatalf("mask_matches[1] = %+v, want TERM match", got.MaskMatches[1])
+		}
+	})
+
+	t.Run("nil matches omitted by omitempty", func(t *testing.T) {
+		state := RequestState{
+			ID:        201,
+			Status:    StatusSuccess,
+			StartedAt: time.Unix(100, 0).UTC(),
+			Model:     "demo",
+			ClientIP:  "203.0.113.61",
+			Attempts:  []AttemptRecord{},
+		}
+		encoded, err := json.Marshal(state)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(encoded), `"mask_matches"`) {
+			t.Fatalf("nil mask_matches 应因 omitempty 不出现在 JSON 中: %s", encoded)
+		}
+	})
+}
+
 // TestAttemptRecordJSONIncludesFirstTokenMS 验证 AttemptRecord 序列化包含 first_token_ms 字段。
 func TestAttemptRecordJSONIncludesFirstTokenMS(t *testing.T) {
 	attempt := AttemptRecord{

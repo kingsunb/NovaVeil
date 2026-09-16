@@ -2,6 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  loadChannelsPage,
+  loadChatPage,
+  loadCustomModelsPage,
+  loadDashboardPage,
+  loadGroupsPage,
+  loadKeysPage,
+  loadLogsPage,
+  loadMaskPage,
+  loadModelEvalPage,
+  loadSettingsPage,
+} from "@/lib/route-loaders";
 
 /**
  * ⌘K 命令面板 —— DESIGN.md §3
@@ -21,18 +33,20 @@ export function CommandPalette({
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const items = useMemo<{ label: string; hint: string; run: () => void }[]>(
+  const items = useMemo<
+    { label: string; hint: string; run: () => void; load?: () => Promise<unknown> }[]
+  >(
     () => [
-      { label: "前往 总览", hint: "导航", run: () => navigate("/dashboard") },
-      { label: "前往 渠道", hint: "导航", run: () => navigate("/channels") },
-      { label: "前往 自定义模型", hint: "导航", run: () => navigate("/custom-models") },
-      { label: "前往 分组", hint: "导航", run: () => navigate("/groups") },
-      { label: "前往 模型评估", hint: "导航", run: () => navigate("/model-eval") },
-      { label: "前往 脱敏", hint: "导航", run: () => navigate("/mask") },
-      { label: "前往 对话", hint: "导航", run: () => navigate("/chat") },
-      { label: "前往 API 密钥", hint: "导航", run: () => navigate("/keys") },
-      { label: "前往 日志", hint: "导航", run: () => navigate("/logs") },
-      { label: "前往 设置", hint: "导航", run: () => navigate("/settings") },
+      { label: "前往 总览", hint: "导航", run: () => navigate("/dashboard"), load: loadDashboardPage },
+      { label: "前往 渠道", hint: "导航", run: () => navigate("/channels"), load: loadChannelsPage },
+      { label: "前往 自定义模型", hint: "导航", run: () => navigate("/custom-models"), load: loadCustomModelsPage },
+      { label: "前往 分组", hint: "导航", run: () => navigate("/groups"), load: loadGroupsPage },
+      { label: "前往 模型评估", hint: "导航", run: () => navigate("/model-eval"), load: loadModelEvalPage },
+      { label: "前往 脱敏", hint: "导航", run: () => navigate("/mask"), load: loadMaskPage },
+      { label: "前往 对话", hint: "导航", run: () => navigate("/chat"), load: loadChatPage },
+      { label: "前往 API 密钥", hint: "导航", run: () => navigate("/keys"), load: loadKeysPage },
+      { label: "前往 日志", hint: "导航", run: () => navigate("/logs"), load: loadLogsPage },
+      { label: "前往 设置", hint: "导航", run: () => navigate("/settings"), load: loadSettingsPage },
     ],
     [navigate],
   );
@@ -50,6 +64,14 @@ export function CommandPalette({
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [open]);
+
+  // 键盘选中项变化时预加载对应 chunk（§3.3）：覆盖 ↑↓ 导航的键盘用户，
+  // 与列表项 onMouseEnter 的鼠标预加载互补。loader 幂等，重复调用只请求一次。
+  useEffect(() => {
+    if (!open) return;
+    const item = filtered[sel];
+    if (item?.load) void item.load();
+  }, [open, filtered, sel]);
 
   useEffect(() => {
     if (!open) return;
@@ -115,7 +137,11 @@ export function CommandPalette({
           {filtered.map((it, i) => (
             <button
               key={it.label}
-              onMouseEnter={() => setSel(i)}
+              onMouseEnter={() => {
+                setSel(i);
+                // 鼠标悬停列表项时预加载对应 chunk（§3.3），与键盘选中项的预加载互补
+                if (it.load) void it.load();
+              }}
               onClick={() => {
                 onClose();
                 it.run();
