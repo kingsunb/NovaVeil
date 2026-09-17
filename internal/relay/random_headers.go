@@ -1,11 +1,12 @@
 package relay
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -14,10 +15,70 @@ import (
 // opencodeSessionHeader opencode 兼容请求头的固定头名。
 const opencodeSessionHeader = "x-opencode-session"
 
-// sessionUUIDEntry 一个会话(按 Key/渠道命名空间)的随机头 UUID 映射记录, 到期前同一
-// (会话, 渠道, Key) 复用同一 UUID。ExpireAtUnixMilli 在命中时滑动续期, 活跃会话不会过期。
+// opencodeIDCharset opencode ID 随机后缀使用的字符集: [0-9A-Za-z], 共 62 个字符。
+// 与 opencode 二进制中的字符表完全一致。
+const opencodeIDCharset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+// opencodeIDCounter 与 opencodeIDTimestamp 实现 opencode 的 ID 计数器:
+// 同一毫秒内多次生成时计数器递增, 跨毫秒时重置为 0。与 opencode 的 tU() 函数行为一致。
+var opencodeIDCounter atomic.Int64
+var opencodeIDTimestamp atomic.Int64
+
+// generateOpencodeSessionID 使用 opencode 的 ID 生成算法生成会话 ID:
+//   - 前缀 "ses_"
+//   - 12 个十六进制字符: 由 ~(timestamp_ms * 4096 + counter) 的高 6 字节(大端)编码
+//   - 14 个随机字符: 从 [0-9A-Za-z] 中选取
+//
+// opencode.ai/zen 上游会验证 x-opencode-session 的值格式, 非 opencode 格式的值
+// (如随机 UUID)会被拒绝并返回 "FreeTierError: OpenCode's free tier can only be
+// used from within OpenCode"。算法逆向自 opencode 二进制中的 tU(!0) 函数。
+func generateOpencodeSessionID() string {
+	now := time.Now().UnixMilli()
+
+	// 计数器管理: 时间戳变更时重置, 每次调用递增。与 opencode 的 tU() 行为一致。
+	stamp := opencodeIDTimestamp.Load()
+	if stamp != now {
+		if opencodeIDTimestamp.CompareAndSwap(stamp, now) {
+			opencodeIDCounter.Store(0)
+		}
+	}
+	counter := opencodeIDCounter.Add(1)
+
+	// val = timestamp_ms * 4096 + counter, 与 opencode 的 BigInt(Y)*0x1000n+BigInt(cU) 一致。
+	val := now*0x1000 + counter
+
+	// 会话 ID 使用按位取反(^), 与 opencode 的 tU(true) → ~$ 一致。
+	// Go 的 int64 对负数的 >> 做算术右移(符号扩展), 与 JS BigInt 行为一致。
+	inverted := ^val
+
+	// 提取高 6 字节(大端序) → 12 个十六进制字符。
+	buf := make([]byte, 6)
+	for i := 0; i < 6; i++ {
+		buf[i] = byte((inverted >> uint(40-8*i)) & 0xff)
+	}
+	hexPart := hex.EncodeToString(buf)
+
+	// 生成 14 个随机字符, 从 [0-9A-Za-z] 中选取。
+	randBuf := make([]byte, 14)
+	if _, err := rand.Read(randBuf); err != nil {
+		// crypto/rand 失败时的降级: 用时间戳填充, 极低概率发生。
+		ts := time.Now().UnixNano()
+		for i := range randBuf {
+			randBuf[i] = byte(ts >> uint((i*8)%64))
+		}
+	}
+	randPart := make([]byte, 14)
+	for i, b := range randBuf {
+		randPart[i] = opencodeIDCharset[b%62]
+	}
+
+	return "ses_" + hexPart + string(randPart)
+}
+
+// sessionUUIDEntry 一个会话(按 Key/渠道命名空间)的随机头会话 ID 映射记录, 到期前同一
+// (会话, 渠道, Key) 复用同一 ID。ExpireAtUnixMilli 在命中时滑动续期, 活跃会话不会过期。
 type sessionUUIDEntry struct {
-	UUID              string // 会话级稳定的 RFC 4122 裸 UUID(不带前缀)。
+	UUID              string // 会话级稳定的 opencode 格式会话 ID(格式: ses_<12 hex><14 random>)。
 	ExpireAtUnixMilli int64  // 过期 Unix 毫秒时间, 到期即重新随机; 命中时刷新。
 }
 
@@ -50,16 +111,16 @@ var sessionUUIDLastPrune atomic.Int64
 // sessionUUIDPruneInterval 两次顺带全量清理之间的最小间隔, 与粘合表 prune 节流对齐。
 const sessionUUIDPruneInterval = int64(60 * time.Second / time.Millisecond)
 
-// sessionUUIDFor 返回 (会话标识, 渠道, Key) 对应的稳定 RFC 4122 裸 UUID:
+// sessionUUIDFor 返回 (会话标识, 渠道, Key) 对应的稳定 opencode 格式会话 ID:
 //   - 命中未过期条目时滑动续期 TTL 并返回缓存值(活跃会话不会过期);
-//   - 未命中则生成新 UUID 并缓存, 顺带按间隔清理过期残留并在超容量时淘汰最旧条目;
-//   - sessionKey 为空时每次生成新 UUID 且不缓存(降级为每请求独立值, 由请求级 scope 保证同请求复用)。
+//   - 未命中则生成新 opencode 会话 ID 并缓存, 顺带按间隔清理过期残留并在超容量时淘汰最旧条目;
+//   - sessionKey 为空时每次生成新 ID 且不缓存(降级为每请求独立值, 由请求级 scope 保证同请求复用)。
 //
 // channelID 与 keyID 共同构成命名空间: 不同渠道/Key 的同一会话标识互不冲突,
-// 避免指向不同上游的随机头值互相覆盖。keyID 为空串表示单 Key 渠道。
+// 避免指向不同上游的会话 ID 互相覆盖。keyID 为空串表示单 Key 渠道。
 func sessionUUIDFor(sessionKey string, channelID int, keyID string) string {
 	if sessionKey == "" {
-		return uuid.NewString()
+		return generateOpencodeSessionID()
 	}
 	cacheKey := sessionUUIDCacheKey{sessionKey: sessionKey, channelID: channelID, keyID: keyID}
 	now := time.Now().UnixMilli()
@@ -86,7 +147,7 @@ func sessionUUIDFor(sessionKey string, channelID int, keyID string) string {
 		return entry.UUID
 	}
 
-	value := uuid.NewString()
+	value := generateOpencodeSessionID()
 	sessionUUIDs.Lock()
 	defer sessionUUIDs.Unlock()
 	// 双检: 写入前再次检查, 避免并发请求为同一命名空间 mint 出两个不同 UUID。
@@ -164,9 +225,9 @@ func injectRandomHeaders(channel model.Channel, randomValue string, request *htt
 	}
 }
 
-// resolveRequestRandomValue 在请求级一次性解析本请求所有随机头应使用的稳定 UUID:
+// resolveRequestRandomValue 在请求级一次性解析本请求所有随机头应使用的稳定会话 ID:
 // 同一请求的所有头与所有重试复用同一值, 不在每次重试或每个头各调用一次。
-// sessionKey 为空时生成请求级独立 UUID(不进缓存); 非空时按 (sessionKey, 渠道, Key) 命名空间
+// sessionKey 为空时生成请求级独立 ID(不进缓存); 非空时按 (sessionKey, 渠道, Key) 命名空间
 // 复用缓存值, 保证同一会话在同一渠道/Key 下的跨请求稳定性。
 // channelID 与 keyID 取本请求首次发起上游时所选渠道与 Key, 命名空间隔离不同上游的会话。
 func resolveRequestRandomValue(sessionKey string, channelID int, keyID string) string {
