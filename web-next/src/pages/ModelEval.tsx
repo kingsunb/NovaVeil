@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { EVAL_PROMPT, type EvalTarget } from "@/lib/model-eval";
 import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/ui/empty-state";
+import { Card } from "@/components/ui/card";
 import { PageToolbar } from "@/components/ui/page-toolbar";
 import { QueryErrorBanner } from "@/components/ui/query-error";
 import { SegmentedControl } from "@/components/ui/segmented-control";
@@ -19,6 +19,13 @@ import { EvalRanking } from "@/components/model-eval/EvalRanking";
 import { EvalSelection } from "@/components/model-eval/EvalSelection";
 
 type EvalView = "current" | "ranking" | "queue" | "history";
+
+/** 「当前评估」视图右侧的工作流引导，三步说明与队列/排序视图形成递进。 */
+const FLOW_STEPS = [
+  { title: "选择模型", hint: "左侧按渠道展开，勾选一个或多个模型" },
+  { title: "入队执行", hint: "点「开始评估」，任务按顺序自动执行并保存" },
+  { title: "回看排序", hint: "到「评估历史」回看与重测，「评估排序」对比质量" },
+] as const;
 
 export default function ModelEvalPage() {
   const qc = useQueryClient();
@@ -150,24 +157,39 @@ export default function ModelEvalPage() {
       ) : view === "queue" ? (
         <EvalQueue busy={busy} />
       ) : (
-        <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[19rem_minmax(0,1fr)]">
-          <div className="min-w-0 space-y-3 xl:sticky xl:top-0">
+        <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
+          <div className="min-w-0 xl:sticky xl:top-0">
             {channelsQuery.isLoading ? <Skeleton className="h-80 w-full" /> : (
               <EvalSelection key={channelId} targets={scopeTargets} selectedIds={selectedIds} onSelectionChange={setSelectedIds} disabled={busy || channelsQuery.isError} onRun={() => enqueueMut.mutate(selectedTargets.map((t) => t.channelModelId))} onHistory={showHistory} />
             )}
-            <details className="rounded-lg border border-border/50 px-4 py-3 text-xs text-ink-muted">
-              <summary className="cursor-pointer font-medium">本次评估题目</summary>
-              <p className="mt-2 whitespace-pre-wrap break-words leading-relaxed">{EVAL_PROMPT}</p>
-            </details>
           </div>
-          <div className="min-w-0 space-y-3">
-            <EmptyState
-              icon={<ListOrdered className="h-5 w-5" />}
-              title="选择模型开始评估"
-              hint="点击左侧「开始评估」将所选模型加入评估队列，任务按顺序自动执行，所有结果保存到历史，格式合规的成功结果自动加入排序。"
-              action={<Button type="button" variant="ghost" size="sm" onClick={() => changeView("queue")}><ListOrdered className="h-3.5 w-3.5" aria-hidden />查看评估队列</Button>}
-            />
-          </div>
+          <Card className="min-w-0 overflow-hidden">
+            <div className="flex items-center gap-2 border-b border-border/50 p-4">
+              <FlaskConical className="h-4 w-4 shrink-0 text-ink-muted" aria-hidden />
+              <h2 className="text-sm font-semibold text-ink">评估说明</h2>
+            </div>
+            <div className="p-4 sm:p-5">
+              <h3 className="text-xs font-semibold tracking-tight text-ink">本次评估题目</h3>
+              <p className="mt-2 max-w-2xl whitespace-pre-wrap break-words rounded-lg bg-ink/[0.03] p-3 text-[13px] leading-relaxed text-ink-muted">{EVAL_PROMPT}</p>
+              <ol className="mt-5 grid gap-3 sm:grid-cols-3">
+                {FLOW_STEPS.map((step, index) => (
+                  <li key={step.title} className="rounded-lg border border-border/50 bg-ink/[0.02] p-3">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/[0.1] text-[11px] font-semibold tabular-nums text-primary-text" aria-hidden>{index + 1}</span>
+                      <span className="text-[13px] font-medium text-ink">{step.title}</span>
+                    </div>
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-ink-subtle">{step.hint}</p>
+                  </li>
+                ))}
+              </ol>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/50 p-4">
+              <p className="min-w-0 text-[11px] leading-relaxed text-ink-subtle">格式合规的成功结果会自动进入排序，其余结果保留在历史，便于重测与排查。</p>
+              <Button type="button" variant="secondary" size="sm" onClick={() => changeView("queue")}>
+                <ListOrdered className="h-3.5 w-3.5" aria-hidden />查看评估队列
+              </Button>
+            </div>
+          </Card>
         </div>
       )}
 
