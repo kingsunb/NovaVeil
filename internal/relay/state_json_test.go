@@ -161,7 +161,7 @@ func TestRequestStateJSONOmitsEmptyProxyAddr(t *testing.T) {
 }
 
 // TestRequestStateJSONMaskMatches 验证命中明细序列化(文档 07 §3.4):
-//   - 有命中时 JSON 含正确的 label/placeholder(实施边界修订: 不含 original);
+//   - 有命中时 JSON 含正确的 label/original/placeholder(决策变更: 已批准下发原文);
 //   - 无命中(nil)时 mask_matches 字段因 omitempty 不出现。
 func TestRequestStateJSONMaskMatches(t *testing.T) {
 	t.Run("populated matches serialize correctly", func(t *testing.T) {
@@ -173,8 +173,8 @@ func TestRequestStateJSONMaskMatches(t *testing.T) {
 			ClientIP:  "203.0.113.60",
 			Attempts:  []AttemptRecord{},
 			MaskMatches: []MaskMatch{
-				{Label: "PHONE", Placeholder: "{{PHONE_abcd12}}"},
-				{Label: "TERM", Placeholder: "{{TERM_ef3456}}"},
+				{Label: "PHONE", Original: "13800138000", Placeholder: "{{PHONE_abcd12}}"},
+				{Label: "TERM", Original: "内部代号A", Placeholder: "{{TERM_ef3456}}"},
 			},
 		}
 		encoded, err := json.Marshal(state)
@@ -190,15 +190,15 @@ func TestRequestStateJSONMaskMatches(t *testing.T) {
 		if len(got.MaskMatches) != 2 {
 			t.Fatalf("mask_matches len = %d, want 2", len(got.MaskMatches))
 		}
-		if got.MaskMatches[0].Label != "PHONE" || got.MaskMatches[0].Placeholder != "{{PHONE_abcd12}}" {
+		if got.MaskMatches[0].Label != "PHONE" || got.MaskMatches[0].Original != "13800138000" || got.MaskMatches[0].Placeholder != "{{PHONE_abcd12}}" {
 			t.Fatalf("mask_matches[0] = %+v, want PHONE match", got.MaskMatches[0])
 		}
-		if got.MaskMatches[1].Label != "TERM" || got.MaskMatches[1].Placeholder != "{{TERM_ef3456}}" {
+		if got.MaskMatches[1].Label != "TERM" || got.MaskMatches[1].Original != "内部代号A" || got.MaskMatches[1].Placeholder != "{{TERM_ef3456}}" {
 			t.Fatalf("mask_matches[1] = %+v, want TERM match", got.MaskMatches[1])
 		}
-		// 实施边界修订: 日志命中明细 JSON 不得包含 original 字段(后端数据最小化)。
-		if strings.Contains(string(encoded), `"original"`) {
-			t.Fatalf("mask_matches JSON 不应包含 original: %s", encoded)
+		// 决策变更(文档 07): 已批准下发原文, JSON 必须包含 original 字段。
+		if !strings.Contains(string(encoded), `"original"`) {
+			t.Fatalf("mask_matches JSON 应包含 original: %s", encoded)
 		}
 	})
 
@@ -217,6 +217,50 @@ func TestRequestStateJSONMaskMatches(t *testing.T) {
 		}
 		if strings.Contains(string(encoded), `"mask_matches"`) {
 			t.Fatalf("nil mask_matches 应因 omitempty 不出现在 JSON 中: %s", encoded)
+		}
+	})
+}
+
+// TestRequestStateJSONMaskMatchesTruncated 验证截断标记序列化(文档 07 §3.1 第 5 点):
+//   - MaskMatchesTruncated=true 时 JSON 含 "mask_matches_truncated":true;
+//   - 缺省(false)时因 omitempty 不出现。
+func TestRequestStateJSONMaskMatchesTruncated(t *testing.T) {
+	t.Run("truncated true emits mask_matches_truncated", func(t *testing.T) {
+		state := RequestState{
+			ID:                   300,
+			Status:               StatusSuccess,
+			StartedAt:            time.Unix(100, 0).UTC(),
+			Model:                "demo",
+			ClientIP:             "203.0.113.70",
+			Attempts:             []AttemptRecord{},
+			MaskMatches:          []MaskMatch{{Label: "PHONE", Original: "13800138000", Placeholder: "{{PHONE_x}}"}},
+			MaskMatchesTruncated: true,
+		}
+		encoded, err := json.Marshal(state)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !strings.Contains(string(encoded), `"mask_matches_truncated":true`) {
+			t.Fatalf("truncated=true 时 JSON 应含 mask_matches_truncated:true: %s", encoded)
+		}
+	})
+
+	t.Run("truncated false omitted by omitempty", func(t *testing.T) {
+		state := RequestState{
+			ID:          301,
+			Status:      StatusSuccess,
+			StartedAt:   time.Unix(100, 0).UTC(),
+			Model:       "demo",
+			ClientIP:    "203.0.113.71",
+			Attempts:    []AttemptRecord{},
+			MaskMatches: []MaskMatch{{Label: "PHONE", Original: "13800138000", Placeholder: "{{PHONE_x}}"}},
+		}
+		encoded, err := json.Marshal(state)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(encoded), `mask_matches_truncated`) {
+			t.Fatalf("truncated=false 时 mask_matches_truncated 应因 omitempty 缺席: %s", encoded)
 		}
 	})
 }

@@ -127,9 +127,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				streamRestorer = mask.NewStreamRestorer(maskMapping)
 				request.Masked = true
 			}
-			// 用脱敏后的请求体替换状态中的原始明文, 同时记录命中明细并发布状态,
+			// 用脱敏后的请求体替换状态中的原始明文, 同时记录裁剪后的命中明细与截断标记并发布状态,
 			// 使日志/审计/对话留存只记录脱敏后内容, 日志详情实时收到命中信息(文档 07 §3.1)。
-			request.applyMaskResult(string(masked), toMaskMatches(matches))
+			trimmed, truncated := truncateMaskMatches(matches)
+			request.applyMaskResult(string(masked), trimmed, truncated)
 		}
 		// 有会话键的映射跨请求保留(多轮同一占位符), 由 SessionStore TTL 回收;
 		// 无会话键时 Apply 使用请求级 Mapping, 不入表, 请求结束即释放。

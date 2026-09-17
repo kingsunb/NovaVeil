@@ -536,12 +536,16 @@ export interface RequestState {
   sending: boolean;
   attempts?: AttemptRecord[];
   /**
-   * 本次请求脱敏命中的规则明细（文档 07）：仅在脱敏发生时由状态流下发。
-   * 实施边界修订: 日志命中明细只含 label + placeholder 安全摘要, 不下发 original
-   * (查看日志原文不是已批准能力); 与预览接口 MaskTestMatch 类型分离。
-   * 旧版本进程 / 开关关闭时缺省或为空数组，前端按可选处理，无命中时不渲染。
-   */
+ * 本次请求脱敏命中的规则明细（文档 07）：仅在脱敏发生时由状态流下发。
+ * 决策变更: 已批准下发并展示命中原文 original（连同 label / placeholder）。
+ * 旧版本进程 / 开关关闭时缺省或为空数组，前端按可选处理，无命中时不渲染。
+ */
   mask_matches?: MaskMatchSummary[];
+  /**
+   * true=命中明细因条数/字节上限被裁剪，前端据此在命中区提示「仅展示部分命中」。
+   * 仅在 mask_matches 非空且确实被裁剪时下发（omitempty）；旧版本/未裁剪时缺省。
+   */
+  mask_matches_truncated?: boolean;
 }
 
 export interface FailureSummary {
@@ -578,7 +582,7 @@ export interface ErrorLog {
   err_detail?: string;
   /**
    * 持久化错误日志携带的脱敏命中明细（文档 07 §3.2）：
-   * 实施边界修订: 只含 label + placeholder, 不持久化 original。
+   * 决策变更: 已批准持久化并展示命中原文 original（连同 label / placeholder）。
    * 仅在保留完整请求体的条目上附带，旧记录该字段缺省/空数组，天然兼容。
    */
   mask_matches?: MaskMatchSummary[];
@@ -689,10 +693,12 @@ export interface MaskTestMatch {
   placeholder: string;
 }
 
-/** 日志命中明细安全摘要（文档 07）：只含规则标签 + 占位符, 不含 original。
- * 与 MaskTestMatch 分离: 预览接口可展示原文, 日志命中明细首期不下发/不持久化/不展示原文。 */
+/** 日志命中明细（文档 07）：规则标签 + 命中原文 + 占位符。
+ * 决策变更: 已批准在日志命中明细中下发并展示原文 original, 供管理员
+ * 在日志详情定位被脱敏的原文; 与预览接口 MaskTestMatch 同含 original。 */
 export interface MaskMatchSummary {
   label: string;
+  original: string;
   placeholder: string;
 }
 

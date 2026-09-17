@@ -53,20 +53,53 @@ func applyRequestMask(body []byte, sessionKey string, groupMaskEnabled bool) ([]
 	return masked, res.Mapping, res.Matches, nil
 }
 
-// toMaskMatches 把引擎命中明细转换为状态流的命中明细形状。
-// 空输入返回 nil, 使 RequestState.MaskMatches 在无命中时不进 JSON(omitempty)。
+// 命中明细裁剪上限(文档 07 §3.1 第 5 点硬约束, design §2.3.1)。
+// 命中原文是被批准下发的敏感片段, 但必须约束为有界摘要, 避免超大请求体导致
+// 命中明细(含原文)随 SSE/落库扩散失控。这些常量作为 relay 层唯一上限来源,
+// op 层(错误日志)另有等价常量做 defense-in-depth, 两处数值必须同步。
+const (
+	maxMaskMatchesPerRequest     = 128       // 单请求命中明细条数上限, 约束 SSE 载荷与 DOM 节点数。
+	maxMaskMatchLabelBytes       = 32        // 单条 label 字节上限(safeLabel 已截 12, 32 宽裕)。
+	maxMaskMatchOriginalBytes    = 256       // 单条命中原文字节上限, 足够定位 MAC/USCC/PHONE/EMAIL/密钥片段, 避免整段密文泄漏。
+	maxMaskMatchPlaceholderBytes = 64        // 单条占位符字节上限。
+	maxMaskMatchesTotalBytes     = 32 * 1024 // 命中明细总字节硬上限。
+)
+
+// truncateMaskMatches 把引擎命中明细按条数/字节上限裁剪为状态流的命中明细形状,
+// 返回裁剪后的 []MaskMatch 与是否发生截断的布尔标记(文档 07 §3.1 第 5 点、design §2.1.3)。
 //
-// 实施边界修订(文档 07): 只透传 label + placeholder, 不透传 original(命中原文)。
-// 日志命中明细首期不下发原文, 后端数据最小化。
-func toMaskMatches(matches []mask.Match) []MaskMatch {
+// 决策变更(文档 07): 已批准下发命中原文 original, 连同 label + placeholder 一并透传，
+// 但仅透传裁剪后的有界摘要, 超限仅裁剪展示、不改变实际脱敏与还原。
+//
+// 行为契约:
+//   - 空输入返回 (nil, false), 使 RequestState.MaskMatches 在无命中时不进 JSON(omitempty);
+//   - 按引擎返回顺序保序遍历; 对每条 label/original/placeholder 分别按 UTF-8 边界截到各自上限;
+//   - 累计条数或总字节任一超过上限即停止追加后续并置 truncated=true;
+//   - 只读引擎结果, 不触碰 res.Mapping / masked / StreamRestorer, 与「实际替换/还原」解耦。
+func truncateMaskMatches(matches []mask.Match) ([]MaskMatch, bool) {
 	if len(matches) == 0 {
-		return nil
+		return nil, false
 	}
-	result := make([]MaskMatch, len(matches))
-	for i, m := range matches {
-		result[i] = MaskMatch{Label: m.Label, Placeholder: m.Placeholder}
+	result := make([]MaskMatch, 0, min(len(matches), maxMaskMatchesPerRequest))
+	total := 0
+	truncated := false
+	for _, m := range matches {
+		if len(result) >= maxMaskMatchesPerRequest {
+			truncated = true
+			break
+		}
+		label := truncateUTF8Bytes(m.Label, maxMaskMatchLabelBytes)
+		original := truncateUTF8Bytes(m.Original, maxMaskMatchOriginalBytes)
+		placeholder := truncateUTF8Bytes(m.Placeholder, maxMaskMatchPlaceholderBytes)
+		itemBytes := len(label) + len(original) + len(placeholder)
+		if total+itemBytes > maxMaskMatchesTotalBytes {
+			truncated = true
+			break
+		}
+		result = append(result, MaskMatch{Label: label, Original: original, Placeholder: placeholder})
+		total += itemBytes
 	}
-	return result
+	return result, truncated
 }
 
 // restoreNonStream 对非流式响应体执行占位符还原。

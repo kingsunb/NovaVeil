@@ -120,6 +120,7 @@ func truncateErrorLogForEnqueue(entry model.ErrorLog) model.ErrorLog {
 	entry.ErrBrief = truncateUTF8Bytes(entry.ErrBrief, errBriefMaxBytes)
 	entry.ErrDetail = truncateUTF8Bytes(entry.ErrDetail, model.MaxErrDetailBytes)
 	entry.RequestBody = truncateRequestBodyJSON(entry.RequestBody, model.MaxRequestBodyLogBytes)
+	entry.MaskMatches = normalizeMaskMatches(entry.MaskMatches)
 	return entry
 }
 
@@ -357,6 +358,7 @@ func sanitizeErrorLog(entry model.ErrorLog) model.ErrorLog {
 	entry.ErrBrief = truncateErrorBrief(redactSensitiveText(entry.ErrBrief))
 	entry.ErrDetail = truncateErrorDetail(redactSensitiveText(entry.ErrDetail))
 	entry.RequestBody = truncateRequestBodyJSON(redactRequestBody(entry.RequestBody), model.MaxRequestBodyLogBytes)
+	entry.MaskMatches = normalizeMaskMatches(entry.MaskMatches)
 	return entry
 }
 

@@ -855,9 +855,6 @@ function TraceSheet({
             <div className="min-h-0 flex-1 overflow-auto p-3">
               {leftTab === "body" ? (
                 <div className="space-y-3">
-                  {/* 脱敏命中明细（文档 07 §3.3）：随 RequestState 状态流下发，
-                      无命中时不渲染；请求体仍展示占位符版本，保持不变。 */}
-                  <MaskMatches matches={req.mask_matches} />
                   <FormattedBody
                     content={bodyLoading ? "" : body}
                     loading={bodyLoading}
@@ -869,8 +866,14 @@ function TraceSheet({
             </div>
           </div>
 
-          {/* 右列：时间线 + 响应/错误 */}
+          {/* 右列：脱敏命中 + 时间线 + 响应/错误 */}
           <div className="flex min-h-0 flex-col gap-3">
+            {/* 脱敏命中明细（文档 07 §3.3）：随 RequestState 状态流下发，
+                仅命中时渲染；展示规则标签、命中原文与占位符；截断时提示。 */}
+            <MaskMatches
+              matches={req.mask_matches}
+              truncated={req.mask_matches_truncated}
+            />
             {/* 时间线面板 */}
             {attempts.length > 0 && (
               <div

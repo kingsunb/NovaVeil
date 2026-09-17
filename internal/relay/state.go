@@ -60,14 +60,14 @@ const (
 	AttemptCanceled AttemptOutcome = "canceled" // 客户端取消或人工中止, 不计为渠道故障。
 )
 
-// MaskMatch 命中明细的单条记录, 供日志详情展示"哪个占位符来自哪条规则"。
+// MaskMatch 命中明细的单条记录, 供日志详情展示"哪个占位符来自哪条规则及其命中原文"。
 //
-// 实施边界修订(文档 07): 日志命中明细首期只展示规则标签 + 占位符安全摘要,
-// 不下发/不持久化/不展示命中原文 original。查看日志原文不是已批准能力, 需另行
-// 安全决策; 后端数据最小化, 不能靠管理员鉴权或 CSS 模糊代替。
-// 预览接口(mask test)的 maskTestMatch 仍保留 original, 两者类型分离。
+// 决策变更(文档 07): 已批准在日志命中明细中下发并展示命中原文 original,
+// 供管理员在日志详情定位被脱敏的原文。该字段随状态流 SSE 下发到所有订阅者,
+// 可见性边界与日志详情/错误日志原有管理员可见性一致。
 type MaskMatch struct {
 	Label       string `json:"label"`       // 规则标签, 如 PHONE / EMAIL / SECRET / TERM
+	Original    string `json:"original"`    // 命中原文(被脱敏前的敏感片段)
 	Placeholder string `json:"placeholder"` // 替换占位符, 如 {{PHONE_bcdfgh}}
 }
 
@@ -98,6 +98,8 @@ type RequestState struct {
 	ProxyAddr     string          `json:"proxy_addr,omitempty"`     // 最新一轮使用的渠道代理完整地址(密码打码, 含 {account} 解析出的别名); 未走渠道代理为空。
 	Masked        bool            `json:"masked,omitempty"`         // 本次请求是否执行了脱敏(请求体占位符替换), 面板据此展示脱敏标记。
 	MaskMatches   []MaskMatch     `json:"mask_matches,omitempty"`   // 脱敏命中明细, 仅在脱敏发生时有值; 旧版本/开关关闭/未命中时为空, 前端据此决定是否渲染命中区(文档 07 §3.1)。
+	// MaskMatchesTruncated 命中明细是否因条数/字节上限被裁剪, true 表示当前为摘要而非全量(文档 07 §3.1 第 5 点、design §2.1.3)。
+	MaskMatchesTruncated bool      `json:"mask_matches_truncated,omitempty"`
 	Sending       bool            `json:"sending"`                  // 最新一轮是否仍在等待上游响应。
 	Error         string          `json:"error,omitempty"`          // 最新一轮的失败原因, 请求结束后即为最终错误。
 	Class         ErrClass        `json:"class,omitempty"`          // 终态错误分类, 请求结束后写入。
@@ -178,11 +180,14 @@ func newRequestState(model, body, clientIP, apiKeyRaw, keyName string) *RequestS
 
 // applyMaskResult 用脱敏后的请求体替换状态中的原始明文, 同时记录命中明细并发布一次
 // 请求状态, 使已打开的日志详情实时收到命中信息(文档 07 §3.1)。
+// truncated 为命中明细是否因条数/字节上限被裁剪的标记(来自 truncateMaskMatches),
+// 与 matches 一并写入, 供前端在截断时提示「仅展示部分命中」。
 // 命中明细只属于当前请求这一次 Apply 的结果; 不把原始请求体写回 body(凭据安全红线, 文档 04 §五)。
-func (r *RequestState) applyMaskResult(masked string, matches []MaskMatch) {
+func (r *RequestState) applyMaskResult(masked string, matches []MaskMatch, truncated bool) {
 	mu.Lock()
 	r.body = masked
 	r.MaskMatches = matches
+	r.MaskMatchesTruncated = truncated
 	publishRequestLocked(r)
 	mu.Unlock()
 }
@@ -229,6 +234,7 @@ func (r RequestState) MarshalJSON() ([]byte, error) {
 		ProxyAddr      string          `json:"proxy_addr,omitempty"`
 		Masked         bool            `json:"masked,omitempty"`
 		MaskMatches    []MaskMatch     `json:"mask_matches,omitempty"`
+		MaskMatchesTruncated bool      `json:"mask_matches_truncated,omitempty"`
 		Sending        bool            `json:"sending"`
 		Error          string          `json:"error,omitempty"`
 		Class          ErrClass        `json:"class,omitempty"`
@@ -249,7 +255,7 @@ func (r RequestState) MarshalJSON() ([]byte, error) {
 		TargetChannel: r.TargetChannel, TargetModel: r.TargetModel, KeyLabel: r.KeyLabel,
 		ThinkingLevel: r.ThinkingLevel, ClientFormat: r.ClientFormat, UpstreamType: r.UpstreamType,
 		RelayMode: r.RelayMode, ProxyAddr: r.ProxyAddr, Masked: r.Masked,
-		MaskMatches: r.MaskMatches,
+		MaskMatches: r.MaskMatches, MaskMatchesTruncated: r.MaskMatchesTruncated,
 		Sending: r.Sending, Error: r.Error, Class: r.Class, Attempts: attempts,
 	})
 }
@@ -903,6 +909,9 @@ func publishRequestLocked(request *RequestState) {
 	if len(request.Attempts) > 0 {
 		outgoing.Attempts = slices.Clone(request.Attempts)
 	}
+	if len(request.MaskMatches) > 0 {
+		outgoing.MaskMatches = slices.Clone(request.MaskMatches)
+	}
 	for stream := range watchers {
 		select {
 		case stream <- outgoing:
@@ -928,6 +937,9 @@ func OpenRequestStream() ([]RequestState, chan RequestState) {
 		entry.responseBody = ""
 		if len(request.Attempts) > 0 {
 			entry.Attempts = slices.Clone(request.Attempts)
+		}
+		if len(request.MaskMatches) > 0 {
+			entry.MaskMatches = slices.Clone(request.MaskMatches)
 		}
 		snapshot = append(snapshot, entry)
 	}

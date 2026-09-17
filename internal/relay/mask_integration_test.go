@@ -2,7 +2,9 @@ package relay
 
 import (
 	"bytes"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
@@ -261,6 +263,115 @@ func TestApplyRequestMaskContract(t *testing.T) {
 		}
 		if matches != nil {
 			t.Errorf("分组开关关闭时命中明细应为 nil")
+		}
+	})
+}
+
+// TestTruncateMaskMatches 验证命中明细裁剪纯函数(文档 07 §3.1 第 5 点、design §2.1.3):
+//   - 空输入返回 (nil, false);
+//   - 正常命中原样透传且 truncated=false、保序;
+//   - 条数超 128 截断并置 true;
+//   - 单字段字节超上限按 UTF-8 边界截断, 无残缺多字节字符;
+//   - 总字节超 32KB 截断。
+func TestTruncateMaskMatches(t *testing.T) {
+	t.Run("empty input returns nil and false", func(t *testing.T) {
+		for name, in := range map[string][]mask.Match{
+			"nil":   nil,
+			"empty": {},
+		} {
+			got, truncated := truncateMaskMatches(in)
+			if got != nil || truncated {
+				t.Fatalf("%s 输入应返回 (nil,false), got (%v, %v)", name, got, truncated)
+			}
+		}
+	})
+
+	t.Run("normal matches passed through untruncated in order", func(t *testing.T) {
+		in := []mask.Match{
+			{Label: "PHONE", Original: "13800138000", Placeholder: "{{PHONE_abcd12}}"},
+			{Label: "EMAIL", Original: "a@example.com", Placeholder: "{{EMAIL_ef3456}}"},
+			{Label: "TERM", Original: "内部代号A", Placeholder: "{{TERM_qw3rty}}"},
+		}
+		got, truncated := truncateMaskMatches(in)
+		if truncated {
+			t.Fatalf("未超限输入不应置 truncated=true")
+		}
+		if len(got) != len(in) {
+			t.Fatalf("输出条数 = %d, want %d", len(got), len(in))
+		}
+		for i := range in {
+			if got[i].Label != in[i].Label || got[i].Original != in[i].Original || got[i].Placeholder != in[i].Placeholder {
+				t.Fatalf("第 %d 条未透传保序: got %+v, want %+v", i, got[i], in[i])
+			}
+		}
+	})
+
+	t.Run("more than 128 matches truncated", func(t *testing.T) {
+		in := make([]mask.Match, maxMaskMatchesPerRequest+1)
+		for i := range in {
+			in[i] = mask.Match{Label: "PHONE", Original: "13800138000", Placeholder: "{{PHONE_x}}"}
+		}
+		got, truncated := truncateMaskMatches(in)
+		if !truncated {
+			t.Fatalf("%d 条应置 truncated=true", maxMaskMatchesPerRequest+1)
+		}
+		if len(got) != maxMaskMatchesPerRequest {
+			t.Fatalf("条数超限应截到 %d, got %d", maxMaskMatchesPerRequest, len(got))
+		}
+	})
+
+	t.Run("field bytes truncated at UTF-8 boundary without broken rune", func(t *testing.T) {
+		longLabel := strings.Repeat("中", 20)       // 60 字节, 超 32 字节上限, 边界落在多字节字符内。
+		longOriginal := strings.Repeat("o", 300)    // 超 256 字节上限。
+		longPlaceholder := strings.Repeat("p", 100) // 超 64 字节上限。
+		got, truncated := truncateMaskMatches([]mask.Match{{Label: longLabel, Original: longOriginal, Placeholder: longPlaceholder}})
+		// 字段级截断不置整体截断标记; truncated 仅由条数/总字节超限触发(design §2.1.3 活动图)。
+		if truncated {
+			t.Fatalf("单条字段截断不应置整体 truncated=true")
+		}
+		if len(got) != 1 {
+			t.Fatalf("应保留 1 条, got %d", len(got))
+		}
+		if got[0].Label != strings.Repeat("中", 10) {
+			t.Fatalf("label = %q, want 10 个完整\"中\"", got[0].Label)
+		}
+		if !utf8.ValidString(got[0].Label) {
+			t.Fatalf("label 截断破坏 UTF-8: %q", got[0].Label)
+		}
+		if len(got[0].Label) > maxMaskMatchLabelBytes {
+			t.Fatalf("label 未截断: %d bytes", len(got[0].Label))
+		}
+		if len(got[0].Original) != maxMaskMatchOriginalBytes || !utf8.ValidString(got[0].Original) {
+			t.Fatalf("original 截断异常: len=%d want=%d", len(got[0].Original), maxMaskMatchOriginalBytes)
+		}
+		if len(got[0].Placeholder) != maxMaskMatchPlaceholderBytes {
+			t.Fatalf("placeholder 未截断: %d bytes", len(got[0].Placeholder))
+		}
+	})
+
+	t.Run("total bytes exceed 32KB truncated before count limit", func(t *testing.T) {
+		// 每条 itemBytes = 32(label) + 256(original) + 64(placeholder) = 352 字节,
+		// 在条数上限 128 之前即因总字节超 32KB 中断。
+		label := strings.Repeat("l", maxMaskMatchLabelBytes)
+		original := strings.Repeat("o", maxMaskMatchOriginalBytes)
+		placeholder := strings.Repeat("p", maxMaskMatchPlaceholderBytes)
+		in := make([]mask.Match, maxMaskMatchesPerRequest)
+		for i := range in {
+			in[i] = mask.Match{Label: label, Original: original, Placeholder: placeholder}
+		}
+		got, truncated := truncateMaskMatches(in)
+		if !truncated {
+			t.Fatal("总字节超 32KB 应置 truncated=true")
+		}
+		if len(got) >= maxMaskMatchesPerRequest {
+			t.Fatalf("应在条数上限之前因总字节截断, 实际条数 %d", len(got))
+		}
+		total := 0
+		for _, m := range got {
+			total += len(m.Label) + len(m.Original) + len(m.Placeholder)
+		}
+		if total > maxMaskMatchesTotalBytes {
+			t.Fatalf("裁剪后总字节 %d 仍超上限 %d", total, maxMaskMatchesTotalBytes)
 		}
 	})
 }
