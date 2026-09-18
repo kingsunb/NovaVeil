@@ -31,4 +31,4 @@ Status: implemented
 
 ## 验证
 
-占位符生成在 `internal/relay/mask/placeholder.go`（`consonants` 字母表 + `crypto/rand`）；映射表在 `session.go`。设计溯源见 [docs/脱敏开发/05-借鉴思路总结.md](../../../../docs/脱敏开发/05-借鉴思路总结.md) §一。
+占位符生成在 `internal/relay/mask/placeholder.go`（`consonants` 字母表 + `crypto/rand`）；映射表在 `session.go`。设计溯源（maskit 占位符策略）见 [网关层脱敏](../feature/2026-09-10-gateway-native-request-masking.md) 的备选方案。

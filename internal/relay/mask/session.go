@@ -24,7 +24,7 @@ func newMapping() *Mapping {
 
 // Recall 取原文对应的占位符: 已存在则复用(多轮一致), 否则生成新占位符并双向登记。
 //
-// 防套娃(详见 docs/脱敏开发/05 §2.2): 若 original 自身就是占位符(多轮历史带入),
+// 防套娃: 若 original 自身就是占位符(多轮历史带入),
 // 严禁为其分配新 token, 否则 A→B→C 无限套娃。先反查其真实明文(递归解套, 深度上限 5),
 // 查不到则原样返回自身, 绝不套娃。
 func (m *Mapping) Recall(original, label string) string {

@@ -3,7 +3,7 @@ package mask
 import "strconv"
 
 // RestoreString 把 body 中的占位符还原为原文(非流式, 一次性全量替换)。
-// 未登记的占位符原样保留: 绝不做模糊匹配、不猜、不推算(详见 docs/脱敏开发/05 §4.1)。
+// 未登记的占位符原样保留: 绝不做模糊匹配、不猜、不推算。
 // 模型自造的占位符从未登记, 还原它在信息论上不可能, 正确行为是原样保留让用户可见。
 func RestoreString(body string, mapping *Mapping) string {
 	if mapping == nil || body == "" {
