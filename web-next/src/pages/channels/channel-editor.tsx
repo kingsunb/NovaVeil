@@ -842,6 +842,9 @@ function CredTab({
   channelId: number | undefined;
   errors: { name?: string; base_url?: string };
 }) {
+ // 内置渠道身份字段由后端固定，前端同步禁用名称/类型/Base URL 编辑，避免提交后报错。
+  const builtin = !!draft.builtin;
+
   // 眼睛显示：默认掩码/密文态；已保存行首次点眼睛时按需拉取该渠道的密钥明文。
   const [visibleKeys, setVisibleKeys] = useState<Record<number, boolean>>({});
   const [revealRequested, setRevealRequested] = useState(false);
@@ -954,11 +957,17 @@ function CredTab({
   }
   return (
     <div className="space-y-4">
-      <Field label="名称" required error={errors.name}>
+      <Field
+        label="名称"
+        required
+        error={errors.name}
+        hint={builtin ? "内置渠道名称由系统固定，不可修改" : undefined}
+      >
         <Input
           value={draft.name}
           onChange={(e) => update("name", e.target.value)}
           placeholder="例如：OpenAI-Production"
+          disabled={builtin}
           invalid={!!errors.name}
           aria-invalid={!!errors.name}
         />
@@ -968,6 +977,7 @@ function CredTab({
           <Select
             className="w-full text-sm"
             value={draft.type}
+            disabled={builtin}
             onChange={(e) => update("type", e.target.value as Draft["type"])}
           >
             {Object.entries(PROVIDER_LABELS).map(([k, v]) => (
@@ -998,11 +1008,17 @@ function CredTab({
           aria-label="优先级"
         />
       </Field>
-      <Field label="Base URL" required error={errors.base_url}>
+      <Field
+        label="Base URL"
+        required
+        error={errors.base_url}
+        hint={builtin ? "内置渠道上游地址由系统固定，不可修改" : undefined}
+      >
         <Input
           value={draft.base_url}
           onChange={(e) => update("base_url", e.target.value)}
           placeholder="https://api.example.com/v1"
+          disabled={builtin}
           invalid={!!errors.base_url}
           aria-invalid={!!errors.base_url}
         />

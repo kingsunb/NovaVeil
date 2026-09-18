@@ -151,6 +151,21 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		return nil, fmt.Errorf("渠道不存在，请刷新页面后重试")
 	}
 
+	// 内置渠道由 internal/builtin 的固定清单维护，身份字段（名称/上游类型/Base URL）
+	// 不允许通过更新接口修改，否则改名后下次启动会按原名称重复补建出第二条内置渠道
+	//（H-07，审计 2026-09-19 发现）。Key、Header、启停、模型等个性化字段仍可修改。
+	if existingChannel.Builtin {
+		if req.Name != nil && *req.Name != existingChannel.Name {
+			return nil, fmt.Errorf("内置渠道不可修改名称")
+		}
+		if req.Type != nil && *req.Type != existingChannel.Type {
+			return nil, fmt.Errorf("内置渠道不可修改上游类型")
+		}
+		if req.BaseURL != nil && *req.BaseURL != existingChannel.BaseURL {
+			return nil, fmt.Errorf("内置渠道不可修改 Base URL")
+		}
+	}
+
 	var selectFields []string
 	updates := model.Channel{ID: req.ID}
 	var sortUpdateVal *int
