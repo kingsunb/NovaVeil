@@ -149,10 +149,16 @@ func TestChannel(ctx context.Context, channelID int, modelName string, message s
 	return sendChannelTestRequest(ctx, channel, modelName, message, channelKeyLabel(keyIndex, key))
 }
 
-// TestChannelKeyFailover 依次尝试渠道的每把密钥, 任一成功即返回该 Key 的结果;
+// evalKeyAttemptLimit 单渠道单模型评估时最多尝试的密钥把数。密钥极多的渠道若逐把
+// 失败再换下一把, 单次评估会把大量计费请求烧在坏密钥上并拖很久(每把最长 10 分钟),
+// 因此评估只顺序探测前 N 把, 首把可用即短路, 全部失败即止步于该上限。
+const evalKeyAttemptLimit = 10
+
+// TestChannelKeyFailover 依次尝试渠道的密钥, 任一成功即返回该 Key 的结果;
 // 全部失败时返回聚合错误。供模型评估使用, 与面板逐密钥诊断(TestChannelKeys 并发全测)不同:
 // 评估只需确认渠道可服务该模型, 顺序探测避免对同一上游产生并发压力, 且首个可用 Key 即可短路。
-// 不检查冷却: 评估是主动诊断, 应尝试所有配置的 Key 而非被业务流量的冷却状态遮蔽。
+// 不检查冷却: 评估是主动诊断, 不受被业务流量的冷却状态遮蔽。
+// 单渠道单模型最多尝试前 evalKeyAttemptLimit 把密钥, 避免密钥极多的渠道在评估时逐把烧计费请求。
 func TestChannelKeyFailover(ctx context.Context, channelID int, modelName string, message string) (*ChannelTestResult, error) {
 	channel, err := op.ChannelGet(channelID)
 	if err != nil {
@@ -168,8 +174,12 @@ func TestChannelKeyFailover(ctx context.Context, channelID int, modelName string
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("渠道未配置任何密钥")
 	}
+	tried := candidates
+	if len(tried) > evalKeyAttemptLimit {
+		tried = tried[:evalKeyAttemptLimit]
+	}
 	var errs []string
-	for index, key := range candidates {
+	for index, key := range tried {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -183,6 +193,9 @@ func TestChannelKeyFailover(ctx context.Context, channelID int, modelName string
 			return result, nil
 		}
 		errs = append(errs, fmt.Sprintf("#%d(%s): %v", index+1, key.ID, err))
+	}
+	if len(tried) < len(candidates) {
+		return nil, fmt.Errorf("前 %d 把密钥测试均失败(渠道共 %d 把密钥, 已达单次评估尝试上限): %s", len(tried), len(candidates), strings.Join(errs, "; "))
 	}
 	return nil, fmt.Errorf("全部密钥测试失败: %s", strings.Join(errs, "; "))
 }
