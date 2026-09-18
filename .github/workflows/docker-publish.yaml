@@ -1,18 +1,12 @@
 name: docker-publish
 
-# 自动构建并发布多架构 Docker 镜像到 GitHub Container Registry (ghcr.io)。
-#
-# 触发:
-#   - push 到 main: 构建并推送 :latest + :sha-<short>
-#   - tag v*.*.*:   构建并推送 :<version> + :latest + GitHub Release
-#   - 手动触发
+# 默认构建流程：push 到 main 时构建并推送多架构 Docker 镜像到 GHCR。
+# 正式 Release / GitHub Release 暂不启用。
 
 on:
   push:
     branches:
       - main
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
 
 permissions:
@@ -45,16 +39,8 @@ jobs:
         run: |
           set -euo pipefail
           sha_short="${GITHUB_SHA::7}"
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            version="${GITHUB_REF#refs/tags/}"
-            echo "version=${version}" >>"${GITHUB_OUTPUT}"
-            echo "is_release=true" >>"${GITHUB_OUTPUT}"
-            echo "image_tags=${IMAGE}:${version},${IMAGE}:latest,${IMAGE}:sha-${sha_short}" >>"${GITHUB_OUTPUT}"
-          else
-            echo "version=dev-${sha_short}" >>"${GITHUB_OUTPUT}"
-            echo "is_release=false" >>"${GITHUB_OUTPUT}"
-            echo "image_tags=${IMAGE}:latest,${IMAGE}:sha-${sha_short}" >>"${GITHUB_OUTPUT}"
-          fi
+          echo "version=dev-${sha_short}" >>"${GITHUB_OUTPUT}"
+          echo "image_tags=${IMAGE}:latest,${IMAGE}:sha-${sha_short}" >>"${GITHUB_OUTPUT}"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
@@ -110,19 +96,3 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
 
-      - name: Build release archives
-        if: steps.meta.outputs.is_release == 'true'
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
-        run: |
-          bash scripts/build.sh --targets linux/amd64,linux/arm64,linux/arm,darwin/amd64,darwin/arm64,windows/amd64
-
-      - name: Create GitHub Release
-        if: steps.meta.outputs.is_release == 'true'
-        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
-        with:
-          tag_name: ${{ steps.meta.outputs.version }}
-          prerelease: false
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          files: build/archives/*
