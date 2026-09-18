@@ -345,7 +345,7 @@ describe("elapsedParts", () => {
     expect(parts.kind).toBe("running");
   });
 
-  it("committed 且有首字 → kind=first-total", () => {
+  it("committed 且有首字 → kind=first-total，总耗时从请求到达起算", () => {
     const now = Date.now();
     const parts = elapsedParts(
       {
@@ -357,6 +357,11 @@ describe("elapsedParts", () => {
       now,
     );
     expect(parts.kind).toBe("first-total");
+    if (parts.kind === "first-total") {
+      expect(parts.first).toBe("2s");
+      // 总耗时 = started_at → now = 5000ms，而不是 first_token_at → now = 2000ms。
+      expect(parts.total).toBe("5s");
+    }
   });
 
   it("committed 无首字 → kind=total", () => {

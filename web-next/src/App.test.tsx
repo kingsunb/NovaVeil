@@ -72,6 +72,9 @@ function mockFlags(runtime: object) {
           ),
         );
       }
+      if (url.includes("/log/errors")) {
+        return Promise.resolve(jsonOk([]));
+      }
       return Promise.resolve(jsonOk(null));
     }),
   );
@@ -129,6 +132,9 @@ describe("<App /> 首登强制改密", () => {
           // 与真实后端一致：改密成功后 must_change_password 即刻清除
           statusMustChange = false;
           return Promise.resolve(jsonOk(null));
+        }
+        if (url.includes("/log/errors")) {
+          return Promise.resolve(jsonOk([]));
         }
         return Promise.resolve(jsonOk(null));
       }),

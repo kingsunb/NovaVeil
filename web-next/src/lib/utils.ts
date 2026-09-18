@@ -89,7 +89,8 @@ export function formatDuration(
  * 首字时点来自后端 first_token_at（首个已交付客户端事件/整响应提交时刻）。
  * 状态覆盖：
  *  - running：首字尚未到达客户端，仅返回当前总耗时。
- *  - committed：首字已交付，仍在传输，总耗时按「当前到首字时点」计算。
+ *  - committed：首字已交付，仍在传输；总耗时仍按「当前到请求到达」计算，
+ *    首字耗时只是其中的一个阶段标记，不是总耗时的起点。
  *  - 终态（success/failed/canceled）：总耗时取定稿后 duration_ms。
  */
 export type ElapsedParts =
@@ -126,16 +127,13 @@ export function elapsedParts(
   }
 
   // 总耗时（毫秒）：
-  //  - running：当前到起始的差值
-  //  - committed：当前到首字时点的差值（首字未到则回退到起始）
+  //  - running / committed：当前到请求到达(started_at)的差值，覆盖完整请求生命周期
   //  - 终态：定稿 duration_ms
   const totalMs =
-    request.status === "running"
-      ? now - startedAt
-      : request.status === "committed"
-        ? now - (firstAt ?? startedAt)
-        : request.duration_ms ??
-          (request.duration != null ? request.duration / 1_000_000 : 0);
+    request.status === "running" || request.status === "committed"
+      ? Math.max(0, now - startedAt)
+      : request.duration_ms ??
+        (request.duration != null ? request.duration / 1_000_000 : 0);
 
   const firstStr = formatElapsed(firstElapsedMs);
   const totalStr = formatElapsed(totalMs);
@@ -169,7 +167,7 @@ export function formatElapsedWithFirst(
   }
 }
 
-function formatElapsed(milliseconds: number) {
+export function formatElapsed(milliseconds: number) {
   // 毫秒范围直接按毫秒显示（如 110ms → "110ms"），避免低于 1s 被 floor 成 0s。
   if (milliseconds < 1000) return `${Math.round(milliseconds)}ms`;
   const totalSeconds = Math.floor(milliseconds / 1000);

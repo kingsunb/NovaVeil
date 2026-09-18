@@ -121,6 +121,16 @@ function mockFetch(opts: {
         ),
       );
     }
+    if (url.includes("/setting/get")) {
+      const parsed = new URL(url, "http://localhost");
+      const key = parsed.searchParams.get("key") ?? "channel_test_message";
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ code: 200, message: "success", data: { key, value: "" } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    }
     // 其他接口空数据
     return Promise.resolve(
       new Response(JSON.stringify({ code: 200, message: "success", data: null }), {
@@ -489,6 +499,16 @@ describe("<ChannelsPage /> 渠道优先级行内编辑", () => {
         return Promise.resolve(
           new Response(
             JSON.stringify({ code: 200, message: "success", data: existing ?? null }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }
+      if (url.includes("/setting/get")) {
+        const parsed = new URL(url, "http://localhost");
+        const key = parsed.searchParams.get("key") ?? "channel_test_message";
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ code: 200, message: "success", data: { key, value: "" } }),
             { status: 200, headers: { "content-type": "application/json" } },
           ),
         );

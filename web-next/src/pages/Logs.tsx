@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -32,7 +32,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { FormattedBody } from "@/components/ui/formatted-body";
 import { MaskMatches } from "@/components/logs/MaskMatches";
-import { cn, formatNumber, formatElapsedWithFirst, elapsedParts } from "@/lib/utils";
+import { cn, formatNumber, formatElapsed, formatElapsedWithFirst, elapsedParts } from "@/lib/utils";
 import { QueryErrorBanner } from "@/components/ui/query-error";
 import { openSSE } from "@/lib/sse";
 import {
@@ -676,8 +676,8 @@ function TraceSheet({
   req: RequestState | null;
   onClose: () => void;
 }) {
-  // 双列布局：左列切「请求体 / 分组路由」，右列时间线 + 响应始终可见。
-  const [leftTab, setLeftTab] = useState<"body" | "route">("body");
+  // 双列布局：左列切「请求体 / 分组路由 / 脱敏命中 / 详情」，右列时间线 + 响应始终可见。
+  const [leftTab, setLeftTab] = useState<"body" | "route" | "mask" | "detail">("body");
   const [body, setBody] = useState<string>("");
   const [response, setResponse] = useState<string>("");
   const [bodyLoading, setBodyLoading] = useState(false);
@@ -834,10 +834,10 @@ function TraceSheet({
 
         {/* ---------- 双列网格 ---------- */}
         <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-4 md:grid-cols-2">
-          {/* 左列：请求体 / 分组路由 */}
+          {/* 左列：请求体 / 分组路由 / 脱敏命中 / 详情 */}
           <div className="flex min-h-0 flex-col overflow-hidden rounded-card border border-border bg-surface-subtle/20">
             <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2">
-              {(["body", "route"] as const).map((t) => (
+              {(["body", "route", "mask", "detail"] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => setLeftTab(t)}
@@ -848,7 +848,13 @@ function TraceSheet({
                       : "text-ink-muted hover:text-ink",
                   )}
                 >
-                  {t === "body" ? "请求体" : "分组路由"}
+                  {t === "body"
+                    ? "请求体"
+                    : t === "route"
+                      ? "分组路由"
+                      : t === "mask"
+                        ? "脱敏命中"
+                        : "详情"}
                 </button>
               ))}
             </div>
@@ -860,20 +866,18 @@ function TraceSheet({
                     loading={bodyLoading}
                   />
                 </div>
-              ) : (
+              ) : leftTab === "route" ? (
                 <RouteTab req={req} attempts={attempts} />
+              ) : leftTab === "mask" ? (
+                <MaskTab req={req} />
+              ) : (
+                <DetailTab req={req} attempts={attempts} now={detailNow} />
               )}
             </div>
           </div>
 
-          {/* 右列：脱敏命中 + 时间线 + 响应/错误 */}
+          {/* 右列：时间线 + 响应/错误（保持原有样式与交互） */}
           <div className="flex min-h-0 flex-col gap-3">
-            {/* 脱敏命中明细（文档 07 §3.3）：随 RequestState 状态流下发，
-                仅命中时渲染；展示规则标签、命中原文与占位符；截断时提示。 */}
-            <MaskMatches
-              matches={req.mask_matches}
-              truncated={req.mask_matches_truncated}
-            />
             {/* 时间线面板 */}
             {attempts.length > 0 && (
               <div
@@ -1004,6 +1008,216 @@ function TraceSheet({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function MaskTab({ req }: { req: RequestState }) {
+  if (!req.mask_matches || req.mask_matches.length === 0) {
+    return (
+      <p className="py-6 text-center text-sm text-ink-muted">无脱敏命中</p>
+    );
+  }
+  return (
+    <MaskMatches
+      matches={req.mask_matches}
+      truncated={req.mask_matches_truncated}
+      caption=""
+    />
+  );
+}
+
+/** Token/s 展示：低速保留 1 位小数，高速不输出无意义小数。 */
+function formatTps(value: number) {
+  if (!Number.isFinite(value)) return "—";
+  return value >= 100 ? value.toFixed(0) : value.toFixed(1);
+}
+
+/**
+ * 详情 Tab：请求级诊断信息汇总。头部信息较多，详情 Tab 用稳定的
+ * 键值列表把这些字段集中起来，便于审计时按需查看当前快照。
+ */
+function DetailTab({
+  req,
+  attempts,
+  now,
+}: {
+  req: RequestState;
+  attempts: AttemptRecord[];
+  now: number;
+}) {
+  const firstTokenAt = req.first_token_at
+    ? new Date(req.first_token_at).toLocaleString("zh-CN")
+    : "—";
+
+  // 耗时指标：完整总耗时 = 请求到达 → 完成；首字耗时 = 请求到达 → 首字；
+  // 响应完成耗时 = 首字 → 完成（输出阶段）。完整总耗时与请求列表/底部指标
+  // 使用同一口径：进行中按 now - started_at，终态按后端 duration_ms。
+  const startedMs = new Date(req.started_at).getTime();
+  const validStart = Number.isFinite(startedMs);
+  const terminal = req.status !== "running" && req.status !== "committed";
+  const firstAtMs = req.first_token_at
+    ? new Date(req.first_token_at).getTime()
+    : null;
+  const firstValid =
+    validStart &&
+    firstAtMs != null &&
+    Number.isFinite(firstAtMs) &&
+    firstAtMs >= startedMs;
+  const fullMs = (() => {
+    if (!validStart) {
+      return terminal
+        ? (req.duration_ms ??
+            (req.duration != null ? req.duration / 1_000_000 : null))
+        : null;
+    }
+    if (!terminal) return Math.max(0, now - startedMs);
+    return (
+      req.duration_ms ??
+      (req.duration != null ? req.duration / 1_000_000 : null)
+    );
+  })();
+  const ttftMs = firstValid ? firstAtMs! - startedMs : null;
+  const responseMs =
+    fullMs != null && ttftMs != null ? Math.max(0, fullMs - ttftMs) : null;
+
+  // Token/s 仅在终态有完整 tokens 与定稿耗时后才有意义；输出速度按响应完成耗时折算。
+  const totalTps =
+    terminal && fullMs != null && fullMs > 0
+      ? req.usage.total_tokens / (fullMs / 1000)
+      : null;
+  const outputTps =
+    terminal && responseMs != null && responseMs > 0
+      ? req.usage.completion_tokens / (responseMs / 1000)
+      : null;
+
+  const speedParts: string[] = [];
+  if (totalTps != null) speedParts.push(`总 ${formatTps(totalTps)} tok/s`);
+  if (outputTps != null) speedParts.push(`输出 ${formatTps(outputTps)} tok/s`);
+  const speedText = speedParts.length > 0 ? speedParts.join(" · ") : "—";
+
+  return (
+    <div className="space-y-3 py-2 text-xs">
+      <DetailRow label="请求 ID">
+        <span className="mono text-ink">{req.id}</span>
+      </DetailRow>
+      <DetailRow label="状态">
+        <Pill tone={STATE_TONE[req.status] ?? "neutral"} dot={false}>
+          {STATE_LABEL[req.status] ?? req.status}
+        </Pill>
+      </DetailRow>
+      <DetailRow label="模型">
+        <span className="text-ink">{req.model}</span>
+        {req.thinking_level && (
+          <span className="ml-2 inline-flex items-center gap-1 text-ink-muted">
+            <Brain className="size-3" />
+            {req.thinking_level}
+          </span>
+        )}
+      </DetailRow>
+      <DetailRow label="目标">
+        <span className="mono text-ink">
+          {req.target_channel} → {req.target_model}
+        </span>
+      </DetailRow>
+      <DetailRow label="协议链路">
+        <span className="mono text-ink">
+          {req.client_format} → {req.upstream_type}
+        </span>
+      </DetailRow>
+      <DetailRow label="中继方式">
+        <span className="text-ink">
+          {req.relay_mode === "passthrough" ? "协议透传" : "协议转换"}
+        </span>
+      </DetailRow>
+      <DetailRow label="出口代理">
+        <span className="mono text-ink" title={req.proxy_addr}>
+          {req.proxy_addr || "直连（未走代理）"}
+        </span>
+      </DetailRow>
+      <DetailRow label="客户端 IP">
+        <span className="mono text-ink">{req.client_ip}</span>
+      </DetailRow>
+      <DetailRow label="密钥">
+        <span className="mono text-ink">
+          {req.key_name ?? (req.api_key ? `尾缀 ${req.api_key}` : "—")}
+        </span>
+      </DetailRow>
+      <DetailRow label="脱敏">
+        <Pill tone={req.masked ? "info" : "neutral"} dot={false}>
+          {req.masked ? "已脱敏" : "未脱敏"}
+        </Pill>
+      </DetailRow>
+      <DetailRow label="尝试轮次">
+        <span className="num text-ink">{attempts.length}</span>
+        {req.round > 0 && (
+          <span className="ml-2 text-ink-muted">（当前轮次 #{req.round}）</span>
+        )}
+      </DetailRow>
+      <DetailRow label="开始时间">
+        <span className="text-ink">
+          {new Date(req.started_at).toLocaleString("zh-CN")}
+        </span>
+      </DetailRow>
+      <DetailRow label="首字时点">
+        <span className="text-ink">{firstTokenAt}</span>
+      </DetailRow>
+      <DetailRow label="完整总耗时">
+        <span className="num text-ink">
+          {fullMs != null ? formatElapsed(fullMs) : "—"}
+        </span>
+      </DetailRow>
+      <DetailRow label="首字耗时">
+        <span className="num text-ink">
+          {ttftMs != null
+            ? formatElapsed(ttftMs)
+            : terminal
+              ? "未产生首字"
+              : "等待首字…"}
+        </span>
+      </DetailRow>
+      <DetailRow label="响应完成耗时">
+        <span className="num text-ink">
+          {terminal
+            ? responseMs != null
+              ? formatElapsed(responseMs)
+              : "—"
+            : "—"}
+        </span>
+      </DetailRow>
+      <DetailRow label="Token 速度">
+        <span className="num text-ink">{speedText}</span>
+      </DetailRow>
+      <DetailRow label="Tokens">
+        <span className="num text-ink">
+          输入 {formatNumber(req.usage.prompt_tokens)} / 输出{" "}
+          {formatNumber(req.usage.completion_tokens)} / 合计{" "}
+          {formatNumber(req.usage.total_tokens)}
+          {cacheTokensOf(req) > 0 && (
+            <span className="ml-2 text-ink-muted">
+              / 缓存 {formatNumber(cacheTokensOf(req))}
+            </span>
+          )}
+          {req.usage_estimated && (
+            <span className="ml-2 text-ink-subtle">（估算）</span>
+          )}
+        </span>
+      </DetailRow>
+    </div>
+  );
+}
+
+function DetailRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="w-20 shrink-0 text-ink-muted">{label}</span>
+      <div className="min-w-0 flex-1 text-ink">{children}</div>
+    </div>
   );
 }
 

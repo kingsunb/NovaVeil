@@ -408,15 +408,15 @@ describe("formatElapsedWithFirst", () => {
     expect(formatElapsedWithFirst(legacy, now)).toBe("110ms");
   });
 
-  it("committed 未定稿时按当前到起始计算总耗时，首字与总耗时均来自首字时点", () => {
+  it("committed 未定稿时总耗时从请求到达开始计算，首字耗时仍为 first_token_at - started_at", () => {
     const now = Date.parse("2024-01-01T00:00:01Z"); // 距起始 1s（1000ms）
     const committed = {
       status: "committed",
       started_at: "2024-01-01T00:00:00Z",
       first_token_at: new Date("2024-01-01T00:00:00.100Z").toISOString(),
     } as const;
-    // committed：首字 100ms；总耗时按当前到起始计算 = 1000 - 100 = 900ms。
-    expect(formatElapsedWithFirst(committed, now)).toBe("首字 100ms · 总耗时 900ms");
+    // committed：总耗时 = 请求到达 → 当前 = 1000ms；首字耗时 = 100ms。
+    expect(formatElapsedWithFirst(committed, now)).toBe("首字 100ms · 总耗时 1s");
   });
 });
 

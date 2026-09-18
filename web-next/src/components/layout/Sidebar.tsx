@@ -127,7 +127,7 @@ function NavGroup({
           // 不重复 import，失败不留缓存不阻断导航。
           onMouseEnter={() => void preloadPage(item.to)}
           onFocus={() => void preloadPage(item.to)}
-          className={({ isActive }) =>
+          className={({ isActive }: { isActive: boolean }) =>
             cn(
               "flex min-h-10 items-center gap-2.5 rounded-control px-2 text-[13px] font-medium tracking-tight transition-all duration-150",
               collapsed && "justify-center px-0",

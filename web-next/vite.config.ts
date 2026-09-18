@@ -15,7 +15,7 @@ import { gzipSync } from "node:zlib";
  *    动态 gzip 兜底, 不影响正常交付。
  *  - VISUALIZE=1 触发 bundle 报告（写到 ../static/out/stats.html）
  */
-const buildOutDir = path.resolve(__dirname, "../static/out");
+const buildOutDir = path.resolve(import.meta.dirname, "../static/out");
 
 // novaveilGzipPrecompressPlugin 为每个文本类构建产物额外产出同名 .gz。
 // 后端中间件优先直发 .gz(API 不变, 仅在第一次请求时省 CPU); 未预压缩(如本地
@@ -58,11 +58,11 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   build: {
-    outDir: path.resolve(__dirname, "../static/out"),
+    outDir: path.resolve(import.meta.dirname, "../static/out"),
     emptyOutDir: true,
     rollupOptions: {
       plugins: process.env.VISUALIZE

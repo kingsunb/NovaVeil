@@ -60,7 +60,9 @@ describe("useNow", () => {
     vi.useFakeTimers();
     const { result } = renderHook(() => useNow());
     const first = result.current;
-    await vi.advanceTimersByTimeAsync(1100);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
     expect(result.current).toBeGreaterThanOrEqual(first + 1000);
     vi.useRealTimers();
   });
