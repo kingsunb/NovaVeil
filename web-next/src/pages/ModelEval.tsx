@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { FlaskConical, ListChecks, ListOrdered, Play, Plus, SlidersHorizontal } from "lucide-react";
+import { FlaskConical, ListChecks, ListOrdered, Play, Plus, SlidersHorizontal, Tag } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { EVAL_PROMPT, type EvalStatsSummary, type EvalTarget } from "@/lib/model-eval";
@@ -17,8 +17,11 @@ import { EvalHistory } from "@/components/model-eval/EvalHistory";
 import { EvalQueue } from "@/components/model-eval/EvalQueue";
 import { EvalRanking } from "@/components/model-eval/EvalRanking";
 import { EvalSelection } from "@/components/model-eval/EvalSelection";
+import { cn } from "@/lib/utils";
+import type { Channel } from "@/lib/types";
 
 type EvalView = "current" | "ranking" | "queue" | "history";
+type CategoryFilter = "all" | "free" | "builtin" | "custom";
 
 /** 「当前评估」视图右侧的工作流引导，三步说明与队列/排序视图形成递进。 */
 const FLOW_STEPS = [
@@ -38,6 +41,42 @@ export default function ModelEvalPage() {
   const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: api.listChannels });
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [detailId, setDetailId] = useState<number | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+
+  /** 渠道 → 分类映射，用于按分类筛选评估目标。 */
+  const channelCategory = useMemo(() => {
+    const map = new Map<number, CategoryFilter>();
+    for (const c of channelsQuery.data ?? []) {
+      if (c.is_free) map.set(c.id, "free");
+      else if (c.builtin) map.set(c.id, "builtin");
+      else map.set(c.id, "custom");
+    }
+    return map;
+  }, [channelsQuery.data]);
+
+  /** 收集所有启用渠道的标签，去重并按字母序排列。 */
+  const allTags = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of channelsQuery.data ?? []) {
+      if (!c.enabled) continue;
+      for (const t of c.tags ?? []) set.add(t);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [channelsQuery.data]);
+
+  /** 按分类 + 标签筛选渠道 ID 集合。 */
+  const filteredChannelIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const c of channelsQuery.data ?? []) {
+      if (!c.enabled) continue;
+      const cat = channelCategory.get(c.id);
+      if (categoryFilter !== "all" && cat !== categoryFilter) continue;
+      if (selectedTags.length > 0 && !selectedTags.every((t) => (c.tags ?? []).includes(t))) continue;
+      ids.add(c.id);
+    }
+    return ids;
+  }, [channelsQuery.data, channelCategory, categoryFilter, selectedTags]);
 
   const allTargets = useMemo<EvalTarget[]>(() => {
     // 渠道按自定义排序（sort 降序、同值按名称兜底）排列，与渠道列表默认视图一致：
@@ -56,7 +95,12 @@ export default function ModelEvalPage() {
     );
   }, [channelsQuery.data]);
   const scopeTargets = useMemo(() => allTargets.filter((target) => !channelId || target.channelId === channelId), [allTargets, channelId]);
-  const selectedTargets = scopeTargets.filter((target) => selectedIds.has(target.channelModelId));
+  // 在渠道范围基础上再按分类 + 标签筛选，影响 EvalSelection 列表与一键评估按钮候选。
+  const filteredTargets = useMemo(
+    () => scopeTargets.filter((target) => filteredChannelIds.has(target.channelId)),
+    [scopeTargets, filteredChannelIds],
+  );
+  const selectedTargets = filteredTargets.filter((target) => selectedIds.has(target.channelModelId));
 
   const [bulkSettings, setBulkSettings] = useState({
     skipSuccess: false,
@@ -84,15 +128,15 @@ export default function ModelEvalPage() {
     if (bulkSettings.skipFailure && failureCount > 0) return false;
     return true;
   }, [bulkSettings, statsByTarget]);
-  const freeTargets = useMemo(() => scopeTargets.filter((target) => {
+  const freeTargets = useMemo(() => filteredTargets.filter((target) => {
     const channel = channelsQuery.data?.find((item) => item.id === target.channelId);
     return channel?.is_free === true;
-  }), [channelsQuery.data, scopeTargets]);
+  }), [channelsQuery.data, filteredTargets]);
   const freeCandidates = useMemo(() => freeTargets.filter(filterBySettings), [freeTargets, filterBySettings]);
-  const untestedTargets = useMemo(() => scopeTargets.filter((target) => {
+  const untestedTargets = useMemo(() => filteredTargets.filter((target) => {
     const stats = statsByTarget.get(`${target.channelId}:${target.modelName}`);
     return (stats?.total_count ?? 0) === 0;
-  }), [scopeTargets, statsByTarget]);
+  }), [filteredTargets, statsByTarget]);
 
   const enqueueMut = useMutation({
     mutationFn: (channelModelIds: number[]) => api.enqueueEvals(channelModelIds),
@@ -182,6 +226,67 @@ export default function ModelEvalPage() {
 
       {channelsQuery.isError && <QueryErrorBanner onRetry={() => void channelsQuery.refetch()} />}
 
+      {view === "current" && !channelsQuery.isError && (allTags.length > 0 || categoryFilter !== "all") && (
+        <div className="flex flex-wrap items-center gap-2">
+          <SegmentedControl
+            aria-label="渠道分类筛选"
+            value={categoryFilter}
+            onChange={(v) => { setCategoryFilter(v as CategoryFilter); setSelectedIds(new Set()); }}
+            options={[
+              { value: "all", label: "全部分类" },
+              { value: "free", label: "免费" },
+              { value: "builtin", label: "内置" },
+              { value: "custom", label: "自定义" },
+            ]}
+          />
+          {allTags.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Tag className="h-3 w-3 text-ink-muted" aria-hidden />
+              {allTags.map((t) => {
+                const active = selectedTags.includes(t);
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() =>
+                      setSelectedTags((prev) =>
+                        active ? prev.filter((x) => x !== t) : [...prev, t],
+                      )
+                    }
+                    className={cn(
+                      "rounded-full border px-2.5 py-0.5 text-xs transition-colors",
+                      active
+                        ? "border-primary/30 bg-primary/15 font-medium text-primary-text"
+                        : "border-border bg-card/60 text-ink-muted hover:text-ink",
+                    )}
+                  >
+                    {t}
+                  </button>
+                );
+              })}
+              {selectedTags.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedTags([])}
+                  className="ml-1 text-xs text-ink-muted underline hover:text-ink"
+                >
+                  清除标签
+                </button>
+              )}
+            </div>
+          )}
+          {(categoryFilter !== "all" || selectedTags.length > 0) && (
+            <button
+              type="button"
+              onClick={() => { setCategoryFilter("all"); setSelectedTags([]); setSelectedIds(new Set()); }}
+              className="text-xs text-ink-muted underline hover:text-ink"
+            >
+              重置筛选
+            </button>
+          )}
+        </div>
+      )}
+
       {view === "history" ? (
         <EvalHistory
           key={`${channelId}:${modelName}`}
@@ -203,7 +308,7 @@ export default function ModelEvalPage() {
         <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
           <div className="min-w-0 xl:sticky xl:top-0">
             {channelsQuery.isLoading ? <Skeleton className="h-80 w-full" /> : (
-              <EvalSelection key={channelId} targets={scopeTargets} selectedIds={selectedIds} onSelectionChange={setSelectedIds} disabled={busy || channelsQuery.isError} onRun={() => enqueueMut.mutate(selectedTargets.map((t) => t.channelModelId))} onHistory={showHistory} />
+              <EvalSelection key={channelId} targets={filteredTargets} selectedIds={selectedIds} onSelectionChange={setSelectedIds} disabled={busy || channelsQuery.isError} onRun={() => enqueueMut.mutate(selectedTargets.map((t) => t.channelModelId))} onHistory={showHistory} />
             )}
           </div>
           <div className="min-w-0 space-y-4">

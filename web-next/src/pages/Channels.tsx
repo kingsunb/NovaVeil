@@ -53,7 +53,7 @@ import { ChannelEditor } from "./channels/channel-editor";
 
 type Filter = "all" | "on" | "off";
 type ProxyFilter = "all" | "on" | "off";
-type FreeFilter = "all" | "free" | "paid";
+type FreeFilter = "all" | "free" | "builtin" | "custom";
 type Sort = "custom" | "name" | "status" | "models";
 
 export default function ChannelsPage() {
@@ -191,7 +191,9 @@ export default function ChannelsPage() {
           ? true
           : freeFilter === "free"
             ? c.is_free
-            : !c.is_free,
+            : freeFilter === "builtin"
+              ? c.builtin && !c.is_free
+              : !c.builtin,
       )
       .filter((c) =>
         selectedTags.length === 0
@@ -348,7 +350,8 @@ export default function ChannelsPage() {
               options={[
                 { value: "all", label: "全部分类" },
                 { value: "free", label: "免费" },
-                { value: "paid", label: "付费" },
+                { value: "builtin", label: "内置" },
+                { value: "custom", label: "自定义" },
               ]}
             />
           </>

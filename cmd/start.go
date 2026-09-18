@@ -53,10 +53,11 @@ var startCmd = &cobra.Command{
 		}
 		shutdown.Register(db.Close)
 
-		// 内置免费渠道在缓存加载前补建，保证启动后即出现在渠道列表并可参与路由。
-		if err := builtin.EnsureBuiltinFreeChannels(context.Background()); err != nil {
-			log.Errorf("builtin free channels init error: %v", err)
-			return fmt.Errorf("内置免费渠道初始化失败: %w", err)
+		// 内置渠道（免费 + 官方）在缓存加载前补建，保证启动后即出现在渠道列表。
+		// 免费渠道出厂启用、内置 Key；官方渠道出厂禁用、无 Key，管理员配置后参与路由。
+		if err := builtin.EnsureBuiltinChannels(context.Background()); err != nil {
+			log.Errorf("builtin channels init error: %v", err)
+			return fmt.Errorf("内置渠道初始化失败: %w", err)
 		}
 
 		dataDir := dataDirectory()

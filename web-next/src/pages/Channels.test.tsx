@@ -223,7 +223,7 @@ describe("<ChannelsPage />", () => {
     expect(screen.getByText("anthropic-test")).toBeInTheDocument();
   });
 
-  it("免费分类筛选：徽标、免费/付费过滤", async () => {
+  it("免费分类筛选：徽标、免费/自定义过滤", async () => {
     const user = userEvent.setup();
     const paid = { ...sampleChannel, id: 1, name: "openai-prod", is_free: false };
     const free = {
@@ -231,6 +231,7 @@ describe("<ChannelsPage />", () => {
       id: 2,
       name: "free-hf",
       is_free: true,
+      builtin: true,
       tags: ["free", "hf"],
     };
     mockList([paid, free]);
@@ -242,15 +243,15 @@ describe("<ChannelsPage />", () => {
     const freeCard = screen.getByText("free-hf").closest("article")!;
     expect(within(freeCard).getByText("免费")).toBeInTheDocument();
 
-    // 只看免费：付费渠道消失，免费渠道保留。
+    // 只看免费：自定义渠道消失，免费渠道保留。
     await user.click(screen.getByRole("button", { name: "免费" }));
     await waitFor(() => {
       expect(screen.queryByText("openai-prod")).not.toBeInTheDocument();
     });
     expect(screen.getByText("free-hf")).toBeInTheDocument();
 
-    // 只看付费：免费渠道消失，付费渠道保留。
-    await user.click(screen.getByRole("button", { name: "付费" }));
+    // 只看自定义：免费渠道消失，自定义渠道保留。
+    await user.click(screen.getByRole("button", { name: "自定义" }));
     await waitFor(() => {
       expect(screen.queryByText("free-hf")).not.toBeInTheDocument();
     });

@@ -75,7 +75,7 @@ func DefaultHeaderTemplates() []HeaderTemplate {
 				{HeaderKey: "accept", HeaderValue: "text/event-stream"},
 				{HeaderKey: "content-type", HeaderValue: "application/json"},
 				{HeaderKey: "originator", HeaderValue: "codex-tui"},
-				{HeaderKey: "user-agent", HeaderValue: "codex-tui/0.154.0 (Windows 10.0.26200; x86_64) WindowsTerminal (codex-tui; 0.154.0)"},
+				{HeaderKey: "user-agent", HeaderValue: "codex-tui/0.155.1 (Windows 10.0.26200; x86_64) WindowsTerminal (codex-tui; 0.155.1)"},
 			},
 		},
 	}

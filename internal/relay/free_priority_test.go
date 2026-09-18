@@ -10,7 +10,7 @@ import (
 )
 
 // stubFreeChannels 把渠道查询桩替换为免费/付费标记表, 未登记的渠道按不存在处理;
-// 每个成员都启用, 保证选路只受分类与优先级影响。测试结束自动还原。
+// 每个成员都启用, 保证选路只受优先级影响。测试结束自动还原。
 func stubFreeChannels(t *testing.T, freeByID map[int]bool) {
 	t.Helper()
 	channelLookupFunc = func(id int) (model.Channel, error) {
@@ -38,63 +38,55 @@ func stubFreeTypedChannels(t *testing.T, freeByID map[int]bool, providers map[in
 	}
 }
 
-// TestFreePriorityOrderedItemsStablePartition 验证免费渠道整体前移、付费渠道保持在后,
-// 且各自内部顺序不变; 全同分类时原样返回。
-func TestFreePriorityOrderedItemsStablePartition(t *testing.T) {
+// TestPickGroupItemFreeAndPaidTreatedEqually 验证免费渠道与付费渠道在选路中一视同仁:
+// 选路 strictly 按优先级顺序, 免费渠道不会因分类而被前移或优先选中。
+// 成员按 Priority 升序排列(passthroughGroup 构造时 [2]int{itemID, channelID} 的顺序即为优先级顺序),
+// 第一个成员应被选中, 无论它指向的渠道是免费还是付费。
+func TestPickGroupItemFreeAndPaidTreatedEqually(t *testing.T) {
 	stubRelayEnv(t)
-	stubFreeChannels(t, map[int]bool{101: true, 102: false, 103: true, 104: false})
-	group := passthroughGroup(1, backoffConfig(10, 2, 30),
-		[2]int{11, 101}, [2]int{12, 102}, [2]int{13, 103}, [2]int{14, 104})
 
-	ordered := freePriorityOrderedItems(group.Items)
-	got := make([]int, 0, len(ordered))
-	for _, item := range ordered {
-		got = append(got, item.ID)
-	}
-	want := []int{11, 13, 12, 14}
-	if !equalInts(got, want) {
-		t.Fatalf("freePriorityOrderedItems = %v, want %v", got, want)
-	}
-
-	// 全部免费或全部付费时不产生新切片内容(仍返回原切片)。
-	allFree := passthroughGroup(2, backoffConfig(10, 2, 30), [2]int{21, 101}, [2]int{22, 103})
-	if ordered := freePriorityOrderedItems(allFree.Items); &ordered[0] != &allFree.Items[0] {
-		t.Fatal("全部免费时不应重排复制")
-	}
-	allPaid := passthroughGroup(3, backoffConfig(10, 2, 30), [2]int{31, 102}, [2]int{32, 104})
-	if ordered := freePriorityOrderedItems(allPaid.Items); &ordered[0] != &allPaid.Items[0] {
-		t.Fatal("全部付费时不应重排复制")
-	}
-}
-
-// TestPickGroupItemFreeChannelFirst 验证免费渠道在故障转移中优先于付费渠道:
-// 即使免费渠道的优先级数值更低(排在付费渠道后面), 也会被优先选中。
-func TestPickGroupItemFreeChannelFirst(t *testing.T) {
-	stubRelayEnv(t)
+	// 场景 1: 付费渠道在前(优先级更高), 免费渠道在后。
+	// 旧逻辑会选中免费渠道; 新逻辑应选中付费渠道(第一个)。
 	stubFreeChannels(t, map[int]bool{101: false, 102: true})
 	group := passthroughGroup(1, backoffConfig(10, 2, 30), [2]int{11, 101}, [2]int{12, 102})
-
 	item := pickGroupItem(group, 0)
-	if item.ID != 12 {
-		t.Fatalf("免费渠道应优先于付费渠道, 实际选中成员 %d", item.ID)
+	if item.ID != 11 {
+		t.Fatalf("选路应按优先级顺序选中第一个成员(付费), 实际选中 %d", item.ID)
 	}
 
-	// 免费渠道冷却中时回退到付费渠道, 不因分类优先而空等。
-	route := seedCooling(t, group, 12)
-	route.Cooldowns[12] = time.Now().UnixMilli() + 60_000
-	if item := pickGroupItem(group, 0); item.ID != 11 {
-		t.Fatalf("免费渠道不可用时应回退付费渠道, 实际选中成员 %d", item.ID)
-	}
-
-	// 重排不污染分组快照自身顺序。
-	if group.Items[0].ID != 11 || group.Items[1].ID != 12 {
-		t.Fatalf("分组快照顺序被免费重排污染: %d, %d", group.Items[0].ID, group.Items[1].ID)
+	// 场景 2: 免费渠道在前(优先级更高), 付费渠道在后。
+	// 两种分类一视同仁, 第一个(免费)应被选中。
+	stubFreeChannels(t, map[int]bool{101: true, 102: false})
+	group2 := passthroughGroup(2, backoffConfig(10, 2, 30), [2]int{21, 101}, [2]int{22, 102})
+	item2 := pickGroupItem(group2, 0)
+	if item2.ID != 21 {
+		t.Fatalf("选路应按优先级顺序选中第一个成员(免费), 实际选中 %d", item2.ID)
 	}
 }
 
-// TestPickGroupItemManualModeIgnoresFreeOrdering 验证手动模式不受免费分类重排影响:
-// 手动指定激活成员仍按 ActiveItemID 返回, 与历史行为一致。
-func TestPickGroupItemManualModeIgnoresFreeOrdering(t *testing.T) {
+// TestPickGroupItemFreeChannelFallbackOnCooldown 验证免费渠道冷却时回退到下一个成员:
+// 与付费渠道行为完全一致——冷却的成员被跳过, 优先级顺序中的下一个可用成员被选中。
+func TestPickGroupItemFreeChannelFallbackOnCooldown(t *testing.T) {
+	stubRelayEnv(t)
+	stubFreeChannels(t, map[int]bool{101: true, 102: false})
+	group := passthroughGroup(1, backoffConfig(10, 2, 30), [2]int{11, 101}, [2]int{12, 102})
+
+	// 第一个成员(免费)冷却中时, 回退到第二个成员(付费)。
+	route := seedCooling(t, group, 11)
+	route.Cooldowns[11] = time.Now().UnixMilli() + 60_000
+	if item := pickGroupItem(group, 0); item.ID != 12 {
+		t.Fatalf("第一个成员冷却时应回退到第二个成员, 实际选中 %d", item.ID)
+	}
+
+	// 分组快照自身顺序不被污染。
+	if group.Items[0].ID != 11 || group.Items[1].ID != 12 {
+		t.Fatalf("分组快照顺序被污染: %d, %d", group.Items[0].ID, group.Items[1].ID)
+	}
+}
+
+// TestPickGroupItemManualModeIgnoresFreeClassification 验证手动模式按 ActiveItemID 返回,
+// 与免费/付费分类无关, 保持历史行为一致。
+func TestPickGroupItemManualModeIgnoresFreeClassification(t *testing.T) {
 	stubRelayEnv(t)
 	stubFreeChannels(t, map[int]bool{101: false, 102: true})
 	group := passthroughGroup(1, backoffConfig(10, 2, 30), [2]int{11, 101}, [2]int{12, 102})
@@ -106,10 +98,9 @@ func TestPickGroupItemManualModeIgnoresFreeOrdering(t *testing.T) {
 	}
 }
 
-// TestPickGroupItemFreePriorityWorksWithPreferPassthrough 验证免费分类与同协议优先叠加:
-// 先按透传偏好重排, 再把免费渠道整体前移。免费跨协议渠道会优先于付费同协议渠道,
-// 但同分类内部仍保持透传偏好(付费同协议在前)。
-func TestPickGroupItemFreePriorityWorksWithPreferPassthrough(t *testing.T) {
+// TestPickGroupItemPassthroughOrderPreservedRegardlessOfFreeStatus 验证 PreferPassthrough
+// 协议重排不受免费/付费分类影响: 同协议成员整体前移, 分类不参与重排。
+func TestPickGroupItemPassthroughOrderPreservedRegardlessOfFreeStatus(t *testing.T) {
 	stubRelayEnv(t)
 	stubFreeTypedChannels(t,
 		map[int]bool{101: true, 102: false, 103: false, 104: true},
@@ -123,15 +114,15 @@ func TestPickGroupItemFreePriorityWorksWithPreferPassthrough(t *testing.T) {
 	group := passthroughGroup(1, passthroughConfig(true),
 		[2]int{11, 101}, // free openai
 		[2]int{12, 102}, // paid anthropic
-		[2]int{13, 103}, // paid openai (higher priority than 12 after protocol reorder? keep original)
+		[2]int{13, 103}, // paid openai
 		[2]int{14, 104}, // free anthropic
 	)
 
-	// anthropic 客户端: 协议重排后顺序为 [12 paid anth, 14 free anth, 11 free openai, 13 paid openai],
-	// 免费再前移为 [14 free anth, 11 free openai, 12 paid anth, 13 paid openai]。
+	// anthropic 客户端: 协议重排后顺序为 [12 paid anth, 14 free anth, 11 free openai, 13 paid openai]。
+	// 免费分类不再参与重排, 第一个同协议成员(12, 付费)应被选中。
 	item := pickGroupItem(group, 0, llm.APIFormatAnthropicMessage)
-	if item.ID != 14 {
-		t.Fatalf("免费渠道应优先于付费渠道, 且免费分类内同协议优先, 实际选中成员 %d", item.ID)
+	if item.ID != 12 {
+		t.Fatalf("协议重排应选中第一个同协议成员(付费), 实际选中 %d", item.ID)
 	}
 }
 
