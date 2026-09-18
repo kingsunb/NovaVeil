@@ -481,7 +481,8 @@ export type ErrClass =
   | "upstream_4xx"
   | "upstream_5xx"
   | "upstream_network"
-  | "upstream_error";
+  | "upstream_error"
+  | "rounds_exhausted";
 
 export interface AttemptRecord {
   seq: number;

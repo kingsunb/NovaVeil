@@ -185,15 +185,13 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 都计入轮次并接受截止检查, 防止配置异常或上游持续脏数据把单个请求钉成无限循环。
 			rounds++
 			if limit := maxRequestRounds(relayConfig); rounds > limit {
-				err := errors.New("请求尝试轮次超限")
-				request.markFailed(err, "", nil)
+				request.markFailed(errRoundsExceeded, "", nil)
 				recordErrorLog(request)
 				rejectRequest(c, inbound, errNoAvailableChannels)
 				return
 			}
 			if requestDeadlineExceeded(relayConfig, startedAt) {
-				err := errors.New("请求总时长超限")
-				request.markFailed(err, "", nil)
+				request.markFailed(errDeadlineExceeded, "", nil)
 				recordErrorLog(request)
 				rejectRequest(c, inbound, errNoAvailableChannels)
 				return
@@ -1037,6 +1035,14 @@ var errNoAvailableChannels = errors.New("暂无可用渠道")
 // 使用与 errNoAvailableChannels 相同的 rejectRequest 路径返回 503, 避免对客户端协议层的额外协议变更。
 var errAllRequestsStopped = errors.New("服务器过载，请稍候")
 
+// errRoundsExceeded 是路由层轮次耗尽的哨兵错误: 所有成员均已试过且无可用结论,
+// 触发全局尝试上限。属于路由层耗尽而非渠道错误, 归类 rounds_exhausted, 不落库持久化。
+var errRoundsExceeded = errors.New("请求尝试轮次超限")
+
+// errDeadlineExceeded 是路由层总时长超限的哨兵错误: 请求在安全截止时间前未获得成功响应。
+// 同属路由层耗尽, 归类 rounds_exhausted, 不落库持久化。
+var errDeadlineExceeded = errors.New("请求总时长超限")
+
 // roundProxyLabel 返回本轮出口代理地址的展示形式(经 client.MaskProxySecret 打码密码段,
 // 保留用户名中 {account} 解析出的别名): 优先取解析后的生效代理, 模板解析失败时回退原始
 // 模板(打码函数对其显示占位符, 恰好提示地址非法)。
@@ -1088,6 +1094,12 @@ func recordErrorLog(request *RequestState) {
 	// 业务错误计数: 不依赖日志留存/去重/丢弃, 在投递日志前即递增,
 	// 即使队列满载丢弃该条, 失败事件仍被计入 TotalErrorCount。
 	totalErrorCount.Add(1)
+
+	// 路由层耗尽（轮次/时长超限）不是渠道错误, 不进持久化错误列表:
+	// 它是所有渠道都试过后的路由层终止, 不指向任何具体渠道问题, 落库只会刷屏挤掉真实渠道错误。
+	if request.Class == ErrClassRoundsExhausted {
+		return
+	}
 
 	classStr := string(request.Class)
 	counter, _ := errCompleteLogCount.LoadOrStore(classStr, &atomic.Int64{})

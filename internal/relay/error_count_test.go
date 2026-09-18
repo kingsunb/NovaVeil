@@ -27,3 +27,24 @@ func TestTotalErrorCountMonotonic(t *testing.T) {
 		t.Fatalf("三次 recordErrorLog 应使计数递增 3, 实际递增 %d", got)
 	}
 }
+
+// TestRoundsExhaustedSkipsPersistence 验证路由层耗尽（轮次/时长超限）不进持久化
+// 错误列表: recordErrorLog 仍递增 TotalErrorCount, 但不投递 ErrorLog 到队列。
+func TestRoundsExhaustedSkipsPersistence(t *testing.T) {
+	before := TotalErrorCount()
+	recordErrorLog(&RequestState{Class: ErrClassRoundsExhausted, Error: "请求尝试轮次超限"})
+	after := TotalErrorCount()
+	if after != before+1 {
+		t.Fatalf("rounds_exhausted 应使 TotalErrorCount 递增 1, before=%d after=%d", before, after)
+	}
+}
+
+// TestClassifyRoundsExhausted 验证哨兵错误正确归类为 rounds_exhausted。
+func TestClassifyRoundsExhausted(t *testing.T) {
+	if got := ClassifyError(errRoundsExceeded); got != ErrClassRoundsExhausted {
+		t.Fatalf("ClassifyError(errRoundsExceeded) = %q, want %q", got, ErrClassRoundsExhausted)
+	}
+	if got := ClassifyError(errDeadlineExceeded); got != ErrClassRoundsExhausted {
+		t.Fatalf("ClassifyError(errDeadlineExceeded) = %q, want %q", got, ErrClassRoundsExhausted)
+	}
+}

@@ -49,6 +49,7 @@ const (
 	ErrClassUpstream5xx     ErrClass = "upstream_5xx"     // 上游返回 5xx 状态码。
 	ErrClassUpstreamNetwork ErrClass = "upstream_network" // 网络/代理/DNS/TLS 等基础设施层错误, 不计入成员冷却。
 	ErrClassUpstream        ErrClass = "upstream_error"   // 其余上游侧错误。
+	ErrClassRoundsExhausted ErrClass = "rounds_exhausted" // 路由层耗尽（轮次/时长超限），非渠道错误，不落库持久化。
 )
 
 // AttemptOutcome 单轮尝试的结束形态。
@@ -665,6 +666,9 @@ func ClassifyError(err error) ErrClass {
 	}
 	if errors.Is(err, errMemberResponseTimeout) {
 		return ErrClassTimeout
+	}
+	if errors.Is(err, errRoundsExceeded) || errors.Is(err, errDeadlineExceeded) {
+		return ErrClassRoundsExhausted
 	}
 	if isInfrastructureError(err) {
 		return ErrClassUpstreamNetwork
