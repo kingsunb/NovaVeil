@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { FlaskConical, ListOrdered, Plus } from "lucide-react";
+import { FlaskConical, ListChecks, ListOrdered, Play, Plus, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { EVAL_PROMPT, type EvalTarget } from "@/lib/model-eval";
+import { EVAL_PROMPT, type EvalStatsSummary, type EvalTarget } from "@/lib/model-eval";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { PageToolbar } from "@/components/ui/page-toolbar";
@@ -57,6 +57,42 @@ export default function ModelEvalPage() {
   }, [channelsQuery.data]);
   const scopeTargets = useMemo(() => allTargets.filter((target) => !channelId || target.channelId === channelId), [allTargets, channelId]);
   const selectedTargets = scopeTargets.filter((target) => selectedIds.has(target.channelModelId));
+
+  const [bulkSettings, setBulkSettings] = useState({
+    skipSuccess: false,
+    skipFailure: false,
+    onlyUntested: false,
+  });
+  const statsQuery = useQuery({
+    queryKey: ["model-eval", "stats"],
+    queryFn: ({ signal }) => api.listEvalStats(signal),
+    staleTime: 0,
+    refetchInterval: 5000,
+  });
+  const statsByTarget = useMemo(() => new Map<string, EvalStatsSummary>(
+    (statsQuery.data?.items ?? []).map((stats) => [`${stats.channel_id}:${stats.model_name}`, stats] as const),
+  ), [statsQuery.data]);
+  const statsReady = statsQuery.isSuccess;
+  /** 按评估设置过滤一键评估候选；onlyUntested 时只看从未评估过的模型。 */
+  const filterBySettings = useMemo(() => (target: EvalTarget) => {
+    const stats = statsByTarget.get(`${target.channelId}:${target.modelName}`);
+    const totalCount = stats?.total_count ?? 0;
+    const successCount = stats?.success_count ?? 0;
+    const failureCount = totalCount - successCount;
+    if (bulkSettings.onlyUntested) return totalCount === 0;
+    if (bulkSettings.skipSuccess && successCount > 0) return false;
+    if (bulkSettings.skipFailure && failureCount > 0) return false;
+    return true;
+  }, [bulkSettings, statsByTarget]);
+  const freeTargets = useMemo(() => scopeTargets.filter((target) => {
+    const channel = channelsQuery.data?.find((item) => item.id === target.channelId);
+    return channel?.is_free === true;
+  }), [channelsQuery.data, scopeTargets]);
+  const freeCandidates = useMemo(() => freeTargets.filter(filterBySettings), [freeTargets, filterBySettings]);
+  const untestedTargets = useMemo(() => scopeTargets.filter((target) => {
+    const stats = statsByTarget.get(`${target.channelId}:${target.modelName}`);
+    return (stats?.total_count ?? 0) === 0;
+  }), [scopeTargets, statsByTarget]);
 
   const enqueueMut = useMutation({
     mutationFn: (channelModelIds: number[]) => api.enqueueEvals(channelModelIds),
@@ -170,33 +206,99 @@ export default function ModelEvalPage() {
               <EvalSelection key={channelId} targets={scopeTargets} selectedIds={selectedIds} onSelectionChange={setSelectedIds} disabled={busy || channelsQuery.isError} onRun={() => enqueueMut.mutate(selectedTargets.map((t) => t.channelModelId))} onHistory={showHistory} />
             )}
           </div>
-          <Card className="min-w-0 overflow-hidden">
-            <div className="flex items-center gap-2 border-b border-border/50 p-4">
-              <FlaskConical className="h-4 w-4 shrink-0 text-ink-muted" aria-hidden />
-              <h2 className="text-sm font-semibold text-ink">评估说明</h2>
-            </div>
-            <div className="p-4 sm:p-5">
-              <h3 className="text-xs font-semibold tracking-tight text-ink">本次评估题目</h3>
-              <p className="mt-2 max-w-2xl whitespace-pre-wrap break-words rounded-lg bg-ink/[0.03] p-3 text-[13px] leading-relaxed text-ink-muted">{EVAL_PROMPT}</p>
-              <ol className="mt-5 grid gap-3 sm:grid-cols-3">
-                {FLOW_STEPS.map((step, index) => (
-                  <li key={step.title} className="rounded-lg border border-border/50 bg-ink/[0.02] p-3">
-                    <div className="flex items-center gap-2">
-                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/[0.1] text-[11px] font-semibold tabular-nums text-primary-text" aria-hidden>{index + 1}</span>
-                      <span className="text-[13px] font-medium text-ink">{step.title}</span>
-                    </div>
-                    <p className="mt-1.5 text-[11px] leading-relaxed text-ink-subtle">{step.hint}</p>
-                  </li>
-                ))}
-              </ol>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/50 p-4">
-              <p className="min-w-0 text-[11px] leading-relaxed text-ink-subtle">格式合规的成功结果会自动进入排序，其余结果保留在历史，便于重测与排查。</p>
-              <Button type="button" variant="secondary" size="sm" onClick={() => changeView("queue")}>
-                <ListOrdered className="h-3.5 w-3.5" aria-hidden />查看评估队列
-              </Button>
-            </div>
-          </Card>
+          <div className="min-w-0 space-y-4">
+            <Card className="min-w-0 overflow-hidden">
+              <div className="flex items-center gap-2 border-b border-border/50 p-4">
+                <ListChecks className="h-4 w-4 shrink-0 text-ink-muted" aria-hidden />
+                <h2 className="text-sm font-semibold text-ink">一键评估</h2>
+              </div>
+              <div className="space-y-4 p-4 sm:p-5">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy || !statsReady || freeCandidates.length === 0}
+                    onClick={() => enqueueMut.mutate(freeCandidates.map((target) => target.channelModelId))}
+                  >
+                    <Play className="h-3.5 w-3.5" aria-hidden />
+                    一键评估免费渠道所有模型{statsReady ? ` (${freeCandidates.length})` : ""}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy || !statsReady || untestedTargets.length === 0}
+                    onClick={() => enqueueMut.mutate(untestedTargets.map((target) => target.channelModelId))}
+                  >
+                    <Play className="h-3.5 w-3.5" aria-hidden />
+                    一键评估未评估模型{statsReady ? ` (${untestedTargets.length})` : ""}
+                  </Button>
+                </div>
+                <div className="space-y-2 rounded-lg border border-border/50 bg-ink/[0.02] p-3">
+                  <div className="flex items-center gap-2">
+                    <SlidersHorizontal className="h-3.5 w-3.5 text-ink-muted" aria-hidden />
+                    <h3 className="text-xs font-semibold text-ink">评估设置</h3>
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-muted">
+                    <input
+                      type="checkbox"
+                      checked={bulkSettings.skipSuccess}
+                      onChange={(event) => setBulkSettings((prev) => ({ ...prev, skipSuccess: event.target.checked }))}
+                      className="h-3.5 w-3.5 shrink-0 accent-primary"
+                    />
+                    已评估成功模型不再评估
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-muted">
+                    <input
+                      type="checkbox"
+                      checked={bulkSettings.skipFailure}
+                      onChange={(event) => setBulkSettings((prev) => ({ ...prev, skipFailure: event.target.checked }))}
+                      className="h-3.5 w-3.5 shrink-0 accent-primary"
+                    />
+                    已评估失败模型不再评估
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-muted">
+                    <input
+                      type="checkbox"
+                      checked={bulkSettings.onlyUntested}
+                      onChange={(event) => setBulkSettings((prev) => ({ ...prev, onlyUntested: event.target.checked }))}
+                      className="h-3.5 w-3.5 shrink-0 accent-primary"
+                    />
+                    只评估未评估模型
+                  </label>
+                </div>
+                <p className="text-[11px] leading-relaxed text-ink-subtle">两个按钮都按当前渠道范围筛选；「一键评估免费渠道所有模型」会额外遵守上面的评估设置，「一键评估未评估模型」始终只入队从未评估过的模型。</p>
+              </div>
+            </Card>
+            <Card className="min-w-0 overflow-hidden">
+              <div className="flex items-center gap-2 border-b border-border/50 p-4">
+                <FlaskConical className="h-4 w-4 shrink-0 text-ink-muted" aria-hidden />
+                <h2 className="text-sm font-semibold text-ink">评估说明</h2>
+              </div>
+              <div className="p-4 sm:p-5">
+                <h3 className="text-xs font-semibold tracking-tight text-ink">本次评估题目</h3>
+                <p className="mt-2 max-w-2xl whitespace-pre-wrap break-words rounded-lg bg-ink/[0.03] p-3 text-[13px] leading-relaxed text-ink-muted">{EVAL_PROMPT}</p>
+                <ol className="mt-5 grid gap-3 sm:grid-cols-3">
+                  {FLOW_STEPS.map((step, index) => (
+                    <li key={step.title} className="rounded-lg border border-border/50 bg-ink/[0.02] p-3">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/[0.1] text-[11px] font-semibold tabular-nums text-primary-text" aria-hidden>{index + 1}</span>
+                        <span className="text-[13px] font-medium text-ink">{step.title}</span>
+                      </div>
+                      <p className="mt-1.5 text-[11px] leading-relaxed text-ink-subtle">{step.hint}</p>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/50 p-4">
+                <p className="min-w-0 text-[11px] leading-relaxed text-ink-subtle">格式合规的成功结果会自动进入排序，其余结果保留在历史，便于重测与排查。</p>
+                <Button type="button" variant="secondary" size="sm" onClick={() => changeView("queue")}>
+                  <ListOrdered className="h-3.5 w-3.5" aria-hidden />查看评估队列
+                </Button>
+              </div>
+            </Card>
+          </div>
         </div>
       )}
 

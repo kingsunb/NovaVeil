@@ -35,6 +35,16 @@ import (
 //     开启 AutoSync 跟随 /v1/models。
 //   - AI Horde Free：社区志愿算力，OpenAI Compatible 匿名端点；匿名 key 固定为
 //     0000000000，队列式响应较慢，不保证工具调用。
+//   - Pollinations Free：免 key OpenAI Compatible 端点，模型列表较大，
+//     AutoSync 跟随 /v1/models。
+//   - OVH AI Endpoints Free：免 key OpenAI Compatible 端点，按 IP 限流，
+//     AutoSync 跟随 /v1/models。
+//   - LLM7 Free：免 key OpenAI Compatible 聚合端点，AutoSync 跟随 /v1/models。
+//   - Kilo Gateway Free：免 key OpenAI Compatible 网关，200 req/hr/IP，
+//     AutoSync 跟随 /v1/models。
+//   - Airforce Free：免 key OpenAI Compatible 聚合端点，AutoSync 跟随 /v1/models。
+//   - G4F Space NVIDIA Free：免 key OpenAI Compatible 的 NVIDIA 代理端点，
+//     AutoSync 跟随 /v1/models。
 //
 // 其他候选（DuckDuckGo/Cloudflare Playground 等）依赖浏览器/WebSocket/专用协议，
 // 或已停服（9router 的 MiMo Free），暂不纳入。
@@ -79,6 +89,80 @@ var BuiltinFreeChannels = []model.Channel{
 			{Name: "aphrodite/TheDrummer/Cydonia-24B-v4.3"},
 			{Name: "aphrodite/TheDrummer/Skyfall-31B-v4.2"},
 			{Name: "google/gemma-4-31b"},
+		},
+	},
+	{
+		Name:     "Pollinations Free",
+		Type:     model.ChannelProviderOpenAI,
+		BaseURL:  "https://gen.pollinations.ai",
+		AutoSync: true,
+		Models: []model.ChannelModel{
+			{Name: "openai/gpt-5.4-nano"},
+			{Name: "openai/gpt-4o-mini"},
+			{Name: "tencent/hy3"},
+			{Name: "deepseek/deepseek-v4.1-flash"},
+			{Name: "qwen/qwen3.8-flash"},
+		},
+	},
+	{
+		Name:     "OVH AI Endpoints Free",
+		Type:     model.ChannelProviderOpenAI,
+		BaseURL:  "https://oai.endpoints.kepler.ai.cloud.ovh.net",
+		AutoSync: true,
+		Models: []model.ChannelModel{
+			{Name: "Mistral-Nemo-Instruct-2407"},
+			{Name: "Mistral-Small-3.2-24B-Instruct-2506"},
+			{Name: "Qwen3.6-27B"},
+			{Name: "Meta-Llama-3_3-70B-Instruct"},
+			{Name: "gpt-oss-20b"},
+		},
+	},
+	{
+		Name:     "LLM7 Free",
+		Type:     model.ChannelProviderOpenAI,
+		BaseURL:  "https://api.llm7.io",
+		AutoSync: true,
+		Models: []model.ChannelModel{
+			{Name: "DeepSeek-V4.1-Flash"},
+			{Name: "GLM-5.3-Flash"},
+			{Name: "gemini-3-flash"},
+			{Name: "gpt-5.5"},
+		},
+	},
+	{
+		Name:     "Kilo Gateway Free",
+		Type:     model.ChannelProviderOpenAI,
+		BaseURL:  "https://api.kilo.ai/api/gateway",
+		AutoSync: true,
+		Models: []model.ChannelModel{
+			{Name: "kilo-auto/free"},
+			{Name: "deepseek/deepseek-v4.1-flash"},
+			{Name: "openai/gpt-5.6-sol"},
+			{Name: "nvidia/nemotron-3-ultra-550b-a55b:free"},
+		},
+	},
+	{
+		Name:     "Airforce Free",
+		Type:     model.ChannelProviderOpenAI,
+		BaseURL:  "https://api.airforce",
+		AutoSync: true,
+		Models: []model.ChannelModel{
+			{Name: "gpt-oss-20b"},
+			{Name: "gemini-3.6-flash"},
+			{Name: "glm-5.3-flash"},
+			{Name: "kimi-k3"},
+		},
+	},
+	{
+		Name:     "G4F Space NVIDIA Free",
+		Type:     model.ChannelProviderOpenAI,
+		BaseURL:  "https://g4f.space/api/nvidia",
+		AutoSync: true,
+		Models: []model.ChannelModel{
+			{Name: "meta/llama-3.3-70b-instruct"},
+			{Name: "deepseek-ai/deepseek-r1"},
+			{Name: "qwen/qwen2.5-coder-32b-instruct"},
+			{Name: "microsoft/phi-4"},
 		},
 	},
 }
