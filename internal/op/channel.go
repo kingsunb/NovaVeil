@@ -39,6 +39,10 @@ func ChannelCreate(channel *model.Channel, ctx context.Context) error {
 		return fmt.Errorf("缺少渠道数据")
 	}
 	channel.ID = 0
+	// 用户/API 创建的渠道一律视为自定义渠道: 免费分类与内置标记只能由代码内置的数据源维护。
+	channel.IsFree = false
+	channel.Builtin = false
+	channel.OpencodeCompat = false
 	keys, err := normalizeChannelKeys(channel.Keys)
 	if err != nil {
 		return err
@@ -222,10 +226,6 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		selectFields = append(selectFields, "auto_sync")
 		updates.AutoSync = *req.AutoSync
 	}
-	if req.OpencodeCompat != nil {
-		selectFields = append(selectFields, "opencode_compat")
-		updates.OpencodeCompat = *req.OpencodeCompat
-	}
 	if req.CustomHeader != nil {
 		selectFields = append(selectFields, "custom_header")
 		updates.CustomHeader = *req.CustomHeader
@@ -370,8 +370,12 @@ func ChannelEnabled(id int, enabled bool, ctx context.Context) error {
 
 // ChannelDel 删除渠道及其模型，关联分组成员与评估排序由应用层级联清理。
 func ChannelDel(id int, ctx context.Context) error {
-	if _, ok := channelCache.Get(id); !ok {
+	channel, ok := channelCache.Get(id)
+	if !ok {
 		return fmt.Errorf("渠道不存在，请刷新页面后重试")
+	}
+	if channel.Builtin {
+		return fmt.Errorf("内置渠道不允许删除；如不需要可先停用")
 	}
 	var modelIDs []int
 	if err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {

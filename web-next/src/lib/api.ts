@@ -595,6 +595,8 @@ export function normalizeChannelOne(raw: unknown): Channel | null {
   return {
     ...channel,
     key: typeof channel.key === "string" ? channel.key : "",
+    is_free: typeof channel.is_free === "boolean" ? channel.is_free : false,
+    builtin: typeof channel.builtin === "boolean" ? channel.builtin : false,
     fixed_reply:
       typeof channel.fixed_reply === "string" ? channel.fixed_reply : "",
     keys: Array.isArray(channel.keys) ? channel.keys : [],

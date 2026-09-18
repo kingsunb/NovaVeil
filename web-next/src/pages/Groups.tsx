@@ -112,7 +112,7 @@ export default function GroupsPage() {
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["groups"],
     queryFn: api.listGroups,
-    // 兜底轮询（移植自 NovaVeil_api）：保存后的 refetch 延迟/丢失时最迟 30s 自愈。
+    // 兜底轮询：保存后的 refetch 延迟/丢失时最迟 30s 自愈。
     refetchInterval: 30_000,
   });
   const { data: channels } = useQuery({
@@ -534,7 +534,7 @@ function GroupEditor({
   // 都稳定（saved:id / new:n / auto:n），因此添加后即可指定，保存时再解析成
   // 后端 id 调 setActive —— 保存才真正生效。
   const [activeUid, setActiveUid] = useState<string | null>(null);
-  // Tab 切分「成员」与「路由策略」两个独立页面，对齐 NovaVeil_api 编辑器布局。
+  // Tab 切分「成员」与「路由策略」两个独立页面。
   const [tab, setTab] = useState<"members" | "relay">("members");
   // 自动匹配：以分组名称为关键词，自动将名称包含该关键词的渠道模型加入分组成员。
   const [autoMatch, setAutoMatch] = useState(false);
@@ -1498,7 +1498,7 @@ function ChannelModelPicker({
   }) => void;
 }) {
   const [search, setSearch] = useState("");
-  // 渠道默认折叠，点击展开才显示其下模型（对齐 NovaVeil_api 的 Accordion 行为）。
+  // 渠道默认折叠，点击展开才显示其下模型。
   // 多个渠道可同时展开；搜索时自动展开命中渠道，避免折叠态下看不到匹配模型。
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
 
@@ -1583,7 +1583,7 @@ function ChannelModelPicker({
               key={channel.id}
               className="overflow-hidden rounded-md border border-border"
             >
-              {/* 渠道头：点击展开/折叠模型（默认折叠，对齐 NovaVeil_api） */}
+              {/* 渠道头：点击展开/折叠模型（默认折叠） */}
               <button
                 type="button"
                 onClick={() => toggleChannel(channel.id)}

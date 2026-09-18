@@ -23,6 +23,8 @@ function makeChannel(overrides: Partial<Channel> = {}): Channel {
     name: "openai-prod",
     type: "openai",
     enabled: true,
+    is_free: false,
+    builtin: false,
     base_url: "",
     key: "",
     keys: [],

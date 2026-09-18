@@ -223,6 +223,45 @@ describe("<ChannelsPage />", () => {
     expect(screen.getByText("anthropic-test")).toBeInTheDocument();
   });
 
+  it("免费分类筛选：徽标、免费/付费过滤", async () => {
+    const user = userEvent.setup();
+    const paid = { ...sampleChannel, id: 1, name: "openai-prod", is_free: false };
+    const free = {
+      ...sampleChannel,
+      id: 2,
+      name: "free-hf",
+      is_free: true,
+      tags: ["free", "hf"],
+    };
+    mockList([paid, free]);
+    render(<ChannelsPage />, { wrapper: Wrapper });
+
+    await waitFor(() => screen.getByText("openai-prod"));
+    expect(screen.getByText("free-hf")).toBeInTheDocument();
+    // 免费渠道卡片有「免费」徽标。
+    const freeCard = screen.getByText("free-hf").closest("article")!;
+    expect(within(freeCard).getByText("免费")).toBeInTheDocument();
+
+    // 只看免费：付费渠道消失，免费渠道保留。
+    await user.click(screen.getByRole("button", { name: "免费" }));
+    await waitFor(() => {
+      expect(screen.queryByText("openai-prod")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("free-hf")).toBeInTheDocument();
+
+    // 只看付费：免费渠道消失，付费渠道保留。
+    await user.click(screen.getByRole("button", { name: "付费" }));
+    await waitFor(() => {
+      expect(screen.queryByText("free-hf")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("openai-prod")).toBeInTheDocument();
+
+    // 回到全部分类。
+    await user.click(screen.getByRole("button", { name: "全部分类" }));
+    await waitFor(() => screen.getByText("free-hf"));
+    expect(screen.getByText("openai-prod")).toBeInTheDocument();
+  });
+
   it("点击删除按钮弹出确认对话框", async () => {
     const user = userEvent.setup();
     mockList([sampleChannel]);
@@ -542,6 +581,36 @@ describe("<ChannelsPage /> 渠道优先级行内编辑", () => {
       "编辑渠道 zeta-ch",
       "编辑渠道 mid-ch",
       "编辑渠道 low-ch",
+    ]);
+  });
+
+  it("自定义排序：内置固定提供商默认排在最后", async () => {
+    const builtinHigh = {
+      ...sampleChannel,
+      id: 31,
+      name: "builtin-free",
+      sort: 100,
+      builtin: true,
+      is_free: true,
+    };
+    const customLow = {
+      ...sampleChannel,
+      id: 32,
+      name: "custom-low",
+      sort: -100,
+      builtin: false,
+    };
+    mockList([builtinHigh, customLow]);
+    render(<ChannelsPage />, { wrapper: Wrapper });
+
+    await waitFor(() => screen.getByText("custom-low"));
+
+    const names = screen
+      .getAllByRole("button", { name: /编辑渠道/ })
+      .map((el) => el.getAttribute("aria-label"));
+    expect(names).toEqual([
+      "编辑渠道 custom-low",
+      "编辑渠道 builtin-free",
     ]);
   });
 

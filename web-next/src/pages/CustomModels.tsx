@@ -54,7 +54,7 @@ export default function CustomModelsPage() {
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["channels"],
     queryFn: api.listChannels,
-    // 兜底轮询（移植自 NovaVeil_api）：保存后的 refetch 延迟/丢失时最迟 30s 自愈。
+    // 兜底轮询：保存后的 refetch 延迟/丢失时最迟 30s 自愈。
     refetchInterval: 30_000,
   });
   const rows = useMemo(() => {
@@ -441,6 +441,8 @@ function CustomModelEditor({
           name: name.trim(),
           type: "custom",
           enabled: true,
+          is_free: false,
+          builtin: false,
           base_url: "",
           key: "",
           keys: [],

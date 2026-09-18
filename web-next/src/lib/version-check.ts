@@ -10,7 +10,7 @@ import { api } from "@/lib/api";
  *  - 旧页面对新后端调 API，字段对不上导致功能异常；
  *  - 懒加载路由去取已被新构建删除的 chunk，直接报错（见 lib/app-recovery）。
  *
- * 方案（借鉴 NovaVeil_api 的版本一致性检测，去掉了 SW 层 —— 本项目无 SW，
+ * 方案（版本一致性检测，去掉了 SW 层 —— 本项目无 SW，
  * index.html 由后端下发 no-cache，普通 reload 即可拿到新前端）：
  *  - build.sh 把 VERSION/COMMIT 经 VITE_APP_* 注入前端（vite define）；
  *  - 后端提供轻量 /update/build-info（只读 ldflags 常量，无统计聚合）；

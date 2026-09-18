@@ -45,6 +45,8 @@ type Channel struct {
 	Name                   string                       `json:"name" gorm:"unique;not null"`                                    // 渠道名称。
 	Type                   ChannelProvider              `json:"type"`                                                           // 上游服务提供方。
 	Enabled                bool                         `json:"enabled"`                                                        // 渠道是否可用。注意不可加 default 标签, 否则插入 false 会被数据库默认值覆盖为 true。
+	IsFree                 bool                         `json:"is_free" gorm:"not null;default:false"`                          // 免费渠道分类: 内置免费渠道恒为 true, 自定义/用户渠道为 false; 免费渠道在故障转移中优先选择。
+	Builtin                bool                         `json:"builtin" gorm:"not null;default:false"`                          // 是否内置固定渠道: 由代码维护, 启动时自动补建; 用户渠道恒为 false.
 	BaseURL                string                       `json:"base_url"`                                                       // 唯一的上游基础地址。
 	Key                    string                       `json:"key,omitempty"`                                                  // 旧式单一上游访问凭据; 管理列表默认清空。
 	KeyMasked              string                       `json:"key_masked,omitempty" gorm:"-"`                                  // 旧式单 Key 的展示掩码, 不持久化。
@@ -99,7 +101,6 @@ type ChannelUpdateRequest struct {
 	FixedReply             *string                       `json:"fixed_reply,omitempty"`               // 新的固定回复文案, 仅 type=custom 渠道。
 	Proxy                  *bool                         `json:"proxy,omitempty"`                     // 新的代理开关。
 	AutoSync               *bool                         `json:"auto_sync,omitempty"`                 // 新的自动同步开关。
-	OpencodeCompat         *bool                         `json:"opencode_compat,omitempty"`           // 新的 opencode 兼容请求头开关; nil 表示不修改。
 	CustomHeader           *[]CustomHeader               `json:"custom_header,omitempty"`             // 新的自定义 Header。
 	ChannelProxy           *string                       `json:"channel_proxy,omitempty"`             // 新的渠道代理地址。
 	ParamOverride          *string                       `json:"param_override,omitempty"`            // 新的参数覆盖配置。

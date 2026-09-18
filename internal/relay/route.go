@@ -74,8 +74,9 @@ func channelDisabledForRouting(item model.GroupItem) bool {
 // 各入口一律跳过, 派发层另有兜底检查覆盖粘合等残余旁路; 缺少密钥不在此判断, 由调用方作为一轮失败上报。
 // 可选参数 clientFormat 为客户端协议格式: 分组开启 PreferPassthrough 且携带非空格式时,
 // 渠道协议与客户端一致的成员整体排到候选最前(各自内部仍按优先级升序), 同协议无健康成员时自然回退跨协议成员;
-// 开关关闭或未携带格式时不做任何重排, 行为与历史版本完全一致。排列只改变扫描次序,
-// 冷却跳过/到期待探测/CLOSED 首选等判定逻辑复用同一遍扫描, 熔断、半开探测、粘合与紧急兜底语义不变。
+// 免费渠道分类(IsFree)在协议重排后再次稳定前移: 免费渠道整体优先于付费渠道, 同分类内保持原有扫描顺序,
+// 从而让免费渠道在故障转移中优先被选择。开关关闭或未携带格式时协议重排不做, 免费渠道依然前移。
+// 排列只改变扫描次序, 冷却跳过/到期待探测/CLOSED 首选等判定逻辑复用同一遍扫描, 熔断、半开探测、粘合与紧急兜底语义不变。
 // 同组仍存在 CLOSED 成员时, 扫描中遇到的冷却到期成员经 ensureProbeLocked 异步探测后立即返回 CLOSED 成员,
 // 业务请求不被阻塞。全部成员冷却且存在到期成员时就地进入恢复流程: 整批原子切换 HALF_OPEN 后并行探测,
 // 返回最先成功的候选成员交由调用方发起业务二次确认; 该调用阻塞至探测有结论, 探测上下文独立于请求生命周期。
@@ -96,7 +97,9 @@ func pickGroupItem(group model.Group, exclude int, clientFormat ...llm.APIFormat
 	}
 
 	// 候选重排在加锁前完成: 只读分组快照与渠道缓存, 不与路由状态竞争。
-	items := passthroughOrderedItems(group, clientFormat)
+	// 先按「优先透传」做协议重排, 再对结果做「免费渠道优先」的稳定划分:
+	// 免费渠道整体排在付费渠道前, 各自内部保持上一步的扫描顺序。
+	items := freePriorityOrderedItems(passthroughOrderedItems(group, clientFormat))
 
 	routeMu.Lock()
 	route := groupRouteLocked(group)
@@ -199,6 +202,38 @@ func passthroughOrderedItems(group model.Group, clientFormat []llm.APIFormat) []
 		return group.Items
 	}
 	return append(native, other...)
+}
+
+// freePriorityOrderedItems 返回故障转移模式的候选扫描顺序: 免费渠道(IsFree=true)整体前移,
+// 付费渠道跟在后面, 各自内部保持传入顺序不变(已含原有优先级/协议重排)。全部同分类、
+// 无渠道关联或渠道查询失败时原样返回, 不产生任何重排开销。
+func freePriorityOrderedItems(items []model.GroupItem) []model.GroupItem {
+	free := make([]model.GroupItem, 0, len(items))
+	paid := make([]model.GroupItem, 0, len(items))
+	for _, item := range items {
+		if itemIsFreeChannel(item) {
+			free = append(free, item)
+		} else {
+			paid = append(paid, item)
+		}
+	}
+	if len(free) == 0 || len(paid) == 0 {
+		return items
+	}
+	return append(free, paid...)
+}
+
+// itemIsFreeChannel 报告成员是否指向已标记为免费的渠道。引用成员或渠道查询失败时
+// 无法判定免费属性, 按非免费处理以保持保守行为。
+func itemIsFreeChannel(item model.GroupItem) bool {
+	if item.ChannelModel == nil {
+		return false
+	}
+	channel, err := channelLookupFunc(item.ChannelModel.ChannelID)
+	if err != nil {
+		return false
+	}
+	return channel.IsFree
 }
 
 // itemMatchesClientFormat 报告成员渠道的原生协议是否与客户端一致(即可整包透传):

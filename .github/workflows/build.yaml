@@ -80,7 +80,7 @@ jobs:
           docker compose -f docker-compose.local.yml config --quiet
 
       - name: Test frontend
-        # 构建前先跑 vitest：前端回归在进入 Docker 构建前就失败（借鉴 NovaVeil_api 3e4e815）。
+        # 构建前先跑 vitest：前端回归在进入 Docker 构建前就失败。
         working-directory: web-next
         run: |
           pnpm install --frozen-lockfile

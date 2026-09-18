@@ -62,6 +62,8 @@ function emptyDraft(): Draft {
     name: "",
     type: "openai",
     enabled: true,
+    is_free: false,
+    builtin: false,
     base_url: "",
     key: "",
     // 新建渠道默认展示一个空 Key 输入行：用户可直接填写，也可留空提交
@@ -148,7 +150,14 @@ function buildChannelUpdateRequest(
   original: Channel,
   draft: Draft,
 ): ChannelUpdateRequest {
-  const { key: legacyKey, keys: draftKeys, ...fields } = draft;
+  const {
+    key: legacyKey,
+    keys: draftKeys,
+    is_free: _isFree,
+    builtin: _builtin,
+    opencode_compat: _opencodeCompat,
+    ...fields
+  } = draft;
   const request = {
     ...fields,
     id: original.id,
@@ -2179,20 +2188,6 @@ function AdvancedTab({
           onCheckedChange={(v) => update("proxy", v)}
         />
       </div>
-
-      <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
-        <div>
-          <p className="text-sm font-medium text-ink">opencode 兼容头</p>
-          <p className="text-xs text-ink-muted">
-            注入 x-opencode-session 会话级稳定 UUID，兼容 opencode / Codex 等客户端的会话路由
-          </p>
-        </div>
-        <Switch
-          checked={draft.opencode_compat}
-          onCheckedChange={(v) => update("opencode_compat", v)}
-        />
-      </div>
-
       <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
         <div>
           <p className="text-sm font-medium text-ink">完全渠道透传</p>

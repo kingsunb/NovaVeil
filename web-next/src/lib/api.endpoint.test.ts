@@ -93,6 +93,8 @@ describe("api 关键 endpoint 路径", () => {
       name: "x",
       type: "openai",
       enabled: true,
+      is_free: false,
+      builtin: false,
       base_url: "https://x",
       key: "",
       keys: [],

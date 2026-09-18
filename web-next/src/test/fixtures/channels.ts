@@ -10,6 +10,8 @@ export const sampleChannel: Channel = {
   name: "openai-prod",
   type: "openai",
   enabled: true,
+  is_free: false,
+  builtin: false,
   base_url: "https://api.example.com",
   key: "",
   key_masked: "sk-N…ABCD",

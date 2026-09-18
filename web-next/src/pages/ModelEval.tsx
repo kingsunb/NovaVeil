@@ -39,15 +39,22 @@ export default function ModelEvalPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [detailId, setDetailId] = useState<number | null>(null);
 
-  const allTargets = useMemo<EvalTarget[]>(() => (channelsQuery.data ?? []).flatMap((channel) =>
-    channel.enabled ? channel.models.map((model) => ({
-      channelId: channel.id,
-      channelName: channel.name,
-      channelType: channel.type,
-      channelModelId: model.id,
-      modelName: model.name,
-    })) : [],
-  ), [channelsQuery.data]);
+  const allTargets = useMemo<EvalTarget[]>(() => {
+    // 渠道按自定义排序（sort 降序、同值按名称兜底）排列，与渠道列表默认视图一致：
+    // 优先级（sort 值）越高越靠上，避免「当前评估」里渠道顺序与渠道管理页不一致。
+    const channels = [...(channelsQuery.data ?? [])].sort(
+      (a, b) => (b.sort ?? 0) - (a.sort ?? 0) || a.name.localeCompare(b.name),
+    );
+    return channels.flatMap((channel) =>
+      channel.enabled ? channel.models.map((model) => ({
+        channelId: channel.id,
+        channelName: channel.name,
+        channelType: channel.type,
+        channelModelId: model.id,
+        modelName: model.name,
+      })) : [],
+    );
+  }, [channelsQuery.data]);
   const scopeTargets = useMemo(() => allTargets.filter((target) => !channelId || target.channelId === channelId), [allTargets, channelId]);
   const selectedTargets = scopeTargets.filter((target) => selectedIds.has(target.channelModelId));
 

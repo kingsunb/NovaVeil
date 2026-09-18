@@ -8,7 +8,7 @@ import type { Channel } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
- * PriorityInput 渠道优先级行内编辑（移植自 NovaVeil_api 的 QuickSortControl）：
+ * PriorityInput 渠道优先级行内编辑：
  *  - 加减按钮走防抖保存（连续点击仅保留最终值），失焦/回车立即提交；
  *  - 保存请求经串行队列，避免同渠道并发补丁乱序覆盖；
  *  - 乐观更新写 ["channels"] 缓存，失败回滚快照并提示，之后 invalidate 对齐服务端；

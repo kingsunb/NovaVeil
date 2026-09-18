@@ -53,6 +53,7 @@ import { ChannelEditor } from "./channels/channel-editor";
 
 type Filter = "all" | "on" | "off";
 type ProxyFilter = "all" | "on" | "off";
+type FreeFilter = "all" | "free" | "paid";
 type Sort = "custom" | "name" | "status" | "models";
 
 export default function ChannelsPage() {
@@ -60,6 +61,7 @@ export default function ChannelsPage() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [proxyFilter, setProxyFilter] = useState<ProxyFilter>("all");
+  const [freeFilter, setFreeFilter] = useState<FreeFilter>("all");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   // 默认按优先级降序（同值按名称兜底），与渠道编辑器里的优先级联动；
   // 优先级允许重复、零值与负值，相同数值按渠道名称字母序排列。
@@ -77,7 +79,7 @@ export default function ChannelsPage() {
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["channels"],
     queryFn: api.listChannels,
-    // 兜底轮询（移植自 NovaVeil_api）：保存后的 invalidate refetch 若因弱网
+    // 兜底轮询：保存后的 invalidate refetch 若因弱网
     // 延迟或丢失，列表最迟 30s 自动与后端对齐。
     refetchInterval: 30_000,
   });
@@ -185,6 +187,13 @@ export default function ChannelsPage() {
         proxyFilter === "all" ? true : proxyFilter === "on" ? c.proxy : !c.proxy,
       )
       .filter((c) =>
+        freeFilter === "all"
+          ? true
+          : freeFilter === "free"
+            ? c.is_free
+            : !c.is_free,
+      )
+      .filter((c) =>
         selectedTags.length === 0
           ? true
           : selectedTags.every((t) => (c.tags ?? []).includes(t)),
@@ -197,14 +206,18 @@ export default function ChannelsPage() {
       )
       .sort((a, b) => {
         if (sort === "custom")
-          return (b.sort ?? 0) - (a.sort ?? 0) || a.name.localeCompare(b.name);
+          return (
+            Number(a.builtin) - Number(b.builtin) ||
+            (b.sort ?? 0) - (a.sort ?? 0) ||
+            a.name.localeCompare(b.name)
+          );
         if (sort === "name") return a.name.localeCompare(b.name);
         if (sort === "status")
           return Number(b.enabled) - Number(a.enabled) ||
             a.name.localeCompare(b.name);
         return (b.models?.length ?? 0) - (a.models?.length ?? 0);
       });
-  }, [data, search, filter, proxyFilter, sort, selectedTags]);
+  }, [data, search, filter, proxyFilter, freeFilter, sort, selectedTags]);
 
   async function onExport() {
     try {
@@ -326,6 +339,16 @@ export default function ChannelsPage() {
                 { value: "all", label: "全部" },
                 { value: "on", label: "已代理" },
                 { value: "off", label: "未代理" },
+              ]}
+            />
+            <SegmentedControl
+              aria-label="渠道分类"
+              value={freeFilter}
+              onChange={setFreeFilter}
+              options={[
+                { value: "all", label: "全部分类" },
+                { value: "free", label: "免费" },
+                { value: "paid", label: "付费" },
               ]}
             />
           </>
@@ -460,6 +483,8 @@ export default function ChannelsPage() {
               <header className="flex items-start justify-between gap-2">
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
                   <span className="font-semibold text-ink">{c.name}</span>
+                  {c.is_free && <Pill tone="success">免费</Pill>}
+                  {c.builtin && <Pill tone="neutral">内置</Pill>}
                   {c.tags?.map((t) => (
                     <Pill key={t} tone="info">
                       {t}

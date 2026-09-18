@@ -75,6 +75,10 @@ export interface Channel {
   name: string;
   type: ChannelProvider;
   enabled: boolean;
+  /** 免费渠道分类：内置免费渠道恒为 true，用户/自定义渠道恒为 false。 */
+  is_free: boolean;
+  /** 是否内置固定渠道：由代码维护，启动时自动补建。 */
+  builtin: boolean;
   base_url: string;
   key: string;
   key_masked?: string;
@@ -112,8 +116,6 @@ export interface ChannelUpdateRequest {
   fixed_reply?: string;
   proxy?: boolean;
   auto_sync?: boolean;
-  /** opencode 兼容请求头开关；nil 表示不修改。 */
-  opencode_compat?: boolean;
   custom_header?: CustomHeader[];
   channel_proxy?: string;
   param_override?: string;

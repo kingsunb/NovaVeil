@@ -65,9 +65,7 @@ const (
 	MaxHeaderTemplateValueLen    = 2048 // 单个 Header 值最大长度。
 )
 
-// DefaultHeaderTemplates 出厂内置模板, 目前含 codex 与 opencode 两项; 用户可在设置页增删改。
-// opencode 模板仅含静态请求头; x-opencode-session 由后端 OpencodeCompat 机制按会话动态注入,
-// 不在此处声明, 避免与运行期注入逻辑重复。
+// DefaultHeaderTemplates 出厂内置模板, 目前含 codex 一项; 用户可在设置页增删改。
 func DefaultHeaderTemplates() []HeaderTemplate {
 	return []HeaderTemplate{
 		{
@@ -78,13 +76,6 @@ func DefaultHeaderTemplates() []HeaderTemplate {
 				{HeaderKey: "content-type", HeaderValue: "application/json"},
 				{HeaderKey: "originator", HeaderValue: "codex-tui"},
 				{HeaderKey: "user-agent", HeaderValue: "codex-tui/0.154.0 (Windows 10.0.26200; x86_64) WindowsTerminal (codex-tui; 0.154.0)"},
-			},
-		},
-		{
-			Name: "opencode",
-			Headers: []CustomHeader{
-				{HeaderKey: "x-opencode-client", HeaderValue: "desktop"},
-				{HeaderKey: "User-Agent", HeaderValue: "opencode/1.18.31"},
 			},
 		},
 	}
@@ -124,8 +115,8 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyMaskConfig, Value: defaultMaskConfigJSON()},                                       // 脱敏配置默认全关(全局关/规则全关/无自定义词)
 		{Key: SettingKeyModelFilter, Value: ""},                                                           // 全局模型过滤默认为空, 表示不过滤
 		{Key: SettingKeyClientStatMaxCount, Value: strconv.Itoa(DefaultClientStatMaxCount)},               // 调用客户端统计默认保留 1 万条
-		{Key: SettingKeyProxyPool, Value: "[]"},                                                              // 代理池默认为空
-		{Key: SettingKeyConvTrace, Value: "0"},                                                               // 协议转换追踪默认关闭
+		{Key: SettingKeyProxyPool, Value: "[]"},                                                           // 代理池默认为空
+		{Key: SettingKeyConvTrace, Value: "0"},                                                            // 协议转换追踪默认关闭
 	}
 }
 
