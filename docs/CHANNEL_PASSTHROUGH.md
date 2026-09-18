@@ -1,6 +1,6 @@
 # 完全渠道透传 (Complete Channel Passthrough)
 
-> 本文档描述完全渠道透传的**当前运行机制**（事实）。决策理由、备选方案与参考实现见 [Agent Note](../.agents/notes/implemented/feature/2026-09-11-complete-channel-passthrough.md)。前端开关待补。
+> 本文档描述完全渠道透传的**当前运行机制**（事实）。决策理由、备选方案与参考实现见 [Agent Note](../.agents/notes/implemented/feature/2026-09-11-complete-channel-passthrough.md)。前端开关已实现（渠道编辑器「完全渠道透传」开关，见 web-next/src/pages/channels/channel-editor.tsx）。
 
 ## 机制
 
@@ -36,7 +36,7 @@
 
 ## Header 透传（独立机制）
 
-`relay/channel/api_request.go` 中实现：`"*"` 透传全部客户端请求头；`"re:<regex>"` 透传正则匹配的请求头；跳过逐跳头、凭据头（authorization/x-api-key）、cookie、host 等。
+自定义头透传通过渠道的 `CustomHeader` 实现：`internal/helper/fetch.go` 的 `applyCustomHeaders` 将自定义头写入上游请求（受保护的凭据头不覆盖真实渠道凭据）；自定义头值支持 `{client_header:xxx}` 占位符，`internal/relay/channel.go` 在构造请求时将该片段替换为客户端请求头 `xxx` 的实际值。
 
 ## applyChannelConfig 在透传下的行为
 
@@ -84,6 +84,6 @@
 7. **custom 渠道**：`PassThroughBodyEnabled` 对 custom（固定回复）渠道无效。
 8. **Gemini / Volcengine 渠道**：`buildOutbound` 对这两种渠道硬编码 `return outbound, false, err`。改为 `return outbound, passthrough, err` 不会出错（透传下不用于 TransformResponse），但 Gemini 上游通常不支持 OpenAI/Anthropic 协议，开了也没意义。
 
-## 前端（待补）
+## 前端
 
-渠道编辑表单需添加 `pass_through_body_enabled` 开关：位置在渠道编辑弹窗高级设置区域；标签"完全渠道透传"；说明"启用后该渠道接受任意客户端协议，请求和响应原样转发至上游，不做协议转换。适用于上游为多协议网关的场景。"
+渠道编辑器（`web-next/src/pages/channels/channel-editor.tsx`）已实现「完全渠道透传」开关，位于高级设置区域，绑定 `pass_through_body_enabled` 字段，随保存写入渠道配置。

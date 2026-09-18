@@ -296,9 +296,9 @@
 
 1. 请求头模板新增 opencode 模板，其静态请求头包含：
    - `x-opencode-client`: `desktop`
-   - `User-Agent`: `opencode/1.18.30`
+   - `User-Agent`: `opencode/1.18.31`
 2. opencode 模板需覆盖「请求会话 id 注入」：即 `x-opencode-session`（会话级稳定 UUID），该值由后端的会话 id 注入能力生成，属于动态投值而非模板静态内容。
-3. codex 模板的 User-Agent 版本号由 `0.147.0` 更新为 `0.153.4`（含 User-Agent 值内所有出现的版本号）。
+3. codex 模板的 User-Agent 版本号由 `0.147.0` 更新为 `0.154.0`（含 User-Agent 值内所有出现的版本号）。
 
 ### 边界（不做）
 

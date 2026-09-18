@@ -8,7 +8,7 @@ Status: implemented
 
 ## 决定
 
-把引擎已产出的命中明细接通到日志详情，**首期只展示规则标签 + 占位符安全摘要，不下发/不持久化/不展示命中原文 original**（实施边界修订，见下）：
+把引擎已产出的命中明细接通到日志详情，**首期只展示规则标签 + 占位符安全摘要，不下发/不持久化/不展示命中原文 original**（实施边界修订，见下；**该边界已于 2026-09-17 被 [翻转](./2026-09-17-mask-match-original-display.md)**）：
 
 1. `applyRequestMask` 返回 `[]mask.Match`（开关关闭/未命中时返回空明细，零额外展示数据）。
 2. `RequestState` 增加 `mask_matches` 字段，元素为 `MaskMatch{Label, Placeholder}`——**不含 Original**。与预览接口 `/api/v1/mask/test` 的 `maskTestMatch`（仍保留 original）类型分离：预览是管理员主动测试可看原文，日志命中明细首期不下发原文。
@@ -16,7 +16,7 @@ Status: implemented
 4. 前端 `MaskMatches` 组件在请求体面板内增加"脱敏命中"区：每条一行（规则标签 Pill + 占位符），**不展示原文、不提供展开入口**。无命中不渲染。
 5. 持久化错误日志：`model.ErrorLog` 的 `MaskMatches` TEXT 字段只存 label+placeholder，旧记录空数组天然兼容无需迁移；命中明细保留策略与完整请求体配额对齐。
 
-不变项：不把原始请求体写回 body、不改发往上游内容、不新增明文恢复接口、跨轮占位符复用与 `StreamRestorer` 逻辑全部现状保留。详细方案见 [docs/脱敏开发/07-日志详情命中明细.md](../../../docs/脱敏开发/07-日志详情命中明细.md)。
+不变项：不把原始请求体写回 body、不改发往上游内容、不新增明文恢复接口、跨轮占位符复用与 `StreamRestorer` 逻辑全部现状保留。详细方案见 [docs/脱敏开发/07-日志详情命中明细.md](../../../../docs/脱敏开发/07-日志详情命中明细.md)。
 
 ## 实施边界修订：为什么不展示 original
 
@@ -34,12 +34,14 @@ Status: implemented
 - **展示原文（弱化/展开）** — 初版提议；否掉因为命中原文是敏感数据，日志链路展示原文扩大暴露面，与"日志只存脱敏后内容"红线有张力。改为只存 label+placeholder。
 - **新增请求体明文恢复接口** — 最强论据是信息最全；否掉因为扩大攻击面，违反凭据红线，命中明细随状态流下发已足够且不新增明文接口。
 
-## 验证
-
-`internal/relay/state_json_test.go` 的 `TestRequestStateJSONMaskMatches` 验证命中明细序列化只含 label/placeholder、不含 original，无命中时 omitempty 不出现。`web-next/src/components/logs/MaskMatches.test.tsx` 验证前端命中区只渲染规则标签 + 占位符、不提供「显示原文」入口。`go test ./internal/relay/...`、`pnpm typecheck`、`pnpm vitest run` 全绿（504 用例）。
-
 ## 后果
+
+> **已翻转**：本节「不携带 original / 不展示原文」的后果已随 [2026-09-17 翻转](./2026-09-17-mask-match-original-display.md) 失效；命中明细现下发有界原文片段（label + original + placeholder）。保留本节为历史因果。
 
 - **收益**：管理员在日志详情看到"哪个占位符来自哪条规则"，规则误报调优与审计不再靠猜；命中明细随状态流实时下发，无需额外 API；MaskMatch 不携带 original 使日志链路天然不含原文，即使前端被改也无法展示。
 - **代价与已知上限**：日志命中明细不展示原文，定位"具体命中原文内容"需到预览接口（mask test）复测——预览是管理员主动测试场景，可看原文，与日志解耦。重访信号：若审计频繁需要"从日志直接看命中原文"，可评估是否为日志原文展示单独立项安全决策（需凭据红线评审），当前边界修订优先数据最小化。
 - **SSE 载荷**：命中明细通常几十条以内且只含 label+placeholder，体积可控；进程内状态终态后按 `maxFinished`（200）裁剪。旧版本进程/旧记录字段缺省为空，前端与反序列化按可选处理，天然兼容。
+
+## 验证
+
+`internal/relay/state_json_test.go` 的 `TestRequestStateJSONMaskMatches` 验证命中明细序列化只含 label/placeholder、不含 original，无命中时 omitempty 不出现。`web-next/src/components/logs/MaskMatches.test.tsx` 验证前端命中区只渲染规则标签 + 占位符、不提供「显示原文」入口。`go test ./internal/relay/...`、`pnpm typecheck`、`pnpm vitest run` 全绿（504 用例）。

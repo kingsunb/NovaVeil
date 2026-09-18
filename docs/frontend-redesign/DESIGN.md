@@ -1,5 +1,7 @@
 # NovaVeil 前端美化设计稿 v2
 
+> ⚠️ **已归档历史快照**：本文形成于 2026-09-13，定位为原型 v2 设计规范，生产已改用 [`web-next/DESIGN.md`](../../web-next/DESIGN.md)。作为一次性工作产物保留备查，**不再维护**，内容不代表当前实现。当前权威口径见 [FOLLOW_UP.md](FOLLOW_UP.md)（前端生产实施）与 [`web-next/DESIGN.md`](../../web-next/DESIGN.md)（设计）。
+
 > 配套 `PLAN.md` + `AUDIT.md`。本文定义**设计令牌、组件规范、页面线框**，原型 `prototype/` v2 据此实现。
 > 设计风格：**macOS 磨砂玻璃简白风** — 浅色为默认、vibrancy 材质、极简留白、Apple system colors。
 > 适用范围说明（2026-09-13）：本文的令牌、页面能力与审计结论针对静态原型，不代表当前生产实现或生产验收结果。生产差异与后续美化工作见 [FOLLOW_UP.md](FOLLOW_UP.md)。

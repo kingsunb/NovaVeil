@@ -16,8 +16,8 @@ NovaVeil 本身就是 LLM API 网关，客户端的 `base_url` 已指向它，�
 2. **Fail-Closed 严格熔断**：脱敏管线未捕获异常或请求体超限时立即阻断，绝不放行未脱敏明文出网。
 3. **占位符 `{{LABEL_6位辅音}}`**：后缀 6 位纯辅音随机串（`crypto/rand`），消除大模型对十六进制做变异算术的诱因；会话级滑动窗口复用保证多轮一致。
 4. **流式中途无事件返回空**：严禁空字节导致 chunked 语法提前断连。
-5. **凭据只存哈希**：API_KEY/TOKEN/SECRET/JWT 在事件库恒只存 preview + sha256 摘要，导出剔除原文。
-6. **默认全关，不可退化**：`MaskConfig.Enabled` 默认 `false`，setting 行不存在即视为关（无需初始化写入默认行）；分组开关 `GroupRelayConfig.MaskEnabled` 零值 `false`，旧分组 JSON 反序列化自动得关，无数据迁移；单规则开关出厂恒全 `false`。三层任一为 `false` 即整条链路跳过，关闭时热路径仅多一次 bool 判断，零开销。
+5. **凭据只存哈希**：API_KEY/TOKEN/SECRET/JWT 在事件库恒只存 preview + sha256 摘要，导出剔除原文。（注：此「事件库 + preview/sha256 摘要」管线实际未落地；命中明细对原文的持久化已由 [2026-09-17 翻转](./2026-09-17-mask-match-original-display.md) 改为存 label + original + placeholder。本条保留为历史约束表述。）
+6. **默认全关，不可退化**：`MaskConfig.Enabled` 默认 `false`，setting 行不存在即视为关（无需初始化写入默认行）；分组开关 `GroupRelayConfig.MaskEnabled` 零值 `false`，旧分组 JSON 反序列化自动得关，无数据迁移；单规则开关出厂恒全 `false`。三层任一为 `false` 即整条链路跳过，关闭时热路径跳过正则与还原，但仍先读取并解析一次配置（不能宣称仅为一次 bool 判断或零开销，见脱敏 README §八.4）。
 
 ## 备选方案
 
@@ -32,4 +32,4 @@ NovaVeil 本身就是 LLM API 网关，客户端的 `base_url` 已指向它，�
 
 ## 验证
 
-脱敏核心包 `internal/relay/mask/`（`rules.go`/`placeholder.go`/`engine.go`/`restore.go`/`stream_restore.go`/`session.go` + `*_test.go`）；配置 `internal/model/mask_setting.go`、`internal/op/mask.go`、`internal/server/handlers/mask.go`；前端 `web-next/src/pages/Mask.tsx`。出厂默认全关由单测守死（见脱敏设计文档第八节）。详细设计见 [docs/脱敏开发/](../../../docs/脱敏开发/README.md)。
+脱敏核心包 `internal/relay/mask/`（`rules.go`/`placeholder.go`/`engine.go`/`restore.go`/`stream_restore.go`/`session.go` + `*_test.go`）；配置 `internal/model/mask_setting.go`、`internal/op/mask.go`、`internal/server/handlers/mask.go`；前端 `web-next/src/pages/Mask.tsx`。出厂默认全关由单测守死（见脱敏设计文档第八节）。详细设计见 [docs/脱敏开发/](../../../../docs/脱敏开发/README.md)。

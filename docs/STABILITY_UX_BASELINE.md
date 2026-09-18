@@ -44,4 +44,4 @@
 
 ## CI 验收
 
-本仓库遵循既有约束：本地不执行构建、测试或打包；改动推送后由 GitHub Actions 执行 Go、Vitest、Playwright、a11y、镜像和安全扫描。每个主题拆成独立 PR，行为修复必须带针对性测试。
+CI 为验收门禁；本地构建/测试不被禁止（见 CONTRIBUTING、AGENTS.md 常用命令）；改动推送后由 GitHub Actions 执行 Go、Vitest、Playwright、a11y、镜像和安全扫描。每个主题拆成独立 PR，行为修复必须带针对性测试。

@@ -19,7 +19,7 @@ Status: implemented
 5. 错误日志落库存 `label + original + placeholder`，`normalizeMaskMatches` 归一兜底（坏 JSON/超限丢弃、不 redact 原文）；清洗仅限条数与字节数。
 6. 前端 `MaskMatches` 组件展示规则标签、命中原文与占位符，截断时明确提示。
 
-不变项：不把原始请求体写回 body、不改发往上游内容、不新增明文恢复接口、占位符替换与 `StreamRestorer` 逻辑全部现状保留。详细方案见 [docs/脱敏开发/07-日志详情命中明细.md](../../../docs/脱敏开发/07-日志详情命中明细.md)。
+不变项：不把原始请求体写回 body、不改发往上游内容、不新增明文恢复接口、占位符替换与 `StreamRestorer` 逻辑全部现状保留。详细方案见 [docs/脱敏开发/07-日志详情命中明细.md](../../../../docs/脱敏开发/07-日志详情命中明细.md)。
 
 ## 备选方案
 

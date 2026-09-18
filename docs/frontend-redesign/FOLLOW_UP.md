@@ -89,7 +89,7 @@
 - **渠道/自定义模型优先级**：共享 `components/ui/priority-input.tsx`，有 500ms 加减防抖、回车/失焦提交、串行保存和缓存回滚；数值越大越靠前，同值按名称排序。分组列表的自定义顺序与成员 `priority` 是不同语义，成员按较小 priority 优先，成员名次输入已存在。下一步保留这些语义并核验失败后草稿、并发编辑及重载顺序。
 - **模型评估与分组联动**：`ModelEval.tsx` 与 `components/model-eval/` 已接入服务端队列、历史复用、名次调整、移除及应用到自动分组；不是待新增页面。仍有待核对的不一致：`EvalRanking.tsx` 的 `rankable` 接受 `ok` 或 `violation`，而界面文案和历史复用按钮只允许格式合规的 `ok`。需结合实际接口返回确认旧数据兼容与排序/分组资格，不能仅凭文案宣称已一致。
 - **渠道模型批量操作**：`pages/channels/channel-editor.tsx` 已有搜索子集勾选、删除所选、测试所选/全部及四 worker 并发测试；关闭、切换渠道或卸载时有停止后续派发的标记。该标记不等于取消已发送的计费请求。下一步验证跨轮次晚到响应、关闭后重开、部分失败、筛选后选中范围和删除草稿的保存边界。
-- **路由性能**：分类骨架、路由滚动复位和导航 chunk 预加载仍待实施；分组已有部分 `useMemo`，列表缓存回填也已落地，后续应补缺而非重复实现。详细状态见 [路由性能规划](ROUTE_TRANSITION_PERFORMANCE_PLAN.md)。
+- **路由性能**：分类骨架、路由滚动复位和导航 chunk 预加载已落地、待验收。当前 HEAD 已实现：`App.tsx` 各页 `TableSkeleton`/`CardGridSkeleton`/`LogsSkeleton`/`SettingsSkeleton`/`LoginSkeleton` 映射、`AppShell.tsx` 的滚动复位 `useEffect`、`Sidebar.tsx` 的 `preloadPage` 预加载、匿名灰度桶经 `sessionStorage` 固定，并有 `App.route-transition.test.tsx` 回归。分组已有部分 `useMemo`，列表缓存回填也已落地，后续应核验浏览器体验而非重复实现。详细状态见 [路由性能规划](ROUTE_TRANSITION_PERFORMANCE_PLAN.md)。
 
 上述相关测试源码包括 `Channels.test.tsx`、`CustomModels.test.tsx`、`Groups.test.tsx`、`components/ui/priority-input.test.tsx` 与 `lib/model-eval.test.ts`，仅作为后续检查入口，本次未运行，不能据此勾选验收。
 
@@ -129,7 +129,7 @@
 - [ ] **补齐品牌入口。** 将 `App.tsx` 的 `RollbackNotice`、`components/auth/ForceChangePassword.tsx` 中的手写渐变字母标识纳入 `BrandMark` 统一范围；保留页面标题和强制改密逻辑。验收：登录、侧栏、改密、回退页使用同一品牌图形，没有重复或缺失的主标题。
 - [ ] **补齐脱敏页公共空态。** `Mask.tsx` 的“暂无内置规则”“还没有自定义拦截词”等仍为独立结构。区分规则列表空态与试运行结果态，按场景复用 `EmptyState`，不机械替换所有提示区域。验收：首次配置入口清楚，加载或错误不被误报为空数据。
 - [ ] **补齐移动抽屉焦点管理。** `AppShell` 当前由普通容器和遮罩构成，已处理 Escape 与滚动锁定，但未见完整的模态焦点管理。后续补齐打开后的焦点进入、Tab 约束、关闭后的焦点恢复、背景不可交互及显式关闭入口。验收：仅用键盘可完整操作，折叠侧栏后切到小屏仍可辨认导航。
-- [ ] **恢复可发现的命令面板入口。** `TopbarProps` 保留 `onOpenCommand`，但当前 `Topbar` 没有使用它，面板主要依赖快捷键打开。补充可点击入口并标明快捷键，避免在窄屏挤占核心操作。验收：鼠标、触控和键盘都能进入面板。
+- [x] **命令面板入口已实现。** `Topbar.tsx` 已把 `onOpenCommand` 接入可点击入口的 `onClick={onOpenCommand}`，带搜索图标、`Ctrl/Cmd + K` 快捷键提示与 `aria-keyshortcuts`，面板不再只依赖快捷键打开。仍待验收：鼠标、触控和键盘都能进入面板，且在窄屏（`lg` 以下收缩为图标按钮）不挤占核心操作。
 - [ ] **检查工具栏与时间筛选重排。** `SearchField` 默认 `w-56`，`SegmentedControl` 默认不换行，总览时间选择有六个选项。逐页检查父容器与控件组合，按需提供满宽、折行或局部滚动布局。验收：390px 和 320px 下无意外页面横向滚动，搜索和主操作均可达。
 - [ ] **统一语义与焦点检查。** 检查 Topbar 标题与页面内容标题层级、搜索框名称、图标按钮、分段控件和视图切换的焦点可见性及选中状态。验收：不依赖 placeholder 或颜色理解控件用途，Tab 顺序与视觉顺序一致。
 

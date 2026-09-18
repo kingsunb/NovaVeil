@@ -1,5 +1,7 @@
 # NovaVeil 前端原型 · 审计报告
 
+> ⚠️ **已归档历史快照**：本文形成于 2026-09，定位为 v1 原型审计，已被 `AUDIT-v2.md`（v2 原型审计）取代。作为一次性工作产物保留备查，**不再维护**，内容不代表当前实现。当前权威口径见 [FOLLOW_UP.md](FOLLOW_UP.md)（前端生产实施）与 [`web-next/DESIGN.md`](../../web-next/DESIGN.md)（设计）。
+
 > 审计对象：`docs/frontend-redesign/prototype/`（v1 原型）
 > 审计维度：视觉一致性、设计令牌、无障碍、响应式、代码质量、信息完整性
 > 每条标注严重度：🔴 高 / 🟡 中 / 🟢 低

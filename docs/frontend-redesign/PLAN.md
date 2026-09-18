@@ -1,5 +1,7 @@
 # NovaVeil 前端美化规划
 
+> ⚠️ **已归档历史快照**：本文形成于 2026-09-13，定位为早期原型规划快照。作为一次性工作产物保留备查，**不再维护**，内容不代表当前实现。当前权威口径见 [FOLLOW_UP.md](FOLLOW_UP.md)（前端生产实施）与 [`web-next/DESIGN.md`](../../web-next/DESIGN.md)（设计）。
+
 > 参考对象：[OmniRoute](https://github.com/diegosouzapw/OmniRoute)（Next.js 16 + Tailwind v4 + React 19）
 > 本项目：NovaVeil（Vite + React 18 + Tailwind v3 + Radix UI）
 > 产出位置：`docs/frontend-redesign/`（原型，不改动生产代码）

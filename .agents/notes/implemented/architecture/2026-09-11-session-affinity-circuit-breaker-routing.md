@@ -4,7 +4,7 @@ Status: implemented
 
 ## 问题
 
-多渠道 failover 下，同一会话的连续请求可能落到不同渠道，破坏多轮上下文一致性（部分上游按渠道隔离会话状态）。同时渠道故障需要冷却恢复，但恢复探测不能阻塞正常流量，全部渠道不可用时要有自愈路径。这是请求路由的核心流程，权威文档见 [docs/DEVELOPMENT_routing.md](../../../docs/DEVELOPMENT_routing.md)。
+多渠道 failover 下，同一会话的连续请求可能落到不同渠道，破坏多轮上下文一致性（部分上游按渠道隔离会话状态）。同时渠道故障需要冷却恢复，但恢复探测不能阻塞正常流量，全部渠道不可用时要有自愈路径。这是请求路由的核心流程，权威文档见 [docs/DEVELOPMENT_routing.md](../../../../docs/DEVELOPMENT_routing.md)。
 
 ## 决定
 
@@ -27,4 +27,4 @@ Status: implemented
 
 ## 验证
 
-路由核心流程、会话粘合、半开探测与全部不可用恢复的实现与设计条目到实现的映射见 [docs/DEVELOPMENT_routing.md](../../../docs/DEVELOPMENT_routing.md)。会话标识约定 `X-Session-Id`、分组引用失败语义在同一文档。
+路由核心流程、会话粘合、半开探测与全部不可用恢复的实现与设计条目到实现的映射见 [docs/DEVELOPMENT_routing.md](../../../../docs/DEVELOPMENT_routing.md)。会话标识约定 `X-Session-Id`、分组引用失败语义在同一文档。

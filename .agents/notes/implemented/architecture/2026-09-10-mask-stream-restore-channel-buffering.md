@@ -30,4 +30,4 @@ Status: implemented
 
 ## 验证
 
-流式还原在 `internal/relay/mask/stream_restore.go` + `*_test.go`；接入 `internal/relay/handler.go` 流式分支。设计溯源见 [docs/脱敏开发/03-流式还原设计.md](../../../docs/脱敏开发/03-流式还原设计.md) 与 [05-借鉴思路总结.md](../../../docs/脱敏开发/05-借鉴思路总结.md) §五。
+流式还原在 `internal/relay/mask/stream_restore.go` + `*_test.go`；接入 `internal/relay/handler.go` 流式分支。设计溯源见 [docs/脱敏开发/03-流式还原设计.md](../../../../docs/脱敏开发/03-流式还原设计.md) 与 [05-借鉴思路总结.md](../../../../docs/脱敏开发/05-借鉴思路总结.md) §五。

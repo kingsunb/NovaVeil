@@ -1,5 +1,7 @@
 # NovaVeil 全面代码审计报告
 
+> **归档横幅：** 本文形成于 2026-09-10 的历史快照，已归档、不再维护；其中标注的未修复项多数已在此后修复，当前审计事实以 `docs/audits/AUDIT_ISSUES_2026-09-13.md` 为准。
+
 **审计日期**: 2026-09-10
 **审计仓库**: kingsunb/NovaVeil
 **项目版本**: v0.1.0
@@ -110,7 +112,7 @@ NovaVeil 是一个 LLM API 中转/聚合服务，基于 bestruirui/octopus 和 l
 #### H-10: release.yaml cache-dependency-path 引用已删除的 web/ 目录
 - **来源**: 部署审计 | **文件**: .github/workflows/release.yaml:85
 - **问题**: cache-dependency-path: web/pnpm-lock.yaml 引用已删除目录，导致 pnpm 缓存永远 miss。
-- **修复建议**: 改为 web-next/pnpm-lock.yaml。
+- **修复建议**: 改为 web-next/pnpm-lock.yaml。（现状已改为 web-next/，web/ 目录已删除）
 
 #### H-11: CSP 允许 unsafe-inline 脚本
 - **来源**: 部署审计 | **文件**: web-next/nginx.conf:41
@@ -159,7 +161,7 @@ NovaVeil 是一个 LLM API 中转/聚合服务，基于 bestruirui/octopus 和 l
 | D-M2 | docker-compose.yml:95-122 | web-next 服务未指定非 root 用户 | 配置 nginx 非 root 运行 |
 | D-M3 | router.nginx.conf:36-42 | router 缺少安全响应头 | 补充与 nginx.conf 一致的安全头 |
 | D-M4 | router.nginx.conf 多处 | 非 API 路由缺少 X-Forwarded-Proto | 所有 proxy location 统一设置 |
-| D-M5 | build.yaml:49; release.yaml:70 | Trivy 扫描引用已删除的 web/node_modules | 改为 web-next/node_modules |
+| D-M5 | build.yaml:49; release.yaml:70 | Trivy 扫描引用已删除的 web/node_modules | 改为 web-next/node_modules（现状已改为 web-next/，web/ 目录已删除） |
 | D-M6 | web-next-ci.yaml:32,77,106 | checkout 未设 persist-credentials: false | 添加该配置 |
 | D-M7 | web-next-ci.yaml | 缺少 Trivy 密钥扫描 | 添加 secret 扫描步骤 |
 | D-M8 | build.yaml:219 | 发布 :latest 可变标签 | 停止发布或重命名为 :dev-latest |

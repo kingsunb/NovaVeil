@@ -38,11 +38,11 @@
 使用加固后的 Compose 模板，并固定到不可变发布镜像：
 
 ```bash
-wget https://raw.githubusercontent.com/kingsunb/NovaVeil/master/docker-compose.yml
+wget https://raw.githubusercontent.com/kingsunb/NovaVeil/main/docker-compose.yml
 sudo install -d -o 10001 -g 10001 -m 0700 /var/lib/novaveil
 docker volume create --driver local \
   --opt type=none --opt o=bind --opt device=/var/lib/novaveil novaveil-data
-export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api:v0.1.0@sha256:<manifest-digest>'
+export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api@sha256:<manifest-digest>'
 docker compose pull
 docker compose up -d
 ```
@@ -59,11 +59,7 @@ docker compose up -d
 
 ### 📦 从 Release 下载
 
-从 [Releases](https://github.com/kingsunb/NovaVeil/releases) 下载对应平台的二进制文件，然后运行：
-
-```bash
-./novaveil start
-```
+> ⚠️ 尚无正式 GitHub Release（仓库当前无 tag/Release）。单二进制请走下方「源码运行」，或由运维手动触发 `release` / `build` workflow 发布 `ghcr.io/kingsunb/novaveil-api`。
 
 ### 🛠️ 源码运行
 
@@ -118,7 +114,7 @@ http://localhost:5174
 ```json
 {
   "server": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 8080
   },
   "database": {
@@ -135,11 +131,13 @@ http://localhost:5174
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| `server.host` | 监听地址 | `0.0.0.0` |
+| `server.host` | 监听地址 | `127.0.0.1` |
 | `server.port` | 服务端口 | `8080` |
 | `database.type` | 数据库类型 | `sqlite` |
 | `database.path` | 数据库连接地址 | `data/data.db` |
 | `log.level` | 日志级别 | `info` |
+
+> **说明**：二进制默认监听 `127.0.0.1`；加固 Compose 模板在容器内显式设 `NOVAVEIL_SERVER_HOST=0.0.0.0`（宿主绑定 `127.0.0.1:8888`），`scripts/run-local.sh` 亦默认 `0.0.0.0` 以便局域网访问。需要时显式设置 `server.host`。
 
 **数据库配置：**
 

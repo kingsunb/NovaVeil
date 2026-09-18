@@ -149,8 +149,9 @@ go build -trimpath -o novaveil \
 go run main.go start
 ```
 
-默认监听 `0.0.0.0:8080`，SQLite 数据库落在 `data/data.db`，配置文件 `data/config.json`
-首次启动自动生成。浏览器访问 `http://127.0.0.1:8080`。
+二进制默认监听 `127.0.0.1:8080`；如需对外（容器/LAN）显式设 `host=0.0.0.0`（容器模板用
+`NOVAVEIL_SERVER_HOST=0.0.0.0`，本地脚本 run-local.sh 默认 `0.0.0.0`）。SQLite 数据库落在
+`data/data.db`，配置文件 `data/config.json` 首次启动自动生成。浏览器访问 `http://127.0.0.1:8080`。
 
 ### 4.2 首次登录
 
@@ -177,11 +178,11 @@ go run main.go start
 ## 五、配置
 
 配置文件 `data/config.json`，所有项均可被 `NOVAVEIL_` 前缀环境变量覆盖。完整项见
-[README](../README_zh.md#-配置文件)。独立部署常用：
+[README](../README_zh.md#配置文件)。独立部署常用：
 
 ```json
 {
-  "server": { "host": "0.0.0.0", "port": 8080 },
+  "server": { "host": "127.0.0.1", "port": 8080 },
   "database": { "type": "sqlite", "path": "data/data.db" },
   "log": { "level": "info" }
 }

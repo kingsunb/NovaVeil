@@ -1,5 +1,7 @@
 # NovaVeil 前端原型 v2 · UI/UX Pro Max 审计报告
 
+> ⚠️ **已归档历史快照**：本文形成于 2026-09-11，定位为 v2 原型审计，其 P1/P2 修复项已在原型源码中闭合。作为一次性工作产物保留备查，**不再维护**，内容不代表当前实现。当前权威口径见 [FOLLOW_UP.md](FOLLOW_UP.md)（前端生产实施）与 [`web-next/DESIGN.md`](../../web-next/DESIGN.md)（设计）。
+
 > 审计工具：[UI/UX Pro Max Skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) v2.13.0
 > 审计对象：`prototype/` (macOS 磨砂玻璃简白风)
 > 审计日期：2026-09-11

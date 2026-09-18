@@ -38,11 +38,11 @@
 Use the hardened Compose template and pin an immutable release image:
 
 ```bash
-wget https://raw.githubusercontent.com/kingsunb/NovaVeil/master/docker-compose.yml
+wget https://raw.githubusercontent.com/kingsunb/NovaVeil/main/docker-compose.yml
 sudo install -d -o 10001 -g 10001 -m 0700 /var/lib/novaveil
 docker volume create --driver local \
   --opt type=none --opt o=bind --opt device=/var/lib/novaveil novaveil-data
-export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api:v0.1.0@sha256:<manifest-digest>'
+export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api@sha256:<manifest-digest>'
 docker compose pull
 docker compose up -d
 ```
@@ -61,11 +61,7 @@ set `NOVAVEIL_BIND_ADDRESS` explicitly and protect the port with HTTPS and a fir
 
 ### 📦 Download from Release
 
-Download the binary for your platform from [Releases](https://github.com/kingsunb/NovaVeil/releases), then run:
-
-```bash
-./novaveil start
-```
+> ⚠️ No GitHub Release has been published yet (the repository currently has no tags or releases). Build the single binary from source below, or have an operator manually trigger the `release` / `build` workflow to publish `ghcr.io/kingsunb/novaveil-api`.
 
 ### 🛠️ Build from Source
 
@@ -119,7 +115,7 @@ The configuration file is located at `data/config.json` by default and is automa
 ```json
 {
   "server": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 8080
   },
   "database": {
@@ -136,11 +132,13 @@ The configuration file is located at `data/config.json` by default and is automa
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `server.host` | Listen address | `0.0.0.0` |
+| `server.host` | Listen address | `127.0.0.1` |
 | `server.port` | Server port | `8080` |
 | `database.type` | Database type | `sqlite` |
 | `database.path` | Database DSN | `data/data.db` |
 | `log.level` | Log level | `info` |
+
+> **Note:** the binary listens on `127.0.0.1` by default. The hardened Compose template sets `NOVAVEIL_SERVER_HOST=0.0.0.0` inside the container (bound to `127.0.0.1:8888` on the host), and `scripts/run-local.sh` also defaults to `0.0.0.0` for LAN access. Set `server.host` explicitly to change it.
 
 **Databases:**
 

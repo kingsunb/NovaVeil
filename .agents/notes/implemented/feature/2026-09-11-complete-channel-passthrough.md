@@ -13,7 +13,7 @@ NovaVeil 已有「同协议透传」：客户端协议与渠道协议匹配时�
 - 全局 `PassThroughRequestEnabled`（默认 `false`）
 - 渠道级 `PassThroughBodyEnabled`（默认 `false`）
 
-任一为 `true` 即启用透传。**完全透传不跳过分组路由**：请求仍经过 提取 model → 查分组 → 选渠道（含 failover、Key 轮询）→ 透传至上游。「完全」指任意协议都原样转发，不是绕过路由。设计文档见 [docs/CHANNEL_PASSTHROUGH.md](../../../docs/CHANNEL_PASSTHROUGH.md)。
+任一为 `true` 即启用透传。**完全透传不跳过分组路由**：请求仍经过 提取 model → 查分组 → 选渠道（含 failover、Key 轮询）→ 透传至上游。「完全」指任意协议都原样转发，不是绕过路由。设计文档见 [docs/CHANNEL_PASSTHROUGH.md](../../../../docs/CHANNEL_PASSTHROUGH.md)。
 
 ## 备选方案
 

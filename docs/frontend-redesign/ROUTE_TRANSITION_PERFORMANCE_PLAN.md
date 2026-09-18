@@ -3,7 +3,7 @@
 > 目标：改善 `web-next` 页面切换时的空窗、布局跳变、滚动位置异常和高频重渲染问题。
 > 范围：仅规划前端体验与运行时性能改造，不改变业务接口和视觉品牌方向。
 > 现状依据：2026-09-16 对 `web-next/src` 的源码复核（原规划形成于 2026-09-15）。
-> 验证边界：本次未安装依赖、构建、运行测试或启动服务；以下区分“代码已有”“仍待实施”，均不代表性能或交互验收通过。
+> 验证边界：本次未安装依赖、构建、运行测试或启动服务；P0 三项目前已落地、待验收，其余据此区分“代码已有”“仍待实施”，均不代表性能或交互验收通过。
 
 ---
 
@@ -12,7 +12,7 @@
 源码可见的页面切换成本与待测风险如下，实际卡顿程度尚未通过浏览器测量：
 
 1. React Router 卸载旧页面。
-2. 新页面的动态 chunk 尚未加载完成，进入路由对应的分类 skeleton（本次已接线，视觉稳定性待验收）。
+2. 新页面的动态 chunk 尚未加载完成，进入路由对应的分类 skeleton（已落地、待验收）。
 3. 页面挂载后订阅各自的 Query；是否重新请求取决于缓存新鲜度等配置，并非每次挂载必然请求（全局 `staleTime` 为 30 秒）。
 4. 部分页面（尤其 Logs）在进入后持续触发高频状态更新，造成整页重渲染。
 5. 主内容区已实现 pathname 变化时即时滚动复位；真实浏览器的前进/后退及布局表现仍待验收。
@@ -37,10 +37,10 @@
 
 | 优先级 | 问题 | 主要位置 | 用户表现 | 处理方向 |
 |---|---|---|---|---|
-| P0 | 统一 Suspense fallback 与页面结构不匹配 | `web-next/src/App.tsx` | 切换时先显示错误形状，随后整页跳变 | 稳定的路由 pending 容器与分类型 skeleton |
-| P0 | 主内容区没有路由滚动复位 | `web-next/src/components/layout/AppShell.tsx` | 新页面从旧页面的滚动位置开始 | 监听 pathname，切换时复位 `main` |
-| P0 | 高频页面首次访问才加载 chunk | `web-next/src/App.tsx`、`Sidebar.tsx` | 点击导航后等待动态 import | 导航 hover/focus 预加载，控制预加载范围 |
-| P0 | 匿名灰度桶可能重新随机 | `App.tsx`、`lib/flags.ts` | 灰度状态在重渲染或状态变化时不稳定 | session/local 范围固定匿名 bucket |
+| P0 | 统一 Suspense fallback 与页面结构不匹配 | `web-next/src/App.tsx` | 切换时先显示错误形状，随后整页跳变 | ✅ 已落地（待验收）：稳定的路由 pending 容器与分类型 skeleton |
+| P0 | 主内容区没有路由滚动复位 | `web-next/src/components/layout/AppShell.tsx` | 新页面从旧页面的滚动位置开始 | ✅ 已落地（待验收）：监听 pathname，切换时复位 `main` |
+| P0 | 高频页面首次访问才加载 chunk | `web-next/src/App.tsx`、`Sidebar.tsx` | 点击导航后等待动态 import | ✅ 已落地（待验收）：导航 hover/focus 预加载，控制预加载范围 |
+| P0 | 匿名灰度桶可能重新随机 | `App.tsx`、`lib/flags.ts` | 灰度状态在重渲染或状态变化时不稳定 | ✅ 已落地（待验收）：session/local 范围固定匿名 bucket |
 | P1 | Logs SSE 更新导致整页重渲染 | `web-next/src/pages/Logs.tsx` | 实时日志多时页面操作卡顿 | 拆分组件、memo、合并更新 |
 | P1 | Groups 筛选和 runtime 状态带动整页计算 | `web-next/src/pages/Groups.tsx` | 搜索、筛选、运行状态变化时响应变慢 | 拆分列表项、筛选 debounce、收窄更新范围 |
 | P1 | 页面切换后的 Query loading 策略不一致 | 各页面 Query | 返回页面时旧数据消失，出现二次等待 | 优先展示缓存数据，区分 initial loading 与 refetch |
@@ -52,8 +52,8 @@
 
 ### 2.1 源码状态补充（2026-09-16）
 
-- **P0 仍未完整落地**：`App.tsx` 的 `LazyPage` 与未登录分支仍统一使用 `PageSkeleton`；`AppShell.tsx` 未绑定 pathname 或 main 滚动 ref；Sidebar/CommandPalette 未接入页面 loader 预加载。
-- **灰度已有局部防抖动，不是会话持久化**：`App.tsx` 已用 `useMemo([effective, username])` 缓存 `shouldUseNewWeb` 结果，避免依赖不变的重渲染重复随机；`flags.ts` 仍在无粘性用户标识时使用 `Math.random()`，匿名 session bucket 尚未实现。依赖变化和重挂载仍需验证。
+- **P0 性能三项目前已落地，待验收**：`App.tsx` 的 `LazyPage` 已按路由传入 `TableSkeleton`/`CardGridSkeleton`/`LogsSkeleton`/`SettingsSkeleton`，未登录分支改用 `LoginSkeleton`；`AppShell.tsx` 已绑定 pathname 与 main 滚动 ref 并在切换时复位；Sidebar（`preloadPage`）与 CommandPalette 已接入页面 loader 预加载，并配 `App.route-transition.test.tsx` 回归。
+- **灰度匿名 bucket 已用 `sessionStorage` 固定**：`flags.ts` 的 `getAnonymousBucket()` 读取/写入 `sessionStorage`（仅接受规范整数，存储不可用时由模块内存兜底），同一浏览器会话内保持一致；粘性用户仍按 `userBucket(userId)` 哈希。依赖变化和重挂载仍需验证。
 - **Groups 已有部分计算优化与缓存保护**：列表过滤/排序、渠道映射已使用 `useMemo`，自定义排序有乐观更新和失败回滚，编辑保存返回实体后直接回填 `['groups']`。仍未见搜索 debounce 或卡片 memo 隔离；性能改造需保留自定义顺序、成员名次与路由 priority 的不同语义。
 - **Query 并非没有缓存策略**：`main.tsx` 已配置 30 秒 `staleTime`、4xx 不重试与禁用窗口聚焦刷新。渠道、自定义模型、分组保存已取消在途查询并回填实体；下一步是核验返回页面、后台失败和跨 query key 的展示策略，不是重做已存在的保存回填。
 - **Logs、Dashboard、Auth 的结构性待办仍成立**：Logs 的 live 状态与 SSE 订阅仍在页面层，已有 `LiveTable` 及部分派生 `useMemo`，未见消息批处理；Dashboard 的模型 map/sort/slice 仍直接计算；Auth 虽有 memoized value/actions，仍是单一 context。收益必须经性能采样确认。

@@ -33,7 +33,7 @@
 | [脱敏开发/04-配置与前端.md](脱敏开发/04-配置与前端.md) | 配置 API 与前端管理页 |
 | [脱敏开发/05-借鉴思路总结.md](脱敏开发/05-借鉴思路总结.md) | 借鉴项目与思路总结 |
 | [脱敏开发/06-关键源码参考.md](脱敏开发/06-关键源码参考.md) | 关键源码参考 |
-| [脱敏开发/07-日志详情命中明细.md](脱敏开发/07-日志详情命中明细.md) | 日志命中明细规划（首期规则/占位符安全摘要，不下发原文；待实施） |
+| [脱敏开发/07-日志详情命中明细.md](脱敏开发/07-日志详情命中明细.md) | 日志命中明细（已实施：下发 label/占位符 + 有界原文片段） |
 
 ## 前端重设计
 
@@ -41,18 +41,18 @@
 |------|------|
 | [frontend-redesign/ROUTE_TRANSITION_PERFORMANCE_PLAN.md](frontend-redesign/ROUTE_TRANSITION_PERFORMANCE_PLAN.md) | 页面切换与交互性能优化规划（skeleton、滚动复位、预加载、SSE 重渲染） |
 | [frontend-redesign/FOLLOW_UP.md](frontend-redesign/FOLLOW_UP.md) | 生产前端美化后续计划、当前实现差异与验收清单 |
-| [frontend-redesign/DESIGN.md](frontend-redesign/DESIGN.md) | 原型 v2 设计系统规范 |
-| [frontend-redesign/PLAN.md](frontend-redesign/PLAN.md) | 前端原型阶段美化规划 |
-| [frontend-redesign/AUDIT.md](frontend-redesign/AUDIT.md) | 前端审计报告 v1 |
-| [frontend-redesign/AUDIT-v2.md](frontend-redesign/AUDIT-v2.md) | 前端审计报告 v2 |
-| [frontend-redesign/prototype/README.md](frontend-redesign/prototype/README.md) | 原型说明 |
+| [frontend-redesign/DESIGN.md](frontend-redesign/DESIGN.md) | 原型 v2 设计系统规范（已归档历史快照） |
+| [frontend-redesign/PLAN.md](frontend-redesign/PLAN.md) | 前端原型阶段美化规划（已归档历史快照） |
+| [frontend-redesign/AUDIT.md](frontend-redesign/AUDIT.md) | 前端审计报告 v1（已归档历史快照） |
+| [frontend-redesign/AUDIT-v2.md](frontend-redesign/AUDIT-v2.md) | 前端审计报告 v2（已归档历史快照） |
+| [frontend-redesign/prototype/README.md](frontend-redesign/prototype/README.md) | 原型说明（已归档历史快照） |
 
 ## 审计报告
 
 | 文档 | 说明 |
 |------|------|
 | [audits/AUDIT_ISSUES_2026-09-13.md](audits/AUDIT_ISSUES_2026-09-13.md) | 2026-09-13 静态审阅快照（形成时含未提交改动；问题状态须对照最新代码复核） |
-| [audits/AUDIT_BACKEND.md](audits/AUDIT_BACKEND.md) | 后端代码审计 |
-| [audits/AUDIT_REPORT.md](audits/AUDIT_REPORT.md) | 全量审计报告 |
-| [audits/AUDIT_REPORT_2026.md](audits/AUDIT_REPORT_2026.md) | 2026 年审计报告 |
-| [audits/AUDIT_REPORT_FULL.md](audits/AUDIT_REPORT_FULL.md) | 审计报告完整版（含修复状态） |
+| [audits/AUDIT_BACKEND.md](audits/AUDIT_BACKEND.md) | 后端代码审计（已归档历史快照） |
+| [audits/AUDIT_REPORT.md](audits/AUDIT_REPORT.md) | web-next 前端审计（已归档历史快照） |
+| [audits/AUDIT_REPORT_2026.md](audits/AUDIT_REPORT_2026.md) | 2026-09-11 全仓审计（已归档历史快照） |
+| [audits/AUDIT_REPORT_FULL.md](audits/AUDIT_REPORT_FULL.md) | 2026-09-10 全仓审计完整版（无修复状态；已归档历史快照） |

@@ -1,5 +1,7 @@
 # web-next Frontend Audit
 
+> **归档横幅：** 本文形成于 2026-09 的历史快照，已归档、不再维护；其中标注的未修复项多数已在此后修复，当前审计事实以 `docs/audits/AUDIT_ISSUES_2026-09-13.md` 为准。本文仅覆盖 web-next 前端，非全量审计。
+
 > **后续整理入口：** 已归档。本文是 2026-09 的只读审计；§8 记录已修/未修。不要按 §0 的「按密钥测试缺口」再做一遍（§8 已修）。
 
 Read-only comprehensive review of `/root/kaifa/NovaVeil/web-next` after the
@@ -760,7 +762,7 @@ unannounced regressions against the background tokens:
 - Most other items are minor; the restyle is in good shape.
 ---
 
-## 8. 修复记录（2026-09-03，本仓库 web-next）
+## 10. 修复记录（2026-09-03，本仓库 web-next）
 
 按本审计执行的修复，验证统一由 GitHub CI（web-next-ci：typecheck / lint / vitest
 含覆盖率阈值 / build / size-limit / playwright e2e+axe）完成，本地不构建。
@@ -823,7 +825,7 @@ unannounced regressions against the background tokens:
 - 4.28：备份导入 file input 外层 label 改 div。
 - 4.29：Settings 各分区保存按钮 `aria-label="保存 <分区>"`。
 
-**§5 / §8**
+**§5 陈旧文案 / §8 竞态**
 - 5.1：移除「语言」死按钮（外观卡片改为仅主题）。
 - 8.2：Channels `testMut.onSettled` 按变量 id 清 testing 态，连点两行互不覆盖。
 
@@ -840,7 +842,7 @@ unannounced regressions against the background tokens:
   影响小或属测试补齐/文档清理，按优先级排入后续（1.15 经复核 status 单元格
   td 已 stopPropagation，不成立）。
 
-### 8.1 CI 收尾（2026-09-03 第二轮）
+### 10.1 CI 收尾（2026-09-03 第二轮）
 
 目标：web-next-ci 全绿（此前 coverage 与 size-limit 两个 job 长期红）。
 

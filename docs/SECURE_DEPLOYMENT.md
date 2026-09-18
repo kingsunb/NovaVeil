@@ -37,10 +37,15 @@ is discontinued and Docker Hub images must be treated as unsupported/stale. Migr
 changing only the image reference to a reviewed GHCR version/digest while retaining the
 same `/app/data` volume.
 
+> No versioned tag has been published yet: pushes to `main` auto-publish
+> `ghcr.io/kingsunb/novaveil:latest` and `:sha-<short>`; the `novaveil-api` versioned
+> image is produced by the manual `release` / `build` workflows. Pin the reviewed digest
+> rather than a version string until a tag is released.
+
 Prefer a digest-qualified reference:
 
 ```bash
-export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api:v0.1.0@sha256:<manifest-digest>'
+export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api@sha256:<manifest-digest>'
 docker compose pull
 docker compose up -d
 ```
@@ -49,7 +54,7 @@ A version tag without a digest is easier to operate but can be republished. Reco
 the resolved digest in the change ticket before deployment:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/kingsunb/novaveil-api:v0.1.0
+docker buildx imagetools inspect ghcr.io/kingsunb/novaveil-api:<version>
 ```
 
 The runtime base is pinned to the Alpine 3.21.7 multi-platform OCI index digest
@@ -82,7 +87,9 @@ Dockerfile and Compose healthchecks.
 The production Compose template binds `127.0.0.1:8888:8080` by default, so only a
 reverse proxy on the same host can reach the backend. Set `NOVAVEIL_BIND_ADDRESS`
 explicitly only when another trusted host must connect, and protect that port with
-host firewall rules.
+host firewall rules. The two supplied Compose files name this host-bind variable
+differently: the production template uses `NOVAVEIL_BIND_ADDRESS`, while
+`docker-compose.local.yml` uses `NOVAVEIL_BIND`.
 
 Terminate TLS at a reverse proxy, preserve the original `Host` header, and set the
 application cookie flag when TLS terminates at the proxy:

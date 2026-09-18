@@ -38,7 +38,7 @@ bash scripts/run-local.sh    # 本地运行
 - **事实与因果分离**：`docs/` 写「当前系统怎么运转」（事实，现在时）；`.agents/notes/` 写「当初为什么这么定、否过什么」（因果）。不混写。
 - **笔记就地同步，非必要不新建**：重构/改名/改默认值直接更新现有笔记的事实，不追加变更流水账；决定翻转则新开一篇并互链，禁止把 `## 决定` 改写成反面。
 - **禁止全局 INDEX.md**：笔记按 lifecycle/class 文件夹浏览或全仓搜索，不维护总索引（多分支并行会冲突）。
-- **脱敏功能出厂默认全关，不可退化**：三层开关任一为 false 即跳过，关闭时热路径零开销。见 [脱敏设计](docs/脱敏开发/README.md)。
+- **脱敏功能出厂默认全关，不可退化**：三层开关任一为 false 即跳过；关闭时跳过正则与还原，但仍先读取并解析一次配置，仅省去引擎开销。见 [脱敏设计](docs/脱敏开发/README.md)。
 - **完全渠道透传不跳过路由**：透传指任意协议原样转发，不是绕过分组路由/failover/Key 轮询。见 [docs/CHANNEL_PASSTHROUGH.md](docs/CHANNEL_PASSTHROUGH.md)。
 - **会话粘合按 `X-Session-Id`**：多轮上下文一致性靠会话粘合渠道 + 三态熔断 + 非阻塞半开探测。见 [docs/DEVELOPMENT_routing.md](docs/DEVELOPMENT_routing.md)。
 - **Go 代码**：ESM 无关（Go）；后端错误显式处理，空 `catch`/`if err` 要命名错误与原因；公开函数加注释契约。
