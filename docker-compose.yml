@@ -27,7 +27,7 @@ x-image: &image
 # 独立前端镜像（可选）：仅在 --profile web-next 时使用。
 # 默认部署方式是 Go 内嵌前端（novaveil 服务已包含控制台），无需此镜像。
 x-web-next-image: &web-next-image
-  image: ${NOVAVEIL_WEB_NEXT_IMAGE:?NOVAVEIL_WEB_NEXT_IMAGE is required for the web-next profile (e.g. ghcr.io/kingsunb/novaveil-web-next:0.1.0@sha256:<digest>)}
+  image: ${NOVAVEIL_WEB_NEXT_IMAGE:?NOVAVEIL_WEB_NEXT_IMAGE is required for the web-next profile (e.g. ghcr.io/kingsunb/novaveil-web-next:0.2.0@sha256:<digest>)}
 
 services:
   novaveil:
