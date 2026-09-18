@@ -45,7 +45,7 @@ for spec in "${specs[@]}"; do
         --platform "$platform" \
         --file scripts/dockerfile/Dockerfile \
         --tag "$local_ref" \
-        --label org.opencontainers.image.title=novaveil-api \
+        --label org.opencontainers.image.title=novaveil \
         --label org.opencontainers.image.source=https://github.com/kingsunb/NovaVeil \
         --label "org.opencontainers.image.revision=${REVISION}" \
         --label "org.opencontainers.image.version=${VERSION}" \

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5174",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && touch ../static/out/.gitkeep",
     "preview": "vite preview --port 4174",
     "lint": "eslint .",
     "typecheck": "tsc -b --noEmit",

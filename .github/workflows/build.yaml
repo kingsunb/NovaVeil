@@ -64,7 +64,7 @@ jobs:
 
       - name: Validate scripts and Compose
         env:
-          NOVAVEIL_IMAGE: ghcr.io/kingsunb/novaveil-api:0.0.0-ci
+          NOVAVEIL_IMAGE: ghcr.io/kingsunb/novaveil:0.0.0-ci
           NOVAVEIL_WEB_NEXT_IMAGE: ghcr.io/kingsunb/novaveil-web-next:0.0.0-ci
         run: |
           bash -n \
@@ -194,7 +194,7 @@ jobs:
       - name: Publish only scanned platform images
         run: |
           set -euo pipefail
-          image=ghcr.io/kingsunb/novaveil-api
+          image=ghcr.io/kingsunb/novaveil
           short_sha="${GITHUB_SHA::7}"
           refs=()
           while IFS=$'\t' read -r slug platform archive local_ref; do

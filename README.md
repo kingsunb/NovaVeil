@@ -42,7 +42,7 @@ wget https://raw.githubusercontent.com/kingsunb/NovaVeil/main/docker-compose.yml
 sudo install -d -o 10001 -g 10001 -m 0700 /var/lib/novaveil
 docker volume create --driver local \
   --opt type=none --opt o=bind --opt device=/var/lib/novaveil novaveil-data
-export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api@sha256:<manifest-digest>'
+export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil@sha256:<manifest-digest>'
 docker compose pull
 docker compose up -d
 ```
@@ -53,7 +53,7 @@ and writes only `/app/data` plus a bounded `/tmp` tmpfs. Compose binds
 set `NOVAVEIL_BIND_ADDRESS` explicitly and protect the port with HTTPS and a firewall.
 
 > **Docker Hub migration:** Docker Hub image synchronization has been discontinued.
-> `ghcr.io/kingsunb/novaveil-api` is the only supported container release source.
+> `ghcr.io/kingsunb/novaveil` is the only supported container release source.
 > Existing Docker Hub deployments must change only their image reference to the GHCR
 > version/digest while retaining the same `/app/data` volume, then run
 > `docker compose pull && docker compose up -d`.
@@ -61,7 +61,7 @@ set `NOVAVEIL_BIND_ADDRESS` explicitly and protect the port with HTTPS and a fir
 
 ### 📦 Download from Release
 
-> ⚠️ No GitHub Release has been published yet (the repository currently has no tags or releases). Build the single binary from source below, or have an operator manually trigger the `release` / `build` workflow to publish `ghcr.io/kingsunb/novaveil-api`.
+> ⚠️ No GitHub Release has been published yet (the repository currently has no tags or releases). Build the single binary from source below, or have an operator manually trigger the `release` / `build` workflow to publish `ghcr.io/kingsunb/novaveil`.
 
 ### 🛠️ Build from Source
 
@@ -322,4 +322,4 @@ Edit `~/.codex/auth.json`
 - See [Secure deployment](docs/SECURE_DEPLOYMENT.md) for image pinning, HTTPS, permissions, resource limits, and update verification
 - See [Backup and restore](docs/BACKUP_RESTORE.md) for application exports, full database backups, and recovery testing
 - See [Standalone deployment](docs/STANDALONE_DEPLOYMENT.md) for building and running from source without Docker
-- `Build, test, and audit` scans every per-platform Docker archive and gates the multi-arch manifest via the `dev-publish` environment. The publish job **never rebuilds** images: it `docker load`s the scanned archive, verifies the image ID against `IMAGE_IDS.tsv`, and pushes the exact bytes under `image@sha256:...` references. Any HIGH/CRITICAL Trivy finding fails the run. A one-time operator action is required before the first publish: set the repository workflow default to `Read and write permissions`, and allow workflows to write to the `ghcr.io/kingsunb/novaveil-api` package. Without this, GitHub returns `denied: permission_denied: write_package` and the publish step aborts after the build succeeds.
+- `Build, test, and audit` scans every per-platform Docker archive and gates the multi-arch manifest via the `dev-publish` environment. The publish job **never rebuilds** images: it `docker load`s the scanned archive, verifies the image ID against `IMAGE_IDS.tsv`, and pushes the exact bytes under `image@sha256:...` references. Any HIGH/CRITICAL Trivy finding fails the run. A one-time operator action is required before the first publish: set the repository workflow default to `Read and write permissions`, and allow workflows to write to the `ghcr.io/kingsunb/novaveil` package. Without this, GitHub returns `denied: permission_denied: write_package` and the publish step aborts after the build succeeds.

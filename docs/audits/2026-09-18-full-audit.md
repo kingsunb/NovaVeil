@@ -90,13 +90,13 @@
 - 建议：从 COPY 行删除 `tailwind.config.ts`（或补配置文件），并在 CI 增加 Dockerfile COPY 源 dry-run 校验。
 - 确认状态：已确认（文件确实不存在）。
 
-### H-05 【交付·CI】`docker-publish` 每次 push main 自动推送未测试/未扫描的镜像，且镜像名与文档不一致
+### H-05 【交付·CI】`docker-publish` 每次 push main 自动推送未测试/未扫描的镜像，镜像名已统一为 `novaveil`
 
 - 位置：`.github/workflows/docker-publish.yaml:28,77-82,96-103`
-- 证据：`IMAGE: ghcr.io/kingsunb/novaveil`；工作流只跑构建没有 `go test`/`pnpm test`/Trivy；`push: true` 打 `:latest` 与 `:sha-*`；而 `docs/SECURE_DEPLOYMENT.md`/`docker-compose.yml`/`README` 的 canonical 镜像名是 `ghcr.io/kingsunb/novaveil-api`。
-- 影响：未审查镜像按 main 自动发布并打 mutable `latest`，且与文档受支持镜像名不一致，溯源/升级混乱。
-- 建议：IMAGE 改为 `novaveil-api`；push 前加测试与漏洞门禁；main 自动路径至少去掉 `:latest`。
-- 确认状态：已由 workflow 静态确认。
+- 证据：工作流只跑构建没有 `go test`/`pnpm test`/Trivy；`push: true` 打 `:latest` 与 `:sha-*`。镜像名最终口径（2026-09-19 用户确认）：统一为 `ghcr.io/kingsunb/novaveil`，main 自动发布 `:latest` 属于预期行为。
+- 影响：未审查镜像按 main 自动发布并打 mutable `latest`；`latest` 按用户确认为预期，残余风险是供应链门禁缺失。
+- 建议：保留 `ghcr.io/kingsunb/novaveil` 与 main `:latest`；push 前补测试与漏洞门禁；文档/工作流已同步为 `novaveil`。
+- 确认状态：已由 workflow 静态确认；2026-09-19 核查时按用户口径将镜像名保留为 `novaveil`。
 
 ### H-06 【交付·版本】三处版本号不一致，手工 release 会发布成 v0.1.0 而非 v0.2.0
 
@@ -295,7 +295,7 @@
 2. **H-02** Chat localStorage 隐私：登出/登录清 `novaveil:chat:*`，对话迁 `sessionStorage` 或服务端。
 3. **H-03** fresh clone 编译失败：`static/out` 放占位文件或明确前置构建。
 4. **H-04** `web-next/Dockerfile` 删除不存在的 `tailwind.config.ts`。
-5. **H-05** `docker-publish` 镜像名改为 `novaveil-api`，push 前补测试/漏洞门禁，去掉 main `:latest`。
+5. **H-05** `docker-publish` 保留 `novaveil` 镜像名与 main `:latest`（用户确认的预期行为），push 前补测试/漏洞门禁。
 6. **H-06** 版本号三处对齐。
 
 ### P1 —— 高危安全问题与可靠性 bug（建议排期）

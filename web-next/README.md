@@ -58,7 +58,7 @@ pnpm dlx lefthook install
 ```bash
 docker build -t novaveil-web-next:<ver> web-next/
 NOVAVEIL_WEB_NEXT_IMAGE=novaveil-web-next:<ver> \
-NOVAVEIL_IMAGE=ghcr.io/kingsunb/novaveil-api:<ver> \
+NOVAVEIL_IMAGE=ghcr.io/kingsunb/novaveil:<ver> \
 docker compose --profile web-next up -d
 ```
 

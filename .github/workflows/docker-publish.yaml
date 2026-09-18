@@ -25,7 +25,7 @@ concurrency:
 
 env:
   # GHCR 要求镜像名全小写
-  IMAGE: ghcr.io/kingsunb/novaveil-api
+  IMAGE: ghcr.io/kingsunb/novaveil
 
 jobs:
   build-and-publish:

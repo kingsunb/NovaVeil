@@ -90,7 +90,7 @@ jobs:
 
       - name: Validate scripts and Compose
         env:
-          NOVAVEIL_IMAGE: ghcr.io/kingsunb/novaveil-api:${{ steps.version.outputs.version }}
+          NOVAVEIL_IMAGE: ghcr.io/kingsunb/novaveil:${{ steps.version.outputs.version }}
           NOVAVEIL_WEB_NEXT_IMAGE: ghcr.io/kingsunb/novaveil-web-next:${{ steps.version.outputs.version }}
         run: |
           bash -n \
@@ -231,7 +231,7 @@ jobs:
 
       - name: Publish only scanned candidate platform images
         env:
-          IMAGE: ghcr.io/kingsunb/novaveil-api
+          IMAGE: ghcr.io/kingsunb/novaveil
           CANDIDATE: ${{ needs.build.outputs.candidate_tag }}
         run: |
           set -euo pipefail
@@ -289,7 +289,7 @@ jobs:
 
       - name: Promote exact scanned candidate manifest
         env:
-          IMAGE: ghcr.io/kingsunb/novaveil-api
+          IMAGE: ghcr.io/kingsunb/novaveil
           CANDIDATE: ${{ needs.build.outputs.candidate_tag }}
           VERSION: ${{ needs.build.outputs.version }}
         run: |

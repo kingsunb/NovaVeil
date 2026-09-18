@@ -31,21 +31,21 @@ than silently weakening permissions.
 
 ## Image pinning
 
-The canonical image is `ghcr.io/kingsunb/novaveil-api`. Production Compose requires
+The canonical image is `ghcr.io/kingsunb/novaveil`. Production Compose requires
 `NOVAVEIL_IMAGE`; no default `latest` or `dev` tag is accepted. Docker Hub synchronization
 is discontinued and Docker Hub images must be treated as unsupported/stale. Migrate by
 changing only the image reference to a reviewed GHCR version/digest while retaining the
 same `/app/data` volume.
 
 > No versioned tag has been published yet: pushes to `main` auto-publish
-> `ghcr.io/kingsunb/novaveil:latest` and `:sha-<short>`; the `novaveil-api` versioned
+> `ghcr.io/kingsunb/novaveil:latest` and `:sha-<short>`; the `novaveil` versioned
 > image is produced by the manual `release` / `build` workflows. Pin the reviewed digest
 > rather than a version string until a tag is released.
 
 Prefer a digest-qualified reference:
 
 ```bash
-export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil-api@sha256:<manifest-digest>'
+export NOVAVEIL_IMAGE='ghcr.io/kingsunb/novaveil@sha256:<manifest-digest>'
 docker compose pull
 docker compose up -d
 ```
@@ -54,7 +54,7 @@ A version tag without a digest is easier to operate but can be republished. Reco
 the resolved digest in the change ticket before deployment:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/kingsunb/novaveil-api:<version>
+docker buildx imagetools inspect ghcr.io/kingsunb/novaveil:<version>
 ```
 
 The runtime base is pinned to the Alpine 3.21.7 multi-platform OCI index digest

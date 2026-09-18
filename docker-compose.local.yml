@@ -1,9 +1,9 @@
 # 本地开发 compose: 与正式 compose 分开, 镜像坐标必须指向多架构
 # dev tag 的某个具体 digest, 防止重用陈旧单架构镜像。`image:` 字段
 # 没有默认值: 调用方必须显式指定, 例如
-#   NOVAVEIL_IMAGE=ghcr.io/kingsunb/novaveil-api:dev docker compose pull
+#   NOVAVEIL_IMAGE=ghcr.io/kingsunb/novaveil:dev docker compose pull
 # 或
-#   NOVAVEIL_IMAGE=ghcr.io/kingsunb/novaveil-api:sha-877f657@sha256:<digest> docker compose up
+#   NOVAVEIL_IMAGE=ghcr.io/kingsunb/novaveil:sha-877f657@sha256:<digest> docker compose up
 # 数据卷默认是 /tmp/novaveil-docker-data2；部署前需把目录 owner 改为
 # 10001:10001、权限改为 0700。
 #
@@ -12,7 +12,7 @@
 # 之后, 不得直接暴露到公网。
 
 x-image: &image
-  image: ${NOVAVEIL_IMAGE:?NOVAVEIL_IMAGE is required (e.g. ghcr.io/kingsunb/novaveil-api:dev or :sha-<short>@sha256:<digest>)}
+  image: ${NOVAVEIL_IMAGE:?NOVAVEIL_IMAGE is required (e.g. ghcr.io/kingsunb/novaveil:dev or :sha-<short>@sha256:<digest>)}
 
 services:
   novaveil:
