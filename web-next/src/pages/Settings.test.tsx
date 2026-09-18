@@ -333,3 +333,42 @@ describe("<SettingsPage /> 调用客户端统计", () => {
     });
   });
 });
+
+describe("<SettingsPage /> SyncSection 自动同步间隔", () => {
+  it("显示后端同步间隔并支持保存", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url.includes("/channel/last-sync-time")) {
+        return Promise.resolve(jsonOk({ last_sync_at: "2026-09-19T00:00:00Z" }));
+      }
+      if (url.includes("/setting/get") && url.includes("sync_llm_interval")) {
+        return Promise.resolve(jsonOk({ key: "sync_llm_interval", value: "12" }));
+      }
+      if (url.includes("/setting/set") && init?.body) {
+        const body = JSON.parse(init.body as string);
+        return Promise.resolve(jsonOk({ key: body.key, value: body.value }));
+      }
+      return Promise.resolve(jsonOk(null));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<SettingsPage />, { wrapper: Wrapper });
+
+    await user.click(screen.getByRole("button", { name: "上游模型同步" }));
+    const input = (await screen.findByLabelText("自动同步间隔")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("12"));
+
+    await user.clear(input);
+    await user.type(input, "6");
+    await user.click(screen.getByRole("button", { name: "保存 自动同步间隔" }));
+
+    await waitFor(() => {
+      const setCalls = fetchMock.mock.calls.filter(([u, init]) =>
+        String(u).includes("/setting/set") && init?.body,
+      );
+      expect(setCalls.length).toBeGreaterThanOrEqual(1);
+      const body = JSON.parse(setCalls[setCalls.length - 1][1]?.body as string);
+      expect(body.key).toBe("sync_llm_interval");
+      expect(body.value).toBe("6");
+    });
+  });
+});

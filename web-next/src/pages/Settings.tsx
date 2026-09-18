@@ -1676,6 +1676,25 @@ function SyncSection() {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+
+  const { data: intervalSetting } = useQuery({
+    queryKey: ["setting", "sync_llm_interval"],
+    queryFn: () => api.getSetting("sync_llm_interval").catch(swallowMissingSetting),
+  });
+  const [intervalDraft, setIntervalDraft] = useState("24");
+  useEffect(() => {
+    if (intervalSetting?.value) setIntervalDraft(intervalSetting.value);
+  }, [intervalSetting]);
+  const intervalValid =
+    /^\d+$/.test(intervalDraft) &&
+    Number(intervalDraft) >= 1 &&
+    Number(intervalDraft) <= 8760;
+  const saveIntervalMut = useMutation({
+    mutationFn: () => api.setSetting("sync_llm_interval", intervalDraft),
+    onSuccess: () => toast.success("已保存"),
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   return (
     <Card>
       <CardHeader>
@@ -1685,6 +1704,38 @@ function SyncSection() {
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-card/60 px-3 py-2">
+          <div className="min-w-0">
+            <label htmlFor="sync_llm_interval" className="text-sm font-medium text-ink">
+              自动同步间隔
+            </label>
+            <p className="text-xs text-ink-muted">
+              开启「自动同步模型」的渠道按此间隔自动拉取新模型
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Input
+              id="sync_llm_interval"
+              type="number"
+              min={1}
+              max={8760}
+              value={intervalDraft}
+              onChange={(event) => setIntervalDraft(event.target.value)}
+              className="w-28"
+            />
+            <span className="text-xs text-ink-muted">小时</span>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={saveIntervalMut.isPending}
+              disabled={!intervalValid}
+              aria-label="保存 自动同步间隔"
+              onClick={() => saveIntervalMut.mutate()}
+            >
+              保存
+            </Button>
+          </div>
+        </div>
         <div className="flex items-center justify-between rounded-md border border-border bg-card/60 px-3 py-2">
           <div>
             <p className="text-sm font-medium text-ink">最近一次同步</p>
