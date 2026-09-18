@@ -31,6 +31,25 @@ interface AuthContextValue extends AuthState {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 /**
+ * 清除所有 `novaveil:chat:*` localStorage 键，防止跨用户泄漏对话历史与 mask 会话 ID。
+ *
+ * logout 时主动调用；login 成功后也兜底调用一次（token 过期、浏览器关闭等未走
+ * logout 的场景）。倒序遍历避免 removeItem 导致的索引偏移。
+ */
+function clearChatLocalStorage(): void {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith("novaveil:chat:")) {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    // localStorage 不可用（隐私模式/SSR）时静默忽略
+  }
+}
+
+/**
  * 认证上下文：靠 JWT cookie 维持登录态
  *  - 启动时调 /user/status 探活；200 即已登录
  *  - login() 调 /user/login，后端 Set-Cookie；前端不存 token
@@ -89,6 +108,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const gen = ++generationRef.current;
       const s = await api.login({ username, password, expire });
       if (gen !== generationRef.current) return;
+      // 新会话建立后清除上一个用户残留的对话 localStorage（兜底：token 过期、
+      // 浏览器关闭等未走 logout 的场景），避免跨用户泄漏对话历史与 mask 会话 ID。
+      clearChatLocalStorage();
       setState({
         isAuthenticated: true,
         username,
@@ -116,7 +138,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     // 3. 清空全部查询缓存（渠道明文 Key、API Key 明文等不复用）。
     queryClient.clear();
-    // 4. 更新认证状态。
+    // 4. 清除对话相关 localStorage（对话历史、mask 会话 ID），防止下一个用户
+    //    看到上一个用户的对话或复用其 X-Session-Id。
+    clearChatLocalStorage();
+    // 5. 更新认证状态。
     setState({
       isAuthenticated: false,
       username: null,

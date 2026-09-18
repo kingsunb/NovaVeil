@@ -57,6 +57,25 @@ func SyncModelsTask() error {
 			continue
 		}
 
+		// 防御(H-01): 上游返回空模型列表时, 若渠道已持有 auto 模型, 跳过本轮删除以免误删。
+		// 上游 401/403/429 等错误已在 fetch 层转为 error 走上面的分支, 这里仅兜底上游合法
+		// 返回空列表但渠道已存在 auto 模型的可疑场景: 删除全部 auto 模型会级联清理分组生效项、
+		// 分组成员与评估排序, 属破坏性操作, 宁可不同步也不丢失既有模型。
+		if len(fetchModels) == 0 {
+			hasExistingAuto := false
+			for _, channelModel := range channel.Models {
+				if channelModel.Source == model.ChannelModelSourceAuto {
+					hasExistingAuto = true
+					break
+				}
+			}
+			if hasExistingAuto {
+				log.Warnf("skip syncing models for channel %s: upstream returned an empty model list while the channel already has auto models; deletion skipped to avoid data loss", channel.Name)
+				fetchCancel()
+				continue
+			}
+		}
+
 		manualNames := make(map[string]struct{})
 		oldAutoNames := make(map[string]struct{})
 		models := make([]model.ChannelModel, 0, len(channel.Models)+len(fetchModels))

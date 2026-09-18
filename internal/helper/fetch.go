@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -109,6 +110,13 @@ func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.C
 	}
 	defer resp.Body.Close()
 
+	// 上游非 2xx(如 401/403/429)时, 错误响应体解码到 OpenAIModelList 会得到 Data: nil,
+	// 与合法空列表无法区分; SyncModelsTask 会据此删除渠道全部 auto 模型并级联清理分组与
+	// 评估排序(H-01)。故在解码前显式校验状态码, 读一段错误体用于上下文后直接报错返回。
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("upstream returned HTTP %d: %s", resp.StatusCode, readUpstreamErrorSnippet(resp.Body))
+	}
+
 	var result model.OpenAIModelList
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -152,6 +160,13 @@ func fetchGeminiModels(client *http.Client, ctx context.Context, request model.C
 
 		resp, err := client.Do(req)
 		if err != nil {
+			return nil, err
+		}
+		// 每页都校验状态码: 分页循环中任一页返回 401/403/429 都须中止, 不能把错误体当成
+		// 空页继续累加(H-01)。错误体读一段用于上下文, 显式关闭后提前返回。
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			err := fmt.Errorf("upstream returned HTTP %d: %s", resp.StatusCode, readUpstreamErrorSnippet(resp.Body))
+			resp.Body.Close()
 			return nil, err
 		}
 		var result model.GeminiModelList
@@ -210,6 +225,13 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 		if err != nil {
 			return nil, err
 		}
+		// 每页都校验状态码: 分页循环中任一页返回 401/403/429 都须中止, 不能把错误体当成
+		// 空页继续累加(H-01)。错误体读一段用于上下文, 显式关闭后提前返回。
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			err := fmt.Errorf("upstream returned HTTP %d: %s", resp.StatusCode, readUpstreamErrorSnippet(resp.Body))
+			resp.Body.Close()
+			return nil, err
+		}
 		var result model.AnthropicModelList
 		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
 		// 逐页显式关闭: 循环内 defer 会累积到函数返回, 多页渠道会同时持有 N 个响应体。
@@ -232,6 +254,14 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 		return fetchOpenAIModels(client, ctx, request)
 	}
 	return allModels, nil
+}
+
+// readUpstreamErrorSnippet 读取上游非 2xx 响应体前 512 字节用于错误上下文。
+// 截断避免超大错误页耗内存; 调用方拿到本片段后须自行关闭 resp.Body —— 错误路径不再
+// 解码, body 流已被消费, 不能再喂给 json.NewDecoder。
+func readUpstreamErrorSnippet(body io.ReadCloser) string {
+	snippet, _ := io.ReadAll(io.LimitReader(body, 512))
+	return strings.TrimSpace(string(snippet))
 }
 
 // probeProtectedHeaders 探测/拉模型请求中不允许被渠道自定义头覆盖的头名(小写):

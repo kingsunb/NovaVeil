@@ -1,6 +1,7 @@
 data
 build
 static/out/*
+!static/out/.gitkeep
 .vscode
 /logs/
 

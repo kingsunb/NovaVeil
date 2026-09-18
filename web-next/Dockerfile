@@ -27,7 +27,7 @@ RUN corepack enable && corepack prepare pnpm@9 --activate \
  && pnpm install --frozen-lockfile
 
 # 复制源码 + 构建
-COPY tsconfig*.json vite.config.ts tailwind.config.ts postcss.config.js components.json ./
+COPY tsconfig*.json vite.config.ts postcss.config.js components.json ./
 COPY index.html ./
 COPY src ./src
 COPY public ./public
