@@ -4,11 +4,16 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/kingsunb/NovaVeil/internal/model"
 )
+
+// opencodeSessionPattern 校验 opencode 会话 ID 格式:
+// ses_ + 12 个小写十六进制字符 + 14 个 [0-9A-Za-z] 字符。
+var opencodeSessionPattern = regexp.MustCompile(`^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`)
 
 // newModelsTestServer 启动一个 httptest 上游, 对 /v1/models 用给定状态码与响应体应答。
 // 用于在受控环境下回归 fetchOpenAIModels 的状态码校验, 不依赖真实上游与数据库初始化。
@@ -114,5 +119,59 @@ func TestFetchOpenAIModelsAcceptsPopulated(t *testing.T) {
 	}
 	if got, want := len(models), 2; got != want {
 		t.Fatalf("expected %d models, got %d (%v)", want, got, models)
+	}
+}
+
+// TestFetchOpenAIModelsInjectsOpencodeSession 验证模型同步/探测路径与转发路径一致:
+// OpencodeCompat=true 的 OpenAI 渠道拉取模型列表时, 必须注入 opencode 格式的
+// x-opencode-session 头, 否则 opencode.ai/zen 上游会拒绝请求。
+func TestFetchOpenAIModelsInjectsOpencodeSession(t *testing.T) {
+	got := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r.Header.Get("x-opencode-session")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := fetchOpenAIModels(&http.Client{}, context.Background(), model.Channel{
+		Type:           model.ChannelProviderOpenAI,
+		BaseURL:        srv.URL,
+		Key:            "sk-test",
+		OpencodeCompat: true,
+	}); err != nil {
+		t.Fatalf("fetchOpenAIModels: %v", err)
+	}
+
+	session := <-got
+	if !opencodeSessionPattern.MatchString(session) {
+		t.Fatalf("x-opencode-session = %q, 期望匹配 %s", session, opencodeSessionPattern.String())
+	}
+}
+
+// TestFetchOpenAIModelsSkipsOpencodeSessionWhenDisabled 验证 OpencodeCompat=false
+// 的普通渠道不会被注入 x-opencode-session, 保持与转发路径相同的开关语义。
+func TestFetchOpenAIModelsSkipsOpencodeSessionWhenDisabled(t *testing.T) {
+	got := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r.Header.Get("x-opencode-session")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := fetchOpenAIModels(&http.Client{}, context.Background(), model.Channel{
+		Type:           model.ChannelProviderOpenAI,
+		BaseURL:        srv.URL,
+		Key:            "sk-test",
+		OpencodeCompat: false,
+	}); err != nil {
+		t.Fatalf("fetchOpenAIModels: %v", err)
+	}
+
+	if session := <-got; session != "" {
+		t.Fatalf("OpencodeCompat=false 时不应注入 x-opencode-session, 实际注入 %q", session)
 	}
 }

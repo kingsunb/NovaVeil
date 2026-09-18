@@ -1,78 +1,23 @@
 package relay
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
+	"github.com/kingsunb/NovaVeil/internal/utils/opencodeid"
 	"github.com/looplj/axonhub/llm/httpclient"
 )
 
 // opencodeSessionHeader opencode 兼容请求头的固定头名。
 const opencodeSessionHeader = "x-opencode-session"
 
-// opencodeIDCharset opencode ID 随机后缀使用的字符集: [0-9A-Za-z], 共 62 个字符。
-// 与 opencode 二进制中的字符表完全一致。
-const opencodeIDCharset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-
-// opencodeIDCounter 与 opencodeIDTimestamp 实现 opencode 的 ID 计数器:
-// 同一毫秒内多次生成时计数器递增, 跨毫秒时重置为 0。与 opencode 的 tU() 函数行为一致。
-var opencodeIDCounter atomic.Int64
-var opencodeIDTimestamp atomic.Int64
-
-// generateOpencodeSessionID 使用 opencode 的 ID 生成算法生成会话 ID:
-//   - 前缀 "ses_"
-//   - 12 个十六进制字符: 由 ~(timestamp_ms * 4096 + counter) 的高 6 字节(大端)编码
-//   - 14 个随机字符: 从 [0-9A-Za-z] 中选取
-//
-// opencode.ai/zen 上游会验证 x-opencode-session 的值格式, 非 opencode 格式的值
-// (如随机 UUID)会被拒绝并返回 "FreeTierError: OpenCode's free tier can only be
-// used from within OpenCode"。算法逆向自 opencode 二进制中的 tU(!0) 函数。
+// generateOpencodeSessionID 生成 opencode 格式的会话 ID。算法抽到 internal/utils/opencodeid
+// 公共包，供转发路径与模型同步/探测路径共用，保证两处注入值格式一致。
 func generateOpencodeSessionID() string {
-	now := time.Now().UnixMilli()
-
-	// 计数器管理: 时间戳变更时重置, 每次调用递增。与 opencode 的 tU() 行为一致。
-	stamp := opencodeIDTimestamp.Load()
-	if stamp != now {
-		if opencodeIDTimestamp.CompareAndSwap(stamp, now) {
-			opencodeIDCounter.Store(0)
-		}
-	}
-	counter := opencodeIDCounter.Add(1)
-
-	// val = timestamp_ms * 4096 + counter, 与 opencode 的 BigInt(Y)*0x1000n+BigInt(cU) 一致。
-	val := now*0x1000 + counter
-
-	// 会话 ID 使用按位取反(^), 与 opencode 的 tU(true) → ~$ 一致。
-	// Go 的 int64 对负数的 >> 做算术右移(符号扩展), 与 JS BigInt 行为一致。
-	inverted := ^val
-
-	// 提取高 6 字节(大端序) → 12 个十六进制字符。
-	buf := make([]byte, 6)
-	for i := 0; i < 6; i++ {
-		buf[i] = byte((inverted >> uint(40-8*i)) & 0xff)
-	}
-	hexPart := hex.EncodeToString(buf)
-
-	// 生成 14 个随机字符, 从 [0-9A-Za-z] 中选取。
-	randBuf := make([]byte, 14)
-	if _, err := rand.Read(randBuf); err != nil {
-		// crypto/rand 失败时的降级: 用时间戳填充, 极低概率发生。
-		ts := time.Now().UnixNano()
-		for i := range randBuf {
-			randBuf[i] = byte(ts >> uint((i*8)%64))
-		}
-	}
-	randPart := make([]byte, 14)
-	for i, b := range randBuf {
-		randPart[i] = opencodeIDCharset[b%62]
-	}
-
-	return "ses_" + hexPart + string(randPart)
+	return opencodeid.GenerateSessionID()
 }
 
 // sessionUUIDEntry 一个会话(按 Key/渠道命名空间)的随机头会话 ID 映射记录, 到期前同一
