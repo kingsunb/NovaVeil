@@ -18,7 +18,6 @@ import { EvalQueue } from "@/components/model-eval/EvalQueue";
 import { EvalRanking } from "@/components/model-eval/EvalRanking";
 import { EvalSelection } from "@/components/model-eval/EvalSelection";
 import { cn } from "@/lib/utils";
-import type { Channel } from "@/lib/types";
 
 type EvalView = "current" | "ranking" | "queue" | "history";
 type CategoryFilter = "all" | "free" | "builtin" | "custom";

@@ -739,8 +739,8 @@ function TraceSheet({
 
   // 请求体：弹窗打开即加载（不再等切 Tab）。
   useEffect(() => {
-    if (!req) return;
-    const myReqId = req.id;
+    const myReqId = req?.id;
+    if (myReqId == null) return;
     setBodyLoading(true);
     let cancelled = false;
     api
@@ -761,8 +761,9 @@ function TraceSheet({
 
   // 响应体：终态才拉取（running / committed 展示等待指示）。
   useEffect(() => {
-    if (!req || req.status === "running" || req.status === "committed") return;
-    const myReqId = req.id;
+    const myReqId = req?.id;
+    const status = req?.status;
+    if (myReqId == null || status === "running" || status === "committed") return;
     setResponseLoading(true);
     let cancelled = false;
     api
