@@ -199,6 +199,25 @@ type conversionMiddleware struct {
 	convertedRequestBody     []byte        // 转换后的上游请求体快照; 仅 traceEnabled=true 时填充, 供追踪诊断对比。
 }
 
+// OnInboundLlmRequest 在统一请求进入出站转换前, 把渠道模型输出上限写入 TransformOptions。
+// AxonHub llm 19a3c27 起, Anthropic 出站转换的 max_tokens 兜底顺序为:
+// 客户端 max_tokens → 客户端 max_completion_tokens → DefaultMaxTokens → 硬编码 8192。
+// 中转路径经本钩子补上渠道模型卡输出上限, 使未显式限定输出长度的客户端请求
+// 也能继承渠道配置而非硬编码默认值; applyChannelModelLimits 的后置注入仍保留为安全网,
+// 用于处理思考预算抬升与其他协议字段语义。同协议透传不经过 pipeline, 不受此处影响。
+func (m *conversionMiddleware) OnInboundLlmRequest(_ context.Context, request *llm.Request) (*llm.Request, error) {
+	if m.format != llm.APIFormatAnthropicMessage || request.TransformOptions.DefaultMaxTokens != nil {
+		return request, nil
+	}
+	limit, ok := lookupModelLimit(m.channel.ModelLimits, request.Model)
+	if !ok || limit.MaxOutput == nil || *limit.MaxOutput <= 0 {
+		return request, nil
+	}
+	maxTokens := int64(*limit.MaxOutput)
+	request.TransformOptions.DefaultMaxTokens = &maxTokens
+	return request, nil
+}
+
 // OnOutboundRawRequest 在转换后的上游请求上应用渠道参数和自定义 Header。
 // 目标为 OpenAI Chat 协议时顺带做角色归一化: Responses 协议特有的 developer 角色
 // 与会话中途的 system 消息会被大量兼容代理以 Incorrect role / Invalid parameter 拒绝。
