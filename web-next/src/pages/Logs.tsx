@@ -218,6 +218,17 @@ export default function LogsPage() {
     return { running, success, failed, total: live.length };
   }, [live]);
 
+  // 正在运行（含「正在请求」与「响应中」）的请求置顶展示，便于优先盯住仍在
+  // 进行中的请求；同一分组内部仍保持后端 ID 倒序（最新在顶）。live 本身仍按
+  // ID 倒序维护，这里只影响展示层，tracing / stats 继续基于 live。
+  const isActiveRequest = (r: RequestState) =>
+    r.status === "running" || r.status === "committed";
+  const visibleLive = useMemo(() => {
+    const active = live.filter(isActiveRequest);
+    const rest = live.filter((r) => !isActiveRequest(r));
+    return [...active, ...rest];
+  }, [live]);
+
   return (
     <div className="space-y-4">
       {/* 计数条 */}
@@ -294,7 +305,7 @@ export default function LogsPage() {
       />
 
       {tab === "live" ? (
-        <LiveTable rows={live} onPick={(r) => setTracingId(r.id)} />
+        <LiveTable rows={visibleLive} onPick={(r) => setTracingId(r.id)} />
       ) : (
         <Card>
           <div className="flex items-center justify-between border-b border-border px-4 py-2.5 text-xs text-ink-muted">

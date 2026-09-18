@@ -204,8 +204,8 @@ describe("<LogsPage /> 虚拟化结构", () => {
   });
 });
 
-describe("<LogsPage /> 实时列表顺序（最新在顶）", () => {
-  it("后端快照按 ID 倒序到达时，前端合并后仍保持最新(大 ID)在顶、旧序向下", async () => {
+describe("<LogsPage /> 实时列表顺序（运行中置顶 + 最新在顶）", () => {
+  it("后端快照按 ID 倒序到达时，运行中的请求置顶，其余仍保持最新(大 ID)在顶、旧序向下", async () => {
     setupBasicFetch();
     const sources = setupEventSource();
 
@@ -234,11 +234,13 @@ describe("<LogsPage /> 实时列表顺序（最新在顶）", () => {
       return rows.map((r) => r.getAttribute("aria-label"));
     });
 
+    // 快照 5→1 中 #5/#2 为 running，应先置顶（ID 倒序：#5 在 #2 前），
+    // 其余终态请求紧随其后，仍按 ID 倒序：#4、#3、#1。
     expect(ids).toEqual([
       "查看请求 #5 追踪",
+      "查看请求 #2 追踪",
       "查看请求 #4 追踪",
       "查看请求 #3 追踪",
-      "查看请求 #2 追踪",
       "查看请求 #1 追踪",
     ]);
   });
