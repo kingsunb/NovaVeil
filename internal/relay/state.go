@@ -47,7 +47,7 @@ const (
 	ErrClassAdminAbort      ErrClass = "admin_abort"      // 管理端人工中止本轮上游调用。
 	ErrClassUpstream4xx     ErrClass = "upstream_4xx"     // 上游返回 4xx 状态码。
 	ErrClassUpstream5xx     ErrClass = "upstream_5xx"     // 上游返回 5xx 状态码。
-	ErrClassUpstreamNetwork ErrClass = "upstream_network" // 网络/代理/DNS/TLS 等基础设施层错误, 不计入成员冷却。
+	ErrClassUpstreamNetwork ErrClass = "upstream_network" // 网络/代理/DNS/TLS 等基础设施层错误, 按 MemberInfraMaxRetries 独立计数, 达到后走正常冷却通道。
 	ErrClassUpstream        ErrClass = "upstream_error"   // 其余上游侧错误。
 	ErrClassRoundsExhausted ErrClass = "rounds_exhausted" // 路由层耗尽（轮次/时长超限），非渠道错误，不落库持久化。
 )

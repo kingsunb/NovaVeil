@@ -1,6 +1,7 @@
 package mask
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -218,4 +219,77 @@ func TestEngine_USCC(t *testing.T) {
 	for _, m := range res3.Matches {
 		assert.NotEqual(t, "USCC", m.Label, "非法信用代码不应出现在命中明细")
 	}
+}
+
+func TestEngine_APIKey_StripePrefixMasked(t *testing.T) {
+	e := NewEngine(NewSessionStore())
+	// 预检 apiPrefixes 必须覆盖正则支持的 Stripe/Restricted 前缀,
+	// 否则纯 sk_live_ 文本会被预检整条跳过而明文透出。
+	for _, prefix := range []string{"sk_live_", "sk_test_", "rk_live_"} {
+		// 完整假密钥由前缀运行时拼接, 源码不出现完整密钥字面量,
+		// 避免 GitHub push protection 把占位样例当真实凭据拦截推送。
+		key := prefix + "123456789012345678901234"
+		res, err := e.Apply("key "+key+" ok", "s1", enable("API_KEY"), nil)
+		require.NoError(t, err)
+		assert.NotContains(t, res.Masked, key, "凭据前缀应被脱敏(预检不得漏前缀)")
+		assert.Contains(t, res.Masked, "{{APIKEY_")
+	}
+}
+
+func TestEngine_MAC_IPv6NotTruncated(t *testing.T) {
+	e := NewEngine(NewSessionStore())
+	// 冒号链 {5,} 贪婪 + macOK 恰 6 组校验: 8 组 IPv6 整链被拒, 不再截取前 6 组。
+	res, err := e.Apply("addr 11:22:33:44:55:66:77:88 end", "s1", enable("MAC"), nil)
+	require.NoError(t, err)
+	assert.Contains(t, res.Masked, "11:22:33:44:55:66:77:88", "IPv6 应原样保留")
+	assert.NotContains(t, res.Masked, "{{MAC_")
+
+	// 恰 6 组的正常 MAC 不受影响。
+	res2, err := e.Apply("mac 00:1A:2B:3C:4D:5E end", "s2", enable("MAC"), nil)
+	require.NoError(t, err)
+	assert.Contains(t, res2.Masked, "{{MAC_", "正常 MAC 仍应脱敏")
+	assert.NotContains(t, res2.Masked, "00:1A:2B:3C:4D:5E")
+}
+
+func TestEngine_Overlap_LongestCandidateWins(t *testing.T) {
+	e := NewEngine(NewSessionStore())
+	// 同起点: CONNSTR 完整密码(含 .tail)应整体覆盖, 不能让先序 API_KEY 的
+	// 短命中截短后残留 .tail。
+	res, err := e.Apply("postgres://u:sk-aaaaaaaaaaaaaaaaaaaa.tail@host", "s1", enable("API_KEY", "CONNSTR"), nil)
+	require.NoError(t, err)
+	assert.NotContains(t, res.Masked, ".tail", "密码尾部不应残留")
+	assert.NotContains(t, res.Masked, "aaaaaaaa", "密码不应明文残留")
+
+	// JWT 与 SECRET 同起点: 整串应被一次替换, 后两段不得残留。
+	res2, err := e.Apply("token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl", "s2", enable("SECRET", "JWT"), nil)
+	require.NoError(t, err)
+	assert.NotContains(t, res2.Masked, "eyJzdWIiOiJ4In0", "JWT 载荷不应残留")
+	assert.NotContains(t, res2.Masked, "c2lnbmF0dXJl", "JWT 签名不应残留")
+}
+
+func TestEngine_JSONStringValuesMasked(t *testing.T) {
+	e := NewEngine(NewSessionStore())
+	// JSON 转义引号: 解码后的字符串值才与上游读取内容一致, 扫描必须走解码值。
+	body := `{"messages":[{"role":"user","content":"password=\"abc123\""}]}`
+	res, err := e.Apply(body, "s1", enable("SECRET"), nil)
+	require.NoError(t, err)
+	assert.NotContains(t, res.Masked, "abc123", "JSON 转义凭据应被脱敏")
+	assert.True(t, json.Valid([]byte(res.Masked)), "脱敏后应保持合法 JSON")
+	restored := RestoreString(res.Masked, res.Mapping)
+	// 已知限制: 还原是纯文本替换, 不按 JSON 重新转义(与 PRIVATE_KEY 含换行同类),
+	// 引号原样回填会破坏响应 JSON 转义, 但机密内容本身已完整还原。
+	assert.Contains(t, restored, `password="abc123"`, "机密内容应被还原")
+
+	// JSON unicode 转义手机号(原文无 JSON 特殊字符): 语义往返。
+	// JSON 感知扫描会规范化转义形态(\u0031 → 字面字符), 故按解码值而非原文字节断言。
+	body2 := `{"content":"\u0031\u0033\u0038\u0030\u0030\u0031\u0033\u0038\u0030\u0030\u0030"}`
+	res2, err := e.Apply(body2, "s2", enable("PHONE"), nil)
+	require.NoError(t, err)
+	assert.NotContains(t, res2.Masked, "13800138000", "JSON unicode 手机号应被脱敏")
+	assert.True(t, json.Valid([]byte(res2.Masked)), "脱敏后应保持合法 JSON")
+	restored2 := RestoreString(res2.Masked, res2.Mapping)
+	assert.True(t, json.Valid([]byte(restored2)), "还原后应保持合法 JSON")
+	var back map[string]any
+	require.NoError(t, json.Unmarshal([]byte(restored2), &back))
+	assert.Equal(t, "13800138000", back["content"], "还原后语义应与原文一致")
 }

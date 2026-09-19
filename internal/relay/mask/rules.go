@@ -37,6 +37,7 @@ var builtinValidators = map[string]Validator{
 	"PHONE":  phoneOK,
 	"EMAIL":  emailOK,
 	"JWT":    jwtOK,
+	"MAC":    macOK,
 	"SECRET": secretOK,
 	"USCC":   usccOK,
 }
@@ -107,9 +108,9 @@ var BuiltinRules = []Rule{
 	},
 	{
 		Label:       "MAC",
-		Pattern:     regexp.MustCompile(`\b(?:[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{4}(?:\.[0-9A-Fa-f]{4}){2})\b`),
+		Pattern:     regexp.MustCompile(`\b(?:[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5,}|[0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{4}(?:\.[0-9A-Fa-f]{4}){2})\b`),
 		Group:       0,
-		Description: "MAC 地址(6 组十六进制: 冒号/连字符 2-2-2-2-2-2 或点 4-4-4, \\b 边界, 无校验)",
+		Description: "MAC 地址(冒号链贪婪成整链候选、由校验限定恰 6 组防截断 IPv6; 连字符 2-2-2-2-2-2 或点 4-4-4, \\b 边界)",
 	},
 	{
 		Label:       "USCC",
@@ -292,6 +293,16 @@ func secretOK(s string) bool {
 		}
 	}
 	return false
+}
+
+// macOK MAC 地址校验: 冒号链候选须恰为 6 组。冒号形态正则用 {5,} 贪婪把整条冒号链收为
+// 一个候选, 使 IPv6(8 组)等更长链在此处被整体拒绝、原样保留, 避免截取前 6 组误脱敏;
+// 连字符/点分形态形状已由正则锁定(恰 6 组/3 段), 直接送过。
+func macOK(s string) bool {
+	if strings.Contains(s, ":") {
+		return strings.Count(s, ":") == 5
+	}
+	return true
 }
 
 // ---- 统一社会信用代码(USCC)校验, 译自 GB 32100-2015 / GB/T 17710 MOD 31-3 ----

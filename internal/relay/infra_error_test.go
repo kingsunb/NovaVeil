@@ -3,7 +3,9 @@ package relay
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/url"
 	"testing"
 
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -26,6 +28,9 @@ func TestIsInfrastructureError(t *testing.T) {
 		{"TLS handshake", errors.New("net/http: TLS handshake error"), true},
 		{"x509 证书", errors.New("x509: certificate signed by unknown authority"), true},
 		{"EOF", errors.New("unexpected EOF"), true},
+		// 真实生产样本: 非流式透传 Do 阶段连接提前中断(url.Error 包装 io.ErrUnexpectedEOF),
+		// 上游未返回任何 HTTP 响应, 属基础设施错误, 应按网络错误重试策略处理。
+		{"url.Error unexpected EOF", &url.Error{Op: "Post", URL: "https://api.stepfun.com/step_plan/v1/chat/completions", Err: io.ErrUnexpectedEOF}, true},
 		{"broken pipe", errors.New("write tcp: broken pipe"), true},
 		{"net.OpError", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("test")}, true},
 		// httpclient 业务错误(有 StatusCode) 不算基础设施

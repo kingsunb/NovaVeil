@@ -51,6 +51,51 @@ const keyTestRequestTimeout = 60 * time.Second
 // 客户端调用统计(client_stats), 仅作面板展示。
 const testProbeClientIP = "面板测试"
 
+// diagInfraRetryInterval 诊断/评估探针对基础设施错误重试的等待间隔, 对齐分组路由
+// 默认重试间隔(MemberRetryIntervalSeconds)。定义为变量仅为让测试缩短等待。
+var diagInfraRetryInterval = 2 * time.Second
+
+// diagInfraRetryLimit 诊断/评估探针的网络错误容忍次数, 取分组路由 MemberInfraMaxRetries
+// 的出厂默认值; 计数语义与路由层一致(阈值含首次失败, 达到即止), 即最多发起 limit 次上游调用。
+// 探针不绑定单一分组(渠道可属多个分组, 评估按渠道发起), 故不读具体分组配置而统一用默认值。
+func diagInfraRetryLimit() int {
+	return max(model.DefaultGroupRelayConfig().MemberInfraMaxRetries, 1)
+}
+
+// sendDiagnosticUpstream 以诊断/评估语义发起一次非流式上游调用: 基础设施层错误
+// (代理/DNS/TLS/连接重置/连接提前中断等, isInfrastructureError 判定)按网络错误重试策略
+// 最多尝试 diagInfraRetryLimit() 次, 每次间隔 diagInfraRetryInterval, 期间尊重 ctx 取消;
+// 业务错误(4xx/5xx/限流/响应校验失败)与上下文取消/超时不重试, 原样返回——重试不可能
+// 改变结果, 只会烧计费请求。面板测试、模型评估与半开探测此前均为单发路径, 瞬时网络
+// 抖动(如 unexpected EOF)会把渠道/密钥直接判死、把恢复中的成员重新打入更长冷却,
+// 与分组路由对真实流量按网络错误重试的容错口径不一致。
+func sendDiagnosticUpstream(ctx context.Context, send func() (*upstreamResponse, error)) (*upstreamResponse, error) {
+	limit := diagInfraRetryLimit()
+	for attempt := 1; ; attempt++ {
+		resp, err := send()
+		if err == nil || attempt >= limit || !isRetryableDiagnosticError(err) {
+			return resp, err
+		}
+		select {
+		case <-ctx.Done():
+			return resp, err
+		case <-time.After(diagInfraRetryInterval):
+		}
+	}
+}
+
+// isRetryableDiagnosticError 判定诊断探针的失败是否值得重试: 基础设施层错误可重试;
+// 上下文取消/超时表示调用方已放弃或时间预算耗尽, 重试只会把等待拉长 N 倍, 不重试。
+func isRetryableDiagnosticError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return isInfrastructureError(err)
+}
+
 // recordTestRequest 把一次渠道模型测试登记为终态请求并发布到状态流, 供日志页
 // 实时可见与追踪(请求体/响应体复用既有按需拉取接口, 追踪 Sheet 可直接打开)。
 // 刻意不走 newRequestState→markSucceeded/markFailed 完整管线: 探针没有真实
@@ -283,12 +328,13 @@ func testChannelKeyOnce(ctx context.Context, channel model.Channel, index int, k
 }
 
 // sendKeyTestRequest 发送单把密钥的测试请求并把回复摘要与耗时写入 result。
-// 按渠道原生协议构造请求: 同协议渠道整包透传, 异协议渠道经 pipeline 转换。
+// 以 openai_chat 作为代表客户端协议构造请求, 路径决定与真实转发(客户端发
+// openai_chat)一致: 同协议渠道整包透传, 异协议渠道经 pipeline 转换。
 func sendKeyTestRequest(ctx context.Context, effective model.Channel, modelName string, message string, result *ChannelKeyTestResult) error {
 	keyCtx, cancel := context.WithTimeout(ctx, keyTestRequestTimeout)
 	defer cancel()
 
-	format := channelNativeFormat(effective.Type)
+	format := testProbeClientFormat
 	outbound, passthrough, err := buildOutbound(effective, format)
 	if err != nil {
 		return err
@@ -297,14 +343,17 @@ func sendKeyTestRequest(ctx context.Context, effective model.Channel, modelName 
 	if err != nil {
 		return err
 	}
+	// 代表客户端入站路径, 与 sendChannelTestRequest 对齐, 供 buildPassthroughRequest
+	// 在完全透传渠道下 strings.TrimPrefix(raw.Path, "/v1") 得到 "/chat/completions"。
+	raw.Path = "/v1/chat/completions"
 
 	startedAt := time.Now()
-	var response *upstreamResponse
-	if passthrough {
-		response, err = sendPassthrough(keyCtx, format, raw, effective, outbound, false, "")
-	} else {
-		response, err = sendConverted(keyCtx, format, raw, effective, outbound, false, "")
-	}
+	response, err := sendDiagnosticUpstream(keyCtx, func() (*upstreamResponse, error) {
+		if passthrough {
+			return sendPassthrough(keyCtx, format, raw, effective, outbound, false, "")
+		}
+		return sendConverted(keyCtx, format, raw, effective, outbound, false, "")
+	})
 	result.ElapsedMS = time.Since(startedAt).Milliseconds()
 	if err != nil {
 		return err
@@ -403,10 +452,11 @@ func newTestChatRequest(modelName string, message string) (*httpclient.Request, 
 }
 
 // sendChannelTestRequest 发送单模型测试请求并聚合回复摘要、耗时与 token 用量。
-// 按渠道原生协议构造请求: 同协议渠道整包透传, 异协议渠道经 pipeline 转换。
+// 以 openai_chat 作为代表客户端协议构造请求, 路径决定与真实转发(客户端发
+// openai_chat)一致: 同协议渠道整包透传, 异协议渠道经 pipeline 转换。
 // 无论成败, 都把这次探针作为终态请求写入日志流(keyLabel 标识所用密钥)。
 func sendChannelTestRequest(ctx context.Context, channel model.Channel, modelName string, message string, keyLabel string) (*ChannelTestResult, error) {
-	format := channelNativeFormat(channel.Type)
+	format := testProbeClientFormat
 	outbound, passthrough, err := buildOutbound(channel, format)
 	if err != nil {
 		return nil, err
@@ -415,6 +465,10 @@ func sendChannelTestRequest(ctx context.Context, channel model.Channel, modelNam
 	if err != nil {
 		return nil, err
 	}
+	// 代表客户端入站路径, 供 buildPassthroughRequest 在完全透传渠道下
+	// strings.TrimPrefix(raw.Path, "/v1") 得到 "/chat/completions", 避免回退
+	// 到 upstreamPath(format) 导致与真实转发路径分歧。
+	raw.Path = "/v1/chat/completions"
 
 	relayMode := "converted"
 	if passthrough {
@@ -424,12 +478,12 @@ func sendChannelTestRequest(ctx context.Context, channel model.Channel, modelNam
 	// 与真实转发路径保持一致; 空串会让 injectRandomHeaders 提前返回而漏注这些头。
 	randomValue := uuid.NewString()
 	startedAt := time.Now()
-	var result *upstreamResponse
-	if passthrough {
-		result, err = sendPassthrough(ctx, format, raw, channel, outbound, false, randomValue)
-	} else {
-		result, err = sendConverted(ctx, format, raw, channel, outbound, false, randomValue)
-	}
+	result, err := sendDiagnosticUpstream(ctx, func() (*upstreamResponse, error) {
+		if passthrough {
+			return sendPassthrough(ctx, format, raw, channel, outbound, false, randomValue)
+		}
+		return sendConverted(ctx, format, raw, channel, outbound, false, randomValue)
+	})
 	elapsed := time.Since(startedAt)
 	clientFormat := clientFormatLabel(format)
 	upstreamType := upstreamTypeLabel(channel.Type)
@@ -453,9 +507,18 @@ func sendChannelTestRequest(ctx context.Context, channel model.Channel, modelNam
 	}, nil
 }
 
-// channelNativeFormat 返回渠道上游协议的原生 API 格式, 供测试探针按渠道协议
-// 直连上游: 同协议渠道可整包透传, 异协议渠道经 pipeline 转换。Gemini/Volcengine/
-// Custom 等无原生透传支持的渠道回退 OpenAI Chat, 由转换器适配其上游协议。
+// testProbeClientFormat 测试探针模拟的客户端协议, 作为单模型/逐密钥测试探针
+// format 的单一事实源。对齐范围为 buildOutbound 的 passthrough 判定、
+// sendPassthrough/sendConverted 的选择、buildPassthroughRequest 的 upstreamPath
+// 与完全透传 raw.Path 处理, 使探针的路径决定与真实转发(客户端发 openai_chat)一致。
+// 选 openai_chat 因它为最通用的客户端入口协议, 且前端测试按钮无协议选择项,
+// 管理端自测等价于客户端以 openai_chat 入站。
+const testProbeClientFormat = llm.APIFormatOpenAIChatCompletion
+
+// channelNativeFormat 返回渠道上游协议的原生 API 格式。剩余唯一调用方为
+// testGroupMember(分组测试, 不复用 testProbeClientFormat); 单模型/逐密钥测试
+// 探针已改用 testProbeClientFormat 对齐真实转发路径。Gemini/Volcengine/Custom
+// 等无原生透传支持的渠道回退 OpenAI Chat, 由转换器适配其上游协议。
 func channelNativeFormat(channelType model.ChannelProvider) llm.APIFormat {
 	switch channelType {
 	case model.ChannelProviderOpenAI:
@@ -628,12 +691,12 @@ func testGroupMember(ctx context.Context, channelModelID int, groupName, message
 	defer cancel()
 
 	startedAt := time.Now()
-	var resp *upstreamResponse
-	if passthrough {
-		resp, err = sendPassthrough(testCtx, format, raw, effective, outbound, false, "")
-	} else {
-		resp, err = sendConverted(testCtx, format, raw, effective, outbound, false, "")
-	}
+	resp, err := sendDiagnosticUpstream(testCtx, func() (*upstreamResponse, error) {
+		if passthrough {
+			return sendPassthrough(testCtx, format, raw, effective, outbound, false, "")
+		}
+		return sendConverted(testCtx, format, raw, effective, outbound, false, "")
+	})
 	elapsed := time.Since(startedAt)
 	clientFormat := clientFormatLabel(format)
 	upstreamType := upstreamTypeLabel(effective.Type)

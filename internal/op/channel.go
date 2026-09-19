@@ -731,13 +731,25 @@ func deleteItemsByChannelModels(tx *gorm.DB, channelModelIDs []int) error {
 
 // deleteEvalRanksByChannelModels 删除引用待删除渠道模型的评估排序条目。
 // model_eval_ranks.channel_model_id 不建外键(与历史记录解耦), 渠道模型删除时不会级联,
-// 残留条目会让「更新 auto 分组」因 ChannelModelGet 命中失败而整体中止, 故在此应用层级联清理。
+// 残留条目由「更新 auto 分组」的容错兜底清理, 故在此应用层级联清理。
 func deleteEvalRanksByChannelModels(tx *gorm.DB, channelModelIDs []int) error {
 	if len(channelModelIDs) == 0 {
 		return nil
 	}
 	if err := tx.Where("channel_model_id IN ?", channelModelIDs).Delete(&model.ModelEvalRank{}).Error; err != nil {
 		return fmt.Errorf("按渠道模型删除评估排序失败: %w", err)
+	}
+	return nil
+}
+
+// deleteEvalRanksByIDs 按主键删除失效的评估排序条目, 仅在事务内调用。
+// 空集合(nil 或空切片)直接返回 nil, 保证幂等。
+func deleteEvalRanksByIDs(tx *gorm.DB, rankIDs []int64) error {
+	if len(rankIDs) == 0 {
+		return nil
+	}
+	if err := tx.Where("id IN ?", rankIDs).Delete(&model.ModelEvalRank{}).Error; err != nil {
+		return fmt.Errorf("按主键删除失效评估排序失败: %w", err)
 	}
 	return nil
 }

@@ -140,11 +140,10 @@ func applyProFromEvalRank(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	group, created, err := op.GroupReplaceItemsByName(c.Request.Context(), "auto", ranks)
+	group, report, created, err := op.GroupReplaceItemsByName(c.Request.Context(), "auto", ranks)
 	if err != nil {
 		switch {
-		case errors.Is(err, op.ErrGroupReplaceNoRankable),
-			errors.Is(err, op.ErrGroupReplaceTargetMissing):
+		case errors.Is(err, op.ErrGroupReplaceNoRankable):
 			resp.Error(c, http.StatusBadRequest, err.Error())
 		default:
 			resp.Error(c, http.StatusInternalServerError, err.Error())
@@ -152,9 +151,11 @@ func applyProFromEvalRank(c *gin.Context) {
 		return
 	}
 	resp.Success(c, gin.H{
-		"group_id":   group.ID,
-		"created":    created,
-		"item_count": len(group.Items),
+		"group_id":      group.ID,
+		"created":       created,
+		"item_count":    len(group.Items),
+		"kept_disabled": report.KeptDisabled,
+		"cleaned_stale": report.CleanedStale,
 	})
 }
 

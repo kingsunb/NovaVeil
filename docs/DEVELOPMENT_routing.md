@@ -178,6 +178,7 @@
 - 半开探测以**异步**方式进行，原业务请求照常按顺序扫描其余 CLOSED 渠道，二者互不阻塞。
 - 部分渠道可以开启**后台定时探测**，默认关闭。
 - 后台定时探测与请求触发探测必须**共用同一个探测锁**，避免对同一渠道重复测试。
+- 探测请求对基础设施层错误（网络/代理/DNS/TLS/连接中断，`upstream_network` 类）按网络错误重试策略容忍后才下结论：探测结论直接决定成员恢复或加重冷却，瞬时网络抖动不应计入；业务错误（4xx/5xx/限流）不重试。
 
 ---
 
@@ -188,6 +189,7 @@
 | 字段 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `member_max_attempts` | int | 3 | 单个成员包含首次请求的总尝试次数，仅在故障转移模式生效。 |
+| `member_infra_max_retries` | int | 3 | 单个成员连续发生基础设施层错误（代理/DNS/TLS/连接重置/连接中断，即 `upstream_network` 类）的最大容忍次数，达到后走正常冷却通道；与业务失败（`member_max_attempts`）分开计数。0 表示与 `member_max_attempts` 一致。 |
 | `member_retry_interval_seconds` | int | 3 | 同一成员相邻两次尝试之间的等待秒数。 |
 | `member_non_stream_response_timeout_seconds` | int | 1200 | 单个成员返回完整非流式响应的超时秒数。 |
 | `member_stream_first_event_timeout_seconds` | int | 300 | 单个成员返回首个有效流事件的超时秒数。 |

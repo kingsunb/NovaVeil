@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/log"
 	"github.com/kingsunb/NovaVeil/internal/db"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/utils/cache"
@@ -560,18 +561,38 @@ func groupSnapshot(group model.Group) model.Group {
 	return group
 }
 
-// 以当前排序整体替换 pro 分组的 sentinel 错误。
-var (
-	ErrGroupReplaceNoRankable    = errors.New("没有可用于分组的评估结果")
-	ErrGroupReplaceTargetMissing = errors.New("排序中的渠道或模型已不可用")
-)
+// 以当前排序整体替换 auto 分组的 sentinel 错误。
+var ErrGroupReplaceNoRankable = errors.New("没有可用于分组的评估结果")
+
+// GroupReplaceEntry 描述分组容错更新中单条排序记录的处理明细:
+// 渠道停用但模型仍在而保留, 或模型删除/改名而清理, 不含任何渠道凭据字段。
+type GroupReplaceEntry struct {
+	ChannelID      int    `json:"channel_id"`
+	ChannelModelID int    `json:"channel_model_id"`
+	ChannelName    string `json:"channel_name"`
+	ModelName      string `json:"model_name"`
+}
+
+// GroupReplaceReport 汇总一次分组容错更新的处理说明:
+// KeptDisabled = 渠道停用但模型仍在而保留入组的记录;
+// CleanedStale = 模型删除/改名而清理的失效记录。
+type GroupReplaceReport struct {
+	KeptDisabled []GroupReplaceEntry `json:"kept_disabled"`
+	CleanedStale []GroupReplaceEntry `json:"cleaned_stale"`
+}
 
 // GroupReplaceItemsByName 以当前排序整体替换指定名称的分组成员：
-// 仅纳入请求成功的评估（ok 和 violation）、逐条校验渠道启用且模型存在、事务内清空旧成员并以
-// priority 递减写入新成员；分组不存在则按 failover + 默认 Relay 配置创建。
-// 返回分组快照与是否新建。任一模型不可用便整体中止，保证不产生半空分组。
-func GroupReplaceItemsByName(ctx context.Context, name string, ranks []model.ModelEvalRankSummary) (*model.Group, bool, error) {
+// 仅纳入请求成功的评估（ok 和 violation）、逐条分类渠道与模型状态后事务内原子写入。
+// 渠道停用但模型仍在的记录保留入组并保持原排名；模型删除/改名的失效记录在同事务内清理，
+// 不因单个记录不可用而整体中止。分类读缓存, 命中项在事务内按库复核, 消除「分类后
+// 被并发删除留下悬空分组成员」的竞态。分组不存在则按 failover + 默认 Relay 配置创建。
+// 返回分组快照、处理说明与是否新建。
+func GroupReplaceItemsByName(ctx context.Context, name string, ranks []model.ModelEvalRankSummary) (*model.Group, GroupReplaceReport, bool, error) {
 	name = strings.TrimSpace(name)
+	report := GroupReplaceReport{
+		KeptDisabled: make([]GroupReplaceEntry, 0),
+		CleanedStale: make([]GroupReplaceEntry, 0),
+	}
 	rankable := make([]model.ModelEvalRankSummary, 0, len(ranks))
 	for _, r := range ranks {
 		if isRankableOutcome(r.Outcome) {
@@ -579,7 +600,7 @@ func GroupReplaceItemsByName(ctx context.Context, name string, ranks []model.Mod
 		}
 	}
 	if len(rankable) == 0 {
-		return nil, false, ErrGroupReplaceNoRankable
+		return nil, report, false, ErrGroupReplaceNoRankable
 	}
 	// position 越小越靠前，映射到分组 priority 也越小越靠前（路由优先选）。
 	sort.SliceStable(rankable, func(i, j int) bool {
@@ -589,35 +610,105 @@ func GroupReplaceItemsByName(ctx context.Context, name string, ranks []model.Mod
 		return rankable[i].ID < rankable[j].ID
 	})
 
-	resolvedIDs := make([]int, 0, len(rankable))
+	// 逐条分类「有效入组 / 失效清理」，不因单条不可用而中止。分类读的是缓存:
+	// 渠道/模型删除事务可能恰在分类之后提交, 命中结果可能已过期, 故命中项在
+	// 下方事务内再按库复核。report 明细待复核后组装, 回滚路径不污染明细。
+	resolvedRankIDs := make([]int64, 0, len(rankable))
+	resolvedModelIDs := make([]int, 0, len(rankable))
+	resolvedEntries := make([]GroupReplaceEntry, 0, len(rankable))
+	resolvedKeptDisabled := make([]bool, 0, len(rankable))
+	staleRankIDs := make([]int64, 0)
+	staleEntries := make([]GroupReplaceEntry, 0)
 	for _, r := range rankable {
+		entry := GroupReplaceEntry{
+			ChannelID:      r.ChannelID,
+			ChannelModelID: r.ChannelModelID,
+			ChannelName:    r.ChannelName,
+			ModelName:      r.ModelName,
+		}
 		cm, err := ChannelModelGet(r.ChannelModelID)
 		if err != nil {
-			return nil, false, fmt.Errorf("%w: %s / %s", ErrGroupReplaceTargetMissing, r.ChannelName, r.ModelName)
+			// 模型删除/改名: 失效, 标记清理。
+			log.Warnf("eval rank stale (channel model missing): %s / %s, will be cleaned", r.ChannelName, r.ModelName)
+			staleRankIDs = append(staleRankIDs, r.ID)
+			staleEntries = append(staleEntries, entry)
+			continue
 		}
 		channel, err := ChannelGetCore(cm.ChannelID)
 		if err != nil {
-			return nil, false, fmt.Errorf("%w: %s / %s", ErrGroupReplaceTargetMissing, r.ChannelName, r.ModelName)
+			// 渠道整体已删(模型应已级联缺失, 防御分支): 失效, 标记清理。
+			log.Warnf("eval rank stale (channel missing): %s / %s, will be cleaned", r.ChannelName, r.ModelName)
+			staleRankIDs = append(staleRankIDs, r.ID)
+			staleEntries = append(staleEntries, entry)
+			continue
 		}
-		if !channel.Enabled {
-			return nil, false, fmt.Errorf("%w: %s / %s（渠道已停用）", ErrGroupReplaceTargetMissing, r.ChannelName, r.ModelName)
-		}
-		resolvedIDs = append(resolvedIDs, cm.ID)
+		resolvedModelIDs = append(resolvedModelIDs, cm.ID)
+		resolvedRankIDs = append(resolvedRankIDs, r.ID)
+		resolvedEntries = append(resolvedEntries, entry)
+		resolvedKeptDisabled = append(resolvedKeptDisabled, !channel.Enabled)
 	}
 
-	total := len(resolvedIDs)
-	newItems := make([]model.GroupItem, 0, total)
-	for i, cmID := range resolvedIDs {
-		newItems = append(newItems, model.GroupItem{
-			ChannelModelID: cmID,
-			RefGroupName:   "",
-			Priority:       i + 1,
-		})
-	}
+	// 删失效排序与后续成员替换共用同一把锁, 避免与并发写入 position 交错。
+	modelEvalRankMu.Lock()
+	defer modelEvalRankMu.Unlock()
 
 	created := false
 	var group model.Group
+	allStale := false
+	// demotedIdx 记录事务内复核降级的 resolved 下标; 明细在事务提交成功后并入
+	// report, 降级成员不再计入 KeptDisabled。
+	var demotedIdx []int
 	err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 事务内按库复核缓存命中的成员, 悬空分组成员的窗口在此闭合: 复核与删
+		// 失效、清旧成员、写新成员同事务, SQLite 写事务全库串行, 复核之后到提
+		// 交之前不会再有删除事务提交; MySQL/PG 下窗口亦缩至近零。渠道删除与其
+		// 模型删除同事务级联, 故只复核模型存在性即可覆盖渠道删除。
+		var liveModelIDs []int
+		if len(resolvedModelIDs) > 0 {
+			if err := tx.Model(&model.ChannelModel{}).Where("id IN ?", resolvedModelIDs).
+				Pluck("id", &liveModelIDs).Error; err != nil {
+				return fmt.Errorf("复核渠道模型存在性失败: %w", err)
+			}
+		}
+		liveSet := make(map[int]struct{}, len(liveModelIDs))
+		for _, id := range liveModelIDs {
+			liveSet[id] = struct{}{}
+		}
+		for i, cmID := range resolvedModelIDs {
+			if _, ok := liveSet[cmID]; ok {
+				continue
+			}
+			log.Warnf("eval rank stale (revalidated missing): %s / %s, will be cleaned",
+				resolvedEntries[i].ChannelName, resolvedEntries[i].ModelName)
+			staleRankIDs = append(staleRankIDs, resolvedRankIDs[i])
+			demotedIdx = append(demotedIdx, i)
+		}
+
+		// 先在同事务内清理失效排序, 保证「删失效 + 清旧成员 + 写新成员」原子完成。
+		if err := deleteEvalRanksByIDs(tx, staleRankIDs); err != nil {
+			return err
+		}
+
+		// 全部失效(rankable 非空但无复核存活成员): 仅清理失效排序, 不产生空分组。
+		liveCount := len(resolvedModelIDs) - len(demotedIdx)
+		if liveCount == 0 {
+			allStale = true
+			return nil
+		}
+
+		// 复核存活的成员按分类顺序入组, priority 递减、首项最高。
+		newItems := make([]model.GroupItem, 0, liveCount)
+		for _, cmID := range resolvedModelIDs {
+			if _, ok := liveSet[cmID]; !ok {
+				continue
+			}
+			newItems = append(newItems, model.GroupItem{
+				ChannelModelID: cmID,
+				RefGroupName:   "",
+				Priority:       len(newItems) + 1,
+			})
+		}
+
 		existingID, exists := groupNameIndex.Get(name)
 		if exists {
 			// 清空可能指向被删成员的 active_item。
@@ -660,12 +751,32 @@ func GroupReplaceItemsByName(ctx context.Context, name string, ranks []model.Mod
 		return nil
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, report, false, err
+	}
+
+	// 事务已提交: 组装最终处理明细 = 缓存未命中的失效 + 事务内复核降级的失效 +
+	// 复核存活者里渠道停用的保留。降级成员不再计入 KeptDisabled。
+	demoted := make(map[int]struct{}, len(demotedIdx))
+	for _, i := range demotedIdx {
+		demoted[i] = struct{}{}
+	}
+	report.CleanedStale = staleEntries
+	for i, entry := range resolvedEntries {
+		if _, ok := demoted[i]; ok {
+			report.CleanedStale = append(report.CleanedStale, entry)
+			continue
+		}
+		if resolvedKeptDisabled[i] {
+			report.KeptDisabled = append(report.KeptDisabled, entry)
+		}
+	}
+	if allStale {
+		return nil, report, false, ErrGroupReplaceNoRankable
 	}
 
 	sortGroupItems(group.Items)
 	snapshot := groupSnapshot(group)
 	groupCache.Set(group.ID, snapshot)
 	groupNameIndex.Set(group.Name, group.ID)
-	return &snapshot, created, nil
+	return &snapshot, report, created, nil
 }

@@ -46,7 +46,7 @@ func TestChannelUpdateDeletingModelCleansEvalRank(t *testing.T) {
 	// 模拟前端「更新 auto 分组」: 用当前排序替换分组成员, 不应再因模型已删除而整体中止。
 	ranks, err := ModelEvalRankList(ctx)
 	require.NoError(t, err)
-	g, _, err := GroupReplaceItemsByName(ctx, "auto-rk-sync", ranks)
+	g, _, _, err := GroupReplaceItemsByName(ctx, "auto-rk-sync", ranks)
 	require.NoError(t, err, "残留排序已清理, 更新分组不应报模型已删除")
 	require.NotNil(t, g)
 	t.Cleanup(func() { cleanupGroup(t, g.ID) })
@@ -75,9 +75,10 @@ func TestChannelDelCleansEvalRanks(t *testing.T) {
 	for _, r := range ranks {
 		assert.NotEqual(t, ch.ID, r.ChannelID, "已删渠道的排序不应再出现在列表")
 	}
-	// 用当前排序更新分组, 不应触发 ErrGroupReplaceTargetMissing。
-	if _, _, err := GroupReplaceItemsByName(ctx, "auto-rk-del", ranks); err != nil {
-		assert.NotErrorIs(t, err, ErrGroupReplaceTargetMissing, "残留排序已清理, 不应再报模型已删除")
+	// 用当前排序更新分组: 残留排序已级联清理, 不应再因引用已删模型报错
+	// (排序为空时返回 ErrGroupReplaceNoRankable 属预期, 其余错误均不应出现)。
+	if _, _, _, err := GroupReplaceItemsByName(ctx, "auto-rk-del", ranks); err != nil {
+		assert.ErrorIs(t, err, ErrGroupReplaceNoRankable, "残留排序已清理, 不应报其它错误")
 	}
 }
 
@@ -85,4 +86,34 @@ func TestChannelDelCleansEvalRanks(t *testing.T) {
 func TestDeleteEvalRanksByChannelModelsNoopOnEmpty(t *testing.T) {
 	require.NoError(t, deleteEvalRanksByChannelModels(db.GetDB(), nil))
 	require.NoError(t, deleteEvalRanksByChannelModels(db.GetDB(), []int{}))
+}
+
+// TestDeleteEvalRanksByIDsNoopOnEmpty 验证按主键删除的空集合(nil/空切片)幂等返回, 不误删。
+// 对齐 design 接口 2 与 tasks 5.4。
+func TestDeleteEvalRanksByIDsNoopOnEmpty(t *testing.T) {
+	require.NoError(t, deleteEvalRanksByIDs(db.GetDB(), nil))
+	require.NoError(t, deleteEvalRanksByIDs(db.GetDB(), []int64{}))
+}
+
+// TestDeleteEvalRanksByIDsDeletesOnlyTarget 验证按主键仅删除指定排序行, 不误删其它行。
+// 对齐 design 接口 2 与 tasks 5.4。
+func TestDeleteEvalRanksByIDsDeletesOnlyTarget(t *testing.T) {
+	ch1, _ := createChannelForEval(t, "rk-ids-a", "rk-ids-a-model")
+	ch2, _ := createChannelForEval(t, "rk-ids-b", "rk-ids-b-model")
+
+	keep := &model.ModelEvalRank{ChannelID: ch1.ID, ChannelModelID: 900001, ChannelName: ch1.Name, ModelName: "rk-ids-keep", Outcome: model.ModelEvalOK, Position: 0}
+	drop := &model.ModelEvalRank{ChannelID: ch2.ID, ChannelModelID: 900002, ChannelName: ch2.Name, ModelName: "rk-ids-drop", Outcome: model.ModelEvalOK, Position: 1}
+	require.NoError(t, db.GetDB().Create(keep).Error)
+	require.NoError(t, db.GetDB().Create(drop).Error)
+	t.Cleanup(func() { cleanupRanksByChannel(t, ch1.ID, ch2.ID) })
+
+	require.NoError(t, deleteEvalRanksByIDs(db.GetDB(), []int64{drop.ID}))
+
+	var dropCount int64
+	require.NoError(t, db.GetDB().Model(&model.ModelEvalRank{}).Where("id = ?", drop.ID).Count(&dropCount).Error)
+	assert.Zero(t, dropCount, "指定主键的排序行应被删除")
+
+	var keepCount int64
+	require.NoError(t, db.GetDB().Model(&model.ModelEvalRank{}).Where("id = ?", keep.ID).Count(&keepCount).Error)
+	assert.Equal(t, int64(1), keepCount, "未指定主键的排序行不应被误删")
 }

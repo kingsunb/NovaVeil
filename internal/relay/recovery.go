@@ -41,12 +41,14 @@ func probeChannel(ctx context.Context, channel model.Channel, modelName string) 
 		Body:    body,
 	}
 	// 同协议渠道原样直通, 其余渠道经 pipeline 转换后请求。
-	var result *upstreamResponse
-	if passthrough {
-		result, err = sendPassthrough(ctx, llm.APIFormatOpenAIChatCompletion, raw, channel, outbound, false, "")
-	} else {
-		result, err = sendConverted(ctx, llm.APIFormatOpenAIChatCompletion, raw, channel, outbound, false, "")
-	}
+	// 探测结论直接决定成员恢复或加重冷却, 瞬时网络抖动不应计入, 按网络错误重试策略
+	// 容忍基础设施层错误后再下结论, 与分组路由对真实流量的容错口径一致。
+	result, err := sendDiagnosticUpstream(ctx, func() (*upstreamResponse, error) {
+		if passthrough {
+			return sendPassthrough(ctx, llm.APIFormatOpenAIChatCompletion, raw, channel, outbound, false, "")
+		}
+		return sendConverted(ctx, llm.APIFormatOpenAIChatCompletion, raw, channel, outbound, false, "")
+	})
 	if result != nil {
 		result.Close()
 	}

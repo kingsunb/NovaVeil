@@ -272,3 +272,41 @@ func TestTestChannelRecordsToStream(t *testing.T) {
 		}
 	}
 }
+
+// TestSendKeyTestRequestPathConsistency 验证逐密钥探针的上游请求路径与单模型探针一致:
+// 修复后逐密钥探针以 openai_chat 作为代表客户端协议, openai 渠道走透传 /v1/chat/completions,
+// 与单模型探针(sendChannelTestRequest)路径相同。
+func TestSendKeyTestRequestPathConsistency(t *testing.T) {
+	setupFailoverTest(t)
+	var capturedPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-keypath","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer upstream.Close()
+
+	channel := model.Channel{
+		Name:    integrationUniqueName("it-keytest-path"),
+		Type:    model.ChannelProviderOpenAI,
+		Enabled: true,
+		BaseURL: upstream.URL,
+		Keys:    []model.ChannelKey{{Key: "good-key", Remark: "主用"}},
+		Models:  []model.ChannelModel{{Name: "it-keytest-path-model", Source: model.ChannelModelSourceManual}},
+	}
+	if err := op.ChannelCreate(&channel, context.Background()); err != nil {
+		t.Fatalf("创建渠道失败: %v", err)
+	}
+
+	results, err := TestChannelKeys(context.Background(), channel.ID, "it-keytest-path-model", "ping")
+	if err != nil {
+		t.Fatalf("TestChannelKeys: %v", err)
+	}
+	if len(results) != 1 || !results[0].OK {
+		t.Fatalf("逐密钥测试应成功: %+v", results)
+	}
+	// 逐密钥探针路径应与单模型探针一致, 均走 /v1/chat/completions。
+	if capturedPath != "/v1/chat/completions" {
+		t.Fatalf("逐密钥探针路径应为 /v1/chat/completions(与单模型探针一致), 实际 %s", capturedPath)
+	}
+}

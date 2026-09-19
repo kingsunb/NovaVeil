@@ -190,7 +190,7 @@ func ruleMayHit(text, label string) bool {
 	return true
 }
 
-var apiPrefixes = []string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "AIza", "xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-", "sk-", "cli-", "ding-"}
+var apiPrefixes = []string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "AIza", "xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-", "sk-", "sk_live_", "sk_test_", "rk_live_", "rk_test_", "cli-", "ding-"}
 
 var secretKeywordsLower = []string{"password", "passwd", "pwd", "secret", "token", "api_key", "api-key", "apikey", "access_key", "access-key", "accesskey", "private_key", "private-key", "privatekey"}
 var secretKeywordsCN = []string{"密码", "口令", "令牌", "密钥", "秘钥", "密匙", "凭据", "凭证", "私钥", "授权码", "访问密钥", "接口密钥"}
@@ -370,8 +370,8 @@ func applyRuleSub(segment string, rule Rule, replMap map[string]string) string {
 // 选一组不重叠的, 一次替换完成, 避免短词截断完整凭据。优先级(排序键):
 //  1. origStart 升序(先出现的先选);
 //  2. 自定义词(TERM)优先——rules 中 TERM 已排在正则前, 同起点 TERM 先选;
-//  3. ruleIdx 升序(同起点同 term 性时按 rules 顺序);
-//  4. origEnd 降序(长匹配优先, 不以短词截断完整凭据)。
+//  3. origEnd 降序(同起点长匹配优先, 不以短匹配截断完整凭据, 如 CONNSTR 完整密码整体覆盖 API_KEY 前缀命中);
+//  4. ruleIdx 升序(同起点同长度时按 rules 顺序)。
 //
 // 已有占位符片段跳过(不收集、不替换, 占位符原样保留)。seen 跨规则去重同一原文:
 // 同一原文只产出一条 Match(首次命中规则标签), 但在不重叠的多处位置都替换为同一占位符,
@@ -419,7 +419,7 @@ func maskCandidates(text string, rules []Rule, mapping *Mapping, matches *[]Matc
 	if len(cands) == 0 {
 		return text
 	}
-	// 排序: origStart 升序 → TERM 优先 → ruleIdx 升序 → origEnd 降序(长匹配优先)。
+	// 排序: origStart 升序 → TERM 优先 → origEnd 降序(同起点长匹配优先) → ruleIdx 升序。
 	sort.SliceStable(cands, func(i, j int) bool {
 		a, b := cands[i], cands[j]
 		if a.origStart != b.origStart {
@@ -428,10 +428,10 @@ func maskCandidates(text string, rules []Rule, mapping *Mapping, matches *[]Matc
 		if a.isTerm != b.isTerm {
 			return a.isTerm
 		}
-		if a.ruleIdx != b.ruleIdx {
-			return a.ruleIdx < b.ruleIdx
+		if a.origEnd != b.origEnd {
+			return a.origEnd > b.origEnd
 		}
-		return a.origEnd > b.origEnd
+		return a.ruleIdx < b.ruleIdx
 	})
 	// 贪心选不重叠区间: origStart < lastEnd(与已选重叠)的丢弃, 避免嵌套占位符。
 	var b strings.Builder
