@@ -48,7 +48,7 @@
 ### 2.1 REL-02 透传路径转发上游 Set-Cookie（新发现，对抗复核确认 medium）
 
 - **位置**: `internal/relay/handler.go:600-604`（调用）、`:1018-1028`（实现）；透传响应头来源 `internal/relay/upstream.go:108-114`（非流）与 `:170-175`（流）。
-- **事实**: `copyUpstreamHeaders` 对**透传（pass-through）响应**原样复制全部上游响应头到客户端响应；流式分支仅剔除 `Content-Length`。`sendPassthrough` 会上行 `result.header`；`sendConverted` 返回的上游响应不携带 header，因此**转换协议路径不复制上游响应头**，不受影响。
+- **事实**: `copyUpstreamHeaders` 对**透传（pass-through）响应**原样复制全部上游响应头到客户端响应；流式分支仅剔除 `Content-Length`。`sendPassthrough` 会上行 `result.header`；`sendConverted` 返回的上游响应不携带 header，因此**转换协议路径不复制上游响应头**，不受影响。补充澄清：`/v1/*` 由 `APIKeyAuth` 认证、不经 cookie（`middleware/auth.go:69-93`），普通 API-key 客户端功能上不受 `Set-Cookie` 影响；只有“浏览器携带 ambient auth cookie + 透传响应”的组合才会发生驱逐。
 - **风险**: 恶意/被攻破的透传渠道返回 `Set-Cookie: auth=...; Path=/` 时，网关会原样转给同源浏览器。管理 cookie 名为 `auth`、Path 为 `/`、无 Domain（host-only）、SameSite=Lax、HttpOnly（`middleware/auth.go:17-22,55-61`），SameSite/HttpOnly/Secure 均不能阻止同源响应里的 Set-Cookie 覆盖，因此该 cookie 会被驱逐。**对抗复核确认影响为登出/拒绝服务**：攻击者拿不到 JWT 签名密钥，无法靠这个头直接伪造有效会话或提权。`/api/v1/chat/completions` 是 cookie 认证且走 `Forward`，当所选渠道为透传时命中；`/v1/*` 是 API Key 认证，API-key 客户端不依赖 auth cookie，但浏览器若携带 ambient auth cookie 访问相关端点仍可能被覆盖。
 - **建议**: 响应头改 allowlist（Content-Type、Cache-Control、x-request-id、openai-*、anthropic-* 等）；永远丢弃 `Set-Cookie`/`Set-Cookie2`/`Location`/`WWW-Authenticate`/逐跳头；流式继续剔 `Content-Length`。修复优先级维持 P0（会话可用性），但不应营销为账户接管漏洞。
 
