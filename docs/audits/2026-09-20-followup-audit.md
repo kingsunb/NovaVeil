@@ -17,7 +17,7 @@
 
 本次最值得关注的新发现：
 
-- **REL-02【中继·新】上游响应头原样复制给客户端**：`copyUpstreamHeaders` 非流式原样转发全部上游响应头，流式只剔 `Content-Length`。恶意/被攻破的上游渠道可以注入 `Set-Cookie: auth=...; Path=/`，结合管理面板同源 `/api/v1/chat` 使用 cookie 会话，存在管理员会话被覆盖的风险（详见 3.2）。确认级别：代码事实已主验证，独立对抗复核未在截稿前返回。
+- **REL-02【中继·新·对抗复核确认】透传路径转发上游 `Set-Cookie`，可驱逐管理员 auth cookie（登出型）**：`copyUpstreamHeaders` 对透传响应原样复制全部上游响应头（流式仅剔 `Content-Length`）。恶意/被攻破的透传渠道注入 `Set-Cookie: auth=...; Path=/` 会替换浏览器中的管理认证 cookie。对抗复核确认 medium：影响是**登出/拒绝服务**（攻击者无法伪造有效 JWT 直接提权），命中条件是“透传路径 + 浏览器带 auth cookie 访问 `/api/v1/chat` 等”；转换协议路径不复制上游响应头，不受影响（详见 2.1）。
 - **REL-04【脱敏·确认】流式还原漏 `reasoning_content`，且 tool-call arguments 不做跨 chunk 缓冲**：脱敏开启时，DeepSeek/Qwen 等推理字段的占位符会原样发给客户端；tool 参数跨事件拆分时同样漏还原。对抗复核已确认 medium。
 - **REL-05【脱敏·确认】脱敏映射表按客户端 `X-Session-Id` 命名空间，无 API Key 前缀**：两个 API Key 使用相同会话 ID 时共享一张 Mapping，存在条件性的跨租户还原泄漏。对抗复核已确认 medium（有前提：非空会话 ID 共享 + 占位符出现在他人响应中）。
 
@@ -45,13 +45,12 @@
 
 ## 2. 打开的高优先级问题
 
-### 2.1 REL-02 上游响应头未过滤（新发现，medium，建议按 high 复核）
+### 2.1 REL-02 透传路径转发上游 Set-Cookie（新发现，对抗复核确认 medium）
 
-- **位置**: `internal/relay/handler.go:600-604`（调用）、`:1018-1028`（实现）。
-- **事实**: `copyUpstreamHeaders` 非流式分支原样复制全部上游响应头到客户端响应；流式分支仅剔除 `Content-Length`。
-- **风险**: 上游渠道（或被攻破的渠道服务器）返回 `Set-Cookie: auth=...; Path=/` 时，网关会原样转给浏览器。管理面板 `/api/v1/chat` 是 cookie 会话（`AuthCookieName="auth"`, `AuthCookiePath="/"`，见 `middleware/auth.go:17-22`），且 `copyUpstreamHeaders` 位于 chat 复用 `Forward` 的响应路径上（已核对）。同源管理浏览器可被覆盖管理员认证 cookie。
-- **受影响面**: 管理端 Chat 最实际；纯 API-key 客户端影响有限，但 `WWW-Authenticate`、`Location` 等也未过滤，语义上不干净。
-- **建议**: 响应头改 allowlist（Content-Type、Cache-Control、x-request-id、openai-*、anthropic-* 等）；永远丢弃 `Set-Cookie`/`Set-Cookie2`/`Location`/`WWW-Authenticate`/逐跳头；流式继续剔 `Content-Length`。
+- **位置**: `internal/relay/handler.go:600-604`（调用）、`:1018-1028`（实现）；透传响应头来源 `internal/relay/upstream.go:108-114`（非流）与 `:170-175`（流）。
+- **事实**: `copyUpstreamHeaders` 对**透传（pass-through）响应**原样复制全部上游响应头到客户端响应；流式分支仅剔除 `Content-Length`。`sendPassthrough` 会上行 `result.header`；`sendConverted` 返回的上游响应不携带 header，因此**转换协议路径不复制上游响应头**，不受影响。
+- **风险**: 恶意/被攻破的透传渠道返回 `Set-Cookie: auth=...; Path=/` 时，网关会原样转给同源浏览器。管理 cookie 名为 `auth`、Path 为 `/`、无 Domain（host-only）、SameSite=Lax、HttpOnly（`middleware/auth.go:17-22,55-61`），SameSite/HttpOnly/Secure 均不能阻止同源响应里的 Set-Cookie 覆盖，因此该 cookie 会被驱逐。**对抗复核确认影响为登出/拒绝服务**：攻击者拿不到 JWT 签名密钥，无法靠这个头直接伪造有效会话或提权。`/api/v1/chat/completions` 是 cookie 认证且走 `Forward`，当所选渠道为透传时命中；`/v1/*` 是 API Key 认证，API-key 客户端不依赖 auth cookie，但浏览器若携带 ambient auth cookie 访问相关端点仍可能被覆盖。
+- **建议**: 响应头改 allowlist（Content-Type、Cache-Control、x-request-id、openai-*、anthropic-* 等）；永远丢弃 `Set-Cookie`/`Set-Cookie2`/`Location`/`WWW-Authenticate`/逐跳头；流式继续剔 `Content-Length`。修复优先级维持 P0（会话可用性），但不应营销为账户接管漏洞。
 
 ---
 
@@ -162,7 +161,7 @@
 
 ## 10. 审计局限
 
-- 停电截稿：历史清单 61 条逐条核对子代理未返回；REL-02 独立对抗复核未返回（代码事实已由主代理核读确认）。
+- 历史清单 61 条逐条核对子代理未在首版截稿前返回；REL-02 独立对抗复核已在本修订版补充（见 2.1）。
 - 未跑 docker 基线的镜像构建/冒烟；静态结论仍可能受环境差异影响。
 - 后端全量文件并非逐行审阅，深度覆盖核心链路与全库反模式 grep。
 - 所有“存续”结论基于当前代码片段与行号，未做动态攻击复现（SSRF、DNS rebinding、Set-Cookie 注入等）。
