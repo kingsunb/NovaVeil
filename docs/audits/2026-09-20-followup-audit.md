@@ -34,7 +34,7 @@
 | H-03 | **已修复** | `static/out/.gitkeep` 已被跟踪（`git ls-files static` 可见），`static/static.go:8` 的 `//go:embed all:out` 有目录可嵌。 |
 | H-04 | **已修复** | `web-next/Dockerfile:30` 的 COPY 行不再含 `tailwind.config.ts`。 |
 | H-05 | **部分保留（复核 high）** | `docker-publish.yaml:82-89` 仍只构建即 `push: true`，无 `go test`/`pnpm test`/漏洞门禁；`:83` 仍用 `docker/build-push-action@v6` 未 pin。镜像名已统一为 `ghcr.io/kingsunb/novaveil`。 |
-| H-06 | **已修复** | `main.go:5` 与 `web-next/package.json` 均为 `0.2.0`；`6d61562` 已删除 release/deploy workflow，版本错位风险面收缩。 |
+| H-06 | **已修复** | 产品版本源对齐：`main.go:5`、`CHANGELOG.md:39`、`web-next/package.json:4` 均为 `0.2.0`（根 `package.json:3` 的 `0.1.0` 是私有 agent-notes 工具，非产品版本）；`6d61562` 删除 release workflow 后，旧 release 误版本影响消失，当前 release 自动化缺席而非错版。 |
 | 脱敏三层开关默认关 | **未退化** | `model/DefaultMaskConfig()` `Enabled:false`；组级 `MaskEnabled` 默认 false；`applyRequestMask` 任一关即短路。 |
 | Bad mask JSON fail-closed | **已修复** | `internal/op/mask.go` 解析失败返回默认关闭配置，不拒绝中转。 |
 | H-1/H-2/H-3 历史脱敏会话 | **已修复** | 空会话键请求级 Mapping 不入表（`mask/session.go:108-113`）；命名会话 30 分钟 TTL。 |
@@ -123,7 +123,9 @@ DevOps 域完整子代理复核已补录。DEV-01 与上期 H-05 同源、按 hi
 - **DEV-07（low）**：`verify-notes.yml:17,22` 用 `actions/checkout@v4`/`actions/setup-node@v4` 未 pin SHA；`:32-34` 每次 `npx tsx` 现拉依赖、无 frozen lock，门禁结果可随网络/上游漂移。
 - **DEV-08（low）**：`.gitignore` 未覆盖 `.env` / `*.pem` / `*.key`（`.dockerignore` 只挡镜像构建路径）；当前仓库未发现已跟踪密钥，建议补充。
 - **文档漂移（low）**：`6d61562` 删除 release/deploy workflow 后，`README.md:64` 仍称可手动触发 `release` / `build` workflow，`docs/SECURE_DEPLOYMENT.md:40-43` 也仍引用不存在的 `release` workflow。
-- **正向确认**：`test.yaml` 在 PR/push 跑 Go 测试并 pin checkout（SHA）；`docker-publish` 镜像名正确为 `ghcr.io/kingsunb/novaveil`；checkout 等多数 action 已 pin。
+- **DEV-09（low，新）**：`web-next/Dockerfile:23-27` 写死并启用 pnpm@9，而 CI/docs 当前要求 pnpm 11.21+，独立前端镜像的工具链与 CI 不一致；`README.md:64-72` 与 `docs/SECURE_DEPLOYMENT.md:40-43` 仍引用已被 `6d61562` 删除的 release workflow。
+- **正向确认**：`test.yaml` 在 PR/push 跑 Go 测试并 pin checkout（SHA）；`web-next-ci` 在 web-next 变更的 PR 上运行；`docker-publish` 镜像名正确为 `ghcr.io/kingsunb/novaveil`；checkout 等多数 action 已 pin。
+- **残余风险（DevOps 子代理）**：生产 `novaveil` 服务硬化良好（UID 10001、read_only、cap_drop ALL、no-new-privileges、limits、healthcheck），但这些控制未覆盖 web-router；`docker-compose.yml:30` 的 `NOVAVEIL_WEB_NEXT_IMAGE` 在未启用 profile 的 Compose 上可能因插值语义导致默认 `up` 失败（未实测，INFERENCE）；`docker-compose.local.yml:10-12` 用 `NOVAVEIL_BIND` 而 `docs/SECURE_DEPLOYMENT.md:90-92` 用 `NOVAVEIL_BIND_ADDRESS`，是运维 footgun；release/update 完整性仍只靠 checksum、无 Sigstore 签名。
 
 ---
 
