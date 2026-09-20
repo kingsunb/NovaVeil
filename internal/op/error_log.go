@@ -28,7 +28,15 @@ var (
 	errorLogDone  chan struct{}
 
 	errorLogDropped atomic.Uint64
+
+	// errorLogShuttingDown 标记停机排空流程已开始；此后 ErrorLogEnqueue 走
+	// 短超时同步写入，避免在队列/写协程已停止时产生无人消费的滞留事件。
+	errorLogShuttingDown bool
 )
+
+// errorLogShutdownFlushTimeout 停机排空 writer 的等待上限。writer 单批写入
+// 预算是 30s，这里留出 5s 余量，避免 db.Close 与仍在写库的 writer 重叠。
+const errorLogShutdownFlushTimeout = 35 * time.Second
 
 // errorLogWriterAlive 返回写入协程是否处于存活状态; 调用方必须持有 errorLogLifeMu。
 func errorLogWriterAlive() bool {
@@ -90,6 +98,19 @@ func ErrorLogEnqueue(entry model.ErrorLog) bool {
 		errorLogLifeMu.Unlock()
 		return false
 	}
+	if errorLogShuttingDown {
+		errorLogLifeMu.Unlock()
+		entry = sanitizeErrorLog(entry)
+		ctx, cancel := context.WithTimeout(context.Background(), errorLogShutdownFlushTimeout)
+		defer cancel()
+		if err := ErrorLogCreate(ctx, entry); err != nil {
+			if !errors.Is(err, ErrDatabaseNotInitialized) {
+				log.Warnf("failed to write error log during shutdown: %v", err)
+			}
+			return false
+		}
+		return true
+	}
 	if !errorLogWriterAlive() {
 		errorLogQueue = make(chan model.ErrorLog, errorLogQueueCapacity)
 		errorLogStop = make(chan struct{})
@@ -125,12 +146,19 @@ func truncateErrorLogForEnqueue(entry model.ErrorLog) model.ErrorLog {
 }
 
 // FlushErrorLogQueue 停止后台写入协程并同步排空队列中尚未落库的错误日志,
-// 供优雅关闭钩子调用; 必须注册在 db.Close 之后(shutdown 以 LIFO 执行)。
+// 供优雅关闭钩子调用; 必须注册在 db.Close 之前(shutdown 以 LIFO 执行)。
 // 幂等且可重入: 协程已停止时仅排空残留条目; 后续 Enqueue 会自动重启协程。
 //
 // 阶段 1 先发出停止信号并清空句柄(在持锁状态下), 阶段 2 在 writer 退出后再加锁完成排空,
 // 避免与捕获路径上的 CaptureConversation / 后续 ErrorLogEnqueue 形成竞态或被锁阻塞。
-func FlushErrorLogQueue(ctx context.Context) error {
+//
+// 等待 writer 退出的预算独立于调用方 ctx(调用方通常是 8s 的 shutdown hook)：
+// writer 单批插入预算为 30s，该函数会等到其结束或 35s 超时，确保 db.Close
+// 不会与仍在写库的 writer 重叠。
+func FlushErrorLogQueue(_ context.Context) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), errorLogShutdownFlushTimeout)
+	defer cancel()
+
 	errorLogLifeMu.Lock()
 	if errorLogQueue == nil {
 		errorLogLifeMu.Unlock()
@@ -140,6 +168,7 @@ func FlushErrorLogQueue(ctx context.Context) error {
 	if errorLogWriterAlive() {
 		close(errorLogStop)
 		done = errorLogDone
+		errorLogShuttingDown = true
 	}
 	queue := errorLogQueue
 	errorLogLifeMu.Unlock()
@@ -147,9 +176,9 @@ func FlushErrorLogQueue(ctx context.Context) error {
 	if done != nil {
 		select {
 		case <-done:
-		case <-ctx.Done():
-			log.Warnf("error log flush on shutdown did not finish: %v", ctx.Err())
-			return ctx.Err()
+		case <-shutdownCtx.Done():
+			log.Warnf("error log writer did not stop within %s", errorLogShutdownFlushTimeout)
+			return fmt.Errorf("error log writer did not stop within %s", errorLogShutdownFlushTimeout)
 		}
 	}
 
@@ -169,9 +198,9 @@ func FlushErrorLogQueue(ctx context.Context) error {
 	if len(batch) == 0 {
 		return nil
 	}
-	if err := insertErrorLogBatch(ctx, batch); err != nil && !errors.Is(err, ErrDatabaseNotInitialized) {
+	if err := insertErrorLogBatch(shutdownCtx, batch); err != nil && !errors.Is(err, ErrDatabaseNotInitialized) {
 		log.Warnf("failed to flush %d error logs: %v", len(batch), err)
-	} else if trimErr := ErrorLogTrimToMaxCount(ctx); trimErr != nil && !errors.Is(trimErr, ErrDatabaseNotInitialized) {
+	} else if trimErr := ErrorLogTrimToMaxCount(shutdownCtx); trimErr != nil && !errors.Is(trimErr, ErrDatabaseNotInitialized) {
 		log.Warnf("failed to trim error logs: %v", trimErr)
 	}
 	return nil

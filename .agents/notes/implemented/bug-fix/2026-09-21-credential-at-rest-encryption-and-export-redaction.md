@@ -16,7 +16,9 @@ Status: implemented
 - **新增 `internal/seal` 字段级加密包**：AES-256-GCM 原语。密文带 `nv1:` 版本前缀，无前缀的存量行按明文兼容读取；新写入恒为密文。密钥来源：`security.encryption_key` 配置（任意字符串派生 32 字节）或数据目录下 `novaveil-encryption.key`（0600，不存在则生成）；未 Configure 的测试/初始化路径回退进程内随机密钥。
 - **敏感字段写入前统一加密、读入缓存前统一解密**：`internal/op/channel.go`（ChannelCreate/ChannelUpdate/channelRefreshCache/导入）、`internal/op/apikey.go`（APIKeyCreate/APIKeyUpdate/apiKeyRefreshCache）、`internal/op/crypto.go` 负责渠道副本加密与解密。进程内缓存与 API 返回继续使用明文，转发路径不受影响。
 - **SEC-03**：`exportChannel` 只返回 `****` + 末四位的密钥掩码，不再返回明文；导出文件用于跨实例核对数量与尾号。
-- **SEC-04**：`DBExportAll` 导出前把 `channels.key`、`channels.channel_proxy`、`channels.keys[].key`、`api_keys.api_key` 全部替换为 `****`；settings 过滤扩展到 `auth_jwt_secret`、`proxy_url`、`proxy_pool`。导入路径统一先 `seal.Open` 解明文预检、再 `seal.Seal` 落库。
+- **SEC-04**：`DBExportAll` 导出前把 `channels.key`、`channels.channel_proxy`、`channels.keys[].key`、`api_keys.api_key` 全部替换为 `****`；`ChannelProxy` 的脱敏哨兵判断是整串等于 `"****"`，只要不是该精确哨兵就覆盖为掩码（历史明文代理 URL 即使包含 `****` 子串也覆盖，不原样回生）。settings 过滤扩展到 `auth_jwt_secret`、`proxy_url`、`proxy_pool`。导入路径统一先 `seal.Open` 解明文预检、再 `seal.Seal` 落库。
+- **导出即脱敏，导入不再接受脱敏凭据**：`analyzeImport` 对脱敏 API Key(`****`)直接拒绝，对其余 API Key 走与创建/更新接口相同的 `validateAPIKeyCustom` 最小长度校验；渠道导入预检对每个非 custom 渠道执行完整 `ValidateChannelEgressBaseURL`，防止构造备份文件让网关导入一个 SSRF 上游地址。文本渠道导入同样拒绝任何含 `****` 的密钥行，避免把掩码当上游凭据落库。
+- **内置渠道 Key 也密文落库**：`internal/builtin` 在 `gormDB.Create(&channel)` 之前统一 `sealBuiltinChannelForDB` 加密 Key/Keys/ChannelProxy，不再把内置渠道的 `"public"` 等 Key 明文写入 DB。
 - **SEC-05**：自定义 API Key 在 `op.APIKeyCreate`/`op.APIKeyUpdate` 中要求至少 16 个字符（`utf8.RuneCountInString`），不足返回 `ErrAPIKeyValidation`。
 - **SEC-08**：`UserConsumeInitialPasswordFile` 在首次成功登录后、`UserChangePassword` 在改密提交后都删除一次性初始密码文件并清空路径变量；文件删除失败返回独立 sentinel，不影响登录/改密结果。
 
@@ -34,5 +36,6 @@ Status: implemented
 ## 验证
 
 - `internal/op/user_test.go`：初始密码文件首次登录/改密后删除，删除失败回调有覆盖。
-- `internal/op/authsecret_test.go`、`internal/op/backup_export_test.go`、`internal/server/handlers/channel_test.go` 等覆盖导出掩码与导入解密。
+- `internal/op/authsecret_test.go`、`internal/op/backup_export_test.go`、`internal/op/backup_import_test.go`、`internal/server/handlers/channel_test.go` 等覆盖导出掩码、导入解密、脱敏 Key 拒绝与 BaseURL egress 校验。
+- 对 `validateEgressIP` 的 IPv4-compatible IPv6 字面量与保留段拒绝行为有 `internal/op/channel_test.go`/`internal/op/backup_import_test.go` 覆盖。
 - 全量 `go build ./...`、`go test ./...`、`go vet ./...` 通过。

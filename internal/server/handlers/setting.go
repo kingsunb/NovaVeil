@@ -250,7 +250,7 @@ func validateDBDumpLimits(dump *model.DBDump) error {
 	if dump == nil {
 		return nil
 	}
-	total := len(dump.Channels) + len(dump.Groups) + len(dump.ChannelModels) + len(dump.GroupItems) + len(dump.Settings) + len(dump.APIKeys)
+	total := len(dump.Channels) + len(dump.Groups) + len(dump.ChannelModels) + len(dump.GroupItems) + len(dump.Settings) + len(dump.APIKeys) + len(dump.ClientStats) + len(dump.UsageBuckets)
 	if total > maxDBImportObjects {
 		return errDBImportTooLarge
 	}

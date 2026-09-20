@@ -4,10 +4,11 @@
  *  - 关闭 hook：调用 close() 后不再重连
  *  - 解析器：每条 message 抛给 onMessage
  *
- * 后端走 gin-contrib/sse，事件格式：
+ * 后端走 gin-contrib/sse（上游 v1.1.2），事件格式：
  *   event: <name>\n
- *   data: <json>\n
+ *   data:<json>\n
  *   \n
+ * 冒号后无空格；浏览器 EventSource 兼容冒号后可选空格。
  */
 
 import { api } from "./api";

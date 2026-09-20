@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/kingsunb/NovaVeil/internal/db"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"gorm.io/gorm"
@@ -19,11 +21,71 @@ var (
 	ErrEvalQueueMoveBounds       = errors.New("已到队首，无法继续上移")
 )
 
+// evalQueueRunningLease 是 running 任务的存活租约：worker 评估最长 10 分钟 +
+// 10 秒保存余量，这里给 15 分钟。只有在租约过期后，ResetRunning 才会把遗留
+// running 重置回 queued，避免多实例部署时新实例启动（或周期清扫）把另一个
+// 仍在健康执行中的实例的任务抢走重复评估。
+const evalQueueRunningLease = 15 * time.Minute
+
+// evalQueueEnqueueMu 串行化本进程内的 Enqueue。多实例(MySQL/Postgres)下还由
+// withEvalQueueEnqueueLock 取得数据库命名锁，保证跨实例也串行。
+var evalQueueEnqueueMu sync.Mutex
+
+const (
+	// 评估队列入队锁的稳定名称 / PostgreSQL advisory lock key。
+	evalQueueEnqueueLockName = "novaveil:model_eval_queue:enqueue"
+	evalQueueEnqueueLockKey  = int64(0x4e_56_45_51_45) // "NVEQE" 的稳定算术 key。
+)
+
+// withEvalQueueEnqueueLock 在 enqueue 业务前取得跨实例串行锁：
+//   - SQLite 单实例只需进程内互斥；SQLite 本身单写者，其它实例无法共享同一文件。
+//   - MySQL 用 GET_LOCK 命名锁（与事务同一条连接，释放时机在事务提交后）。
+//   - Postgres 用 pg_advisory_lock 会话锁（同样在同一条连接上释放）。
+func withEvalQueueEnqueueLock(ctx context.Context, fn func(tx *gorm.DB) error) error {
+	d := db.GetDB()
+	evalQueueEnqueueMu.Lock()
+	defer evalQueueEnqueueMu.Unlock()
+
+	switch d.Dialector.Name() {
+	case "mysql":
+		return d.WithContext(ctx).Connection(func(conn *gorm.DB) error {
+			var got int
+			if err := conn.Raw("SELECT GET_LOCK(?, 10)", evalQueueEnqueueLockName).Scan(&got).Error; err != nil {
+				return fmt.Errorf("acquire enqueue lock failed: %w", err)
+			}
+			if got != 1 {
+				return fmt.Errorf("acquire enqueue lock timeout")
+			}
+			defer func() {
+				// 连接尚未归还; 在同一会话内释放命名锁。
+				if err := conn.Exec("SELECT RELEASE_LOCK(?)", evalQueueEnqueueLockName).Error; err != nil {
+					log.Warnf("release enqueue lock failed: %v", err)
+				}
+			}()
+			return conn.Transaction(fn)
+		})
+	case "postgres":
+		return d.WithContext(ctx).Connection(func(conn *gorm.DB) error {
+			if err := conn.Exec("SELECT pg_advisory_lock(?)", evalQueueEnqueueLockKey).Error; err != nil {
+				return fmt.Errorf("acquire enqueue lock failed: %w", err)
+			}
+			defer func() {
+				if err := conn.Exec("SELECT pg_advisory_unlock(?)", evalQueueEnqueueLockKey).Error; err != nil {
+					log.Warnf("release enqueue lock failed: %v", err)
+				}
+			}()
+			return conn.Transaction(fn)
+		})
+	default:
+		return d.WithContext(ctx).Transaction(fn)
+	}
+}
+
 // ModelEvalQueueEnqueue 把一批渠道模型加入评估队列（追加末尾）。
 // 逐个解析 channel_model_id 为渠道+模型快照，校验渠道启用且模型存在；
 // 同 (channel_id, model_name) 已存在 queued/running 时应用层去重跳过。
 // 审计 RELI-05/R-L2: position 的读取(MAX)与写入必须在同一事务内完成，
-// 两个并发入队不再各自读到同一个 MAX 并生成重复 position。
+// 并持有跨实例入队锁 — 两个并发入队不再各自读到同一个 MAX 并生成重复 position。
 func ModelEvalQueueEnqueue(ctx context.Context, channelModelIDs []int) ([]model.ModelEvalQueueTask, error) {
 	if len(channelModelIDs) == 0 {
 		return []model.ModelEvalQueueTask{}, nil
@@ -69,7 +131,7 @@ func ModelEvalQueueEnqueue(ctx context.Context, channelModelIDs []int) ([]model.
 	}
 
 	tasks := make([]model.ModelEvalQueueTask, 0, len(candidates))
-	err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := withEvalQueueEnqueueLock(ctx, func(tx *gorm.DB) error {
 		var active []model.ModelEvalQueueTask
 		if err := tx.Model(&model.ModelEvalQueueTask{}).
 			Where("status IN ?", []model.QueueTaskStatus{model.QueueTaskQueued, model.QueueTaskRunning}).
@@ -122,8 +184,13 @@ func ModelEvalQueueList(ctx context.Context) ([]model.ModelEvalQueueTask, error)
 	return items, nil
 }
 
-// ModelEvalQueuePopNext 在事务内把 position 最小的若干 queued 任务置为 running
-// （条件更新，避免并发重复派发），返回置成功任务；无任务时返回空。
+// ModelEvalQueuePopNext 在事务内把 position 最小的若干 queued 任务置为 running，
+// 返回本实例实际抢到的任务；无任务时返回空。
+//
+// 多实例并发下，条件 UPDATE 的 RowsAffected 可能小于候选数：部分候选被其它实例
+// 抢走。若像批处理那样遇到 partial 就整批返回空，会连本实例已成功置 running 的
+// 行一起丢弃，这些任务状态已变但无人执行，只能等下次启动 ResetRunning 兜底。
+// 因此这里逐条条件更新，只把 RowsAffected == 1 的行算作本实例成功派发的任务。
 func ModelEvalQueuePopNext(ctx context.Context, limit int) ([]model.ModelEvalQueueTask, error) {
 	if limit <= 0 {
 		limit = 1
@@ -140,23 +207,24 @@ func ModelEvalQueuePopNext(ctx context.Context, limit int) ([]model.ModelEvalQue
 		if len(tasks) == 0 {
 			return nil
 		}
-		ids := make([]int64, len(tasks))
-		for i := range tasks {
-			ids[i] = tasks[i].ID
-		}
 		now := time.Now()
-		res := tx.Model(&model.ModelEvalQueueTask{}).
-			Where("id IN ? AND status = ?", ids, model.QueueTaskQueued).
-			Updates(map[string]interface{}{"status": model.QueueTaskRunning, "started_at": now})
-		if res.Error != nil {
-			return res.Error
+		kept := make([]model.ModelEvalQueueTask, 0, len(tasks))
+		for i := range tasks {
+			res := tx.Model(&model.ModelEvalQueueTask{}).
+				Where("id = ? AND status = ?", tasks[i].ID, model.QueueTaskQueued).
+				Updates(map[string]interface{}{"status": model.QueueTaskRunning, "started_at": now})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				// 该行已被其它实例抢走，不属于本实例。
+				continue
+			}
+			tasks[i].Status = model.QueueTaskRunning
+			tasks[i].StartedAt = now
+			kept = append(kept, tasks[i])
 		}
-		// 审计 RELI-04/R-L1: 条件 UPDATE 返回值同时部分派发由其它实例完成说明所有任务
-		// 都未被本实例唯一取走; 返回空按"本轮未取得可派发任务"处理, 调度器下一轮会重试，
-		// 绝不退回已经处于 running 的任务。
-		if res.RowsAffected != int64(len(tasks)) {
-			tasks = nil
-		}
+		tasks = kept
 		return nil
 	})
 	if err != nil {
@@ -165,10 +233,17 @@ func ModelEvalQueuePopNext(ctx context.Context, limit int) ([]model.ModelEvalQue
 	return tasks, nil
 }
 
-// ModelEvalQueueResetRunning 启动时把所有遗留 running 重置回 queued（进程重启恢复）。
+// ModelEvalQueueResetRunning 把遗留 running 重置回 queued（进程崩溃/重启恢复）。
+//
+// 跨实例安全：只重置「没有租约信息」的历史 running（StartedAt 为零，旧版本升级
+// 或租约概念引入前的行）以及租约已过期的 running。仍处于 evalQueueRunningLease
+// 内的 running 视为其它实例（或本实例崩溃后很快重启）正在执行的任务，不重置，
+// 否则多实例部署下新实例启动会把健康实例正在跑的评估重新入队导致重复执行。
+// 过期任务由 Scheduler 每次回收周期调用本函数逐批清理。
 func ModelEvalQueueResetRunning(ctx context.Context) error {
+	cutoff := time.Now().Add(-evalQueueRunningLease)
 	return db.GetDB().WithContext(ctx).Model(&model.ModelEvalQueueTask{}).
-		Where("status = ?", model.QueueTaskRunning).
+		Where("status = ? AND (started_at = ? OR started_at < ?)", model.QueueTaskRunning, time.Time{}, cutoff).
 		Updates(map[string]interface{}{"status": model.QueueTaskQueued}).Error
 }
 
@@ -205,11 +280,28 @@ func ModelEvalQueueMoveUp(ctx context.Context, id int64) ([]model.ModelEvalQueue
 	}
 	neighbor := queued[idx-1]
 
+	// 条件更新兜底 TOCTOU：两行都必须仍为 queued 才交换 position；
+	// 否则回滚事务并返回冲突（PopNext 抢走 / Stop 停止均不再可调序）。
 	err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.ModelEvalQueueTask{}).Where("id = ?", target.ID).Update("position", neighbor.Position).Error; err != nil {
-			return err
+		res := tx.Model(&model.ModelEvalQueueTask{}).
+			Where("id = ? AND status = ?", target.ID, model.QueueTaskQueued).
+			Update("position", neighbor.Position)
+		if res.Error != nil {
+			return res.Error
 		}
-		return tx.Model(&model.ModelEvalQueueTask{}).Where("id = ?", neighbor.ID).Update("position", target.Position).Error
+		if res.RowsAffected != 1 {
+			return ErrEvalQueueTaskConflict
+		}
+		res = tx.Model(&model.ModelEvalQueueTask{}).
+			Where("id = ? AND status = ?", neighbor.ID, model.QueueTaskQueued).
+			Update("position", target.Position)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 {
+			return ErrEvalQueueTaskConflict
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -229,10 +321,16 @@ func ModelEvalQueueStop(ctx context.Context, id int64) ([]model.ModelEvalQueueTa
 	if target.Status != model.QueueTaskQueued {
 		return nil, ErrEvalQueueTaskConflict
 	}
-	if err := db.GetDB().WithContext(ctx).Model(&model.ModelEvalQueueTask{}).
-		Where("id = ?", id).
-		Updates(map[string]interface{}{"status": model.QueueTaskStopped, "completed_at": time.Now()}).Error; err != nil {
-		return nil, err
+	// 条件更新兜底首个读与写之间的 TOCTOU：PopNext 若已把该行置 running，
+	// 这里 RowsAffected == 0，不覆盖执行中任务，返回冲突让前端刷新队列。
+	result := db.GetDB().WithContext(ctx).Model(&model.ModelEvalQueueTask{}).
+		Where("id = ? AND status = ?", id, model.QueueTaskQueued).
+		Updates(map[string]interface{}{"status": model.QueueTaskStopped, "completed_at": time.Now()})
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return nil, ErrEvalQueueTaskConflict
 	}
 	return ModelEvalQueueList(ctx)
 }

@@ -94,8 +94,10 @@ func apiKeyTouchWriter() {
 		case <-ticker.C:
 			flush()
 		case <-apiKeyTouchStopCh:
-			// 停机先排空已入队的触碰事件再落最后一批, 避免 buffered channel 内
-			// 的事件在 writer 退出后无人消费。
+			// 停机先排空已入队的触碰事件。随后必须把 pending map 中已有但可能
+			// 尚未发送(或发送后队列已满回滚前时序窗口)的事件一起收编：
+			// Touch 先写 pending 再投递 channel，若其在投递前被调度挂起，而
+			// writer 在这里把 channel 排空后直接退出，该事件会永远滞留 pending。
 			drained := true
 			for drained {
 				select {
@@ -108,6 +110,12 @@ func apiKeyTouchWriter() {
 					drained = false
 				}
 			}
+			apiKeyTouchMu.Lock()
+			for id := range apiKeyTouchPending {
+				batch = append(batch, id)
+				delete(apiKeyTouchPending, id)
+			}
+			apiKeyTouchMu.Unlock()
 			flush()
 			return
 		}

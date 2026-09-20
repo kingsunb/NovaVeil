@@ -29,7 +29,7 @@ func TestImportEmptyDB(t *testing.T) {
 	dump := &model.DBDump{
 		Version: dbDumpVersion,
 		Channels: []model.Channel{
-			{ID: 920001, Name: "sta06-empty-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.invalid"},
+			{ID: 920001, Name: "sta06-empty-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com"},
 		},
 		ChannelModels: []model.ChannelModel{
 			{ID: 920101, ChannelID: 920001, Name: "model-empty"},
@@ -64,7 +64,7 @@ func TestImportRepeatSameDump(t *testing.T) {
 	dump := &model.DBDump{
 		Version: dbDumpVersion,
 		Channels: []model.Channel{
-			{ID: 920001, Name: "sta06-repeat-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.invalid"},
+			{ID: 920001, Name: "sta06-repeat-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com"},
 		},
 		ChannelModels: []model.ChannelModel{
 			{ID: 920101, ChannelID: 920001, Name: "model-repeat"},
@@ -108,7 +108,7 @@ func TestImportForeignSameID(t *testing.T) {
 	dump := &model.DBDump{
 		Version: dbDumpVersion,
 		Channels: []model.Channel{
-			{ID: 920001, Name: "sta06-foreign-B", Type: model.ChannelProviderOpenAI, BaseURL: "https://b.invalid"},
+			{ID: 920001, Name: "sta06-foreign-B", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com"},
 		},
 		ChannelModels: []model.ChannelModel{
 			{ID: 920101, ChannelID: 920001, Name: "model-b"},
@@ -304,7 +304,7 @@ func TestImportTransactionAbort(t *testing.T) {
 	dump := &model.DBDump{
 		Version: dbDumpVersion,
 		Channels: []model.Channel{
-			{ID: 920401, Name: "sta06-txn-valid-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://valid.invalid"},
+			{ID: 920401, Name: "sta06-txn-valid-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com"},
 		},
 		Settings: []model.Setting{
 			{Key: model.SettingKeySyncLLMInterval, Value: "0"}, // 非法, 触发回滚
@@ -346,6 +346,38 @@ func TestImportDuplicateAPIKey(t *testing.T) {
 	}
 }
 
+// TestImportRejectsRedactedAPIKey 验证导出脱敏后的 "****" API Key 不会被当作
+// 可用密钥导入: 预检应报告 InvalidRef 并返回 DBImportValidationError。
+func TestImportRejectsRedactedAPIKey(t *testing.T) {
+	ctx := context.Background()
+	t.Cleanup(func() { cleanupImportTestRows(t) })
+
+	dump := &model.DBDump{
+		Version: dbDumpVersion,
+		APIKeys: []model.APIKey{
+			{ID: 920511, Name: "redacted-key", APIKey: "****", Enabled: true},
+		},
+	}
+
+	_, err := DBImportIncremental(ctx, dump)
+	if err == nil {
+		t.Fatal("import with redacted API key should fail")
+	}
+	var valErr *DBImportValidationError
+	if !errors.As(err, &valErr) {
+		t.Fatalf("error should be DBImportValidationError, got %T: %v", err, err)
+	}
+	found := false
+	for _, ref := range valErr.Preview.InvalidRefs {
+		if ref.Table == "api_keys" && ref.ID == 920511 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("preview should report redacted api_keys row, got %+v", valErr.Preview.InvalidRefs)
+	}
+}
+
 // TestImportPreviewDryRun 验证预检不写入数据, 仅返回统计与校验结果。
 func TestImportPreviewDryRun(t *testing.T) {
 	ctx := context.Background()
@@ -354,7 +386,7 @@ func TestImportPreviewDryRun(t *testing.T) {
 	dump := &model.DBDump{
 		Version: dbDumpVersion,
 		Channels: []model.Channel{
-			{ID: 920001, Name: "sta06-preview-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.invalid"},
+			{ID: 920001, Name: "sta06-preview-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com"},
 		},
 		ChannelModels: []model.ChannelModel{
 			{ID: 920101, ChannelID: 920001, Name: "model-preview"},
@@ -408,7 +440,7 @@ func TestExportConsistentSnapshot(t *testing.T) {
 	ctx := context.Background()
 	t.Cleanup(func() { cleanupImportTestRows(t) })
 
-	ch := model.Channel{ID: 920001, Name: "sta06-export-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.invalid"}
+	ch := model.Channel{ID: 920001, Name: "sta06-export-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com"}
 	if err := db.GetDB().Create(&ch).Error; err != nil {
 		t.Fatalf("seed channel: %v", err)
 	}

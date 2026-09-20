@@ -76,7 +76,9 @@ func redactCredentialsForExport(d *model.DBDump) {
 		if d.Channels[i].Key != "" {
 			d.Channels[i].Key = "****"
 		}
-		if d.Channels[i].ChannelProxy != nil && !strings.Contains(*d.Channels[i].ChannelProxy, "****") {
+		// 仅当已是精确的 "****" 哨兵值时跳过；历史明文代理 URL 中即使包含
+		// "****" 子串(例如密码恰为该字面量)也一律覆盖为哨兵掩码，避免导出泄密。
+		if d.Channels[i].ChannelProxy != nil && *d.Channels[i].ChannelProxy != "****" {
 			redacted := "****"
 			d.Channels[i].ChannelProxy = &redacted
 		}
@@ -276,7 +278,9 @@ func normalizeImportGroups(dump *model.DBDump) {
 //   - 渠道模型引用: ChannelID 指向有效渠道(现存或 dump 新增)
 //   - 分组成员引用: ChannelModelID / RefGroupName 指向有效目标
 //   - 分组引用循环: 有效态分组引用链无环
-//   - API Key 唯一性: dump 内及与现存库无重复明文
+//   - API Key 领域校验与唯一性: 与正常写接口相同的最小长度校验, 脱敏 Key 拒绝;
+//     dump 内及与现存库无重复明文
+//   - 渠道 BaseURL 出口校验: 非 custom 渠道禁止导入私网/环回/保留段地址
 //   - 分组模式: manual / failover / 空(默认)
 func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, error) {
 	preview := &model.DBImportPreview{
@@ -341,8 +345,10 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 	}
 
 	existingChannelModelIDs := make(map[int]struct{}, len(existingChannelModels))
+	existingChannelModelNatural := make(map[string]int, len(existingChannelModels)) // "channel_id\x00name" → id
 	for _, cm := range existingChannelModels {
 		existingChannelModelIDs[cm.ID] = struct{}{}
+		existingChannelModelNatural[channelModelNaturalKey(cm)] = cm.ID
 	}
 
 	existingGroupIDs := make(map[int]struct{}, len(existingGroups))
@@ -374,8 +380,10 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 	}
 
 	existingUsageBucketIDs := make(map[int64]struct{}, len(existingUsageBuckets))
+	existingUsageBucketNatural := make(map[string]int64, len(existingUsageBuckets)) // "bucket_at|model_name" → id
 	for _, ub := range existingUsageBuckets {
 		existingUsageBucketIDs[ub.ID] = struct{}{}
+		existingUsageBucketNatural[usageBucketNaturalKey(ub)] = ub.ID
 	}
 
 	// --- 设置校验(与正常写接口同规则) ---
@@ -415,6 +423,22 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 		if _, err := normalizeChannelKeys(ch.Keys); err != nil {
 			preview.SettingsIssues = append(preview.SettingsIssues,
 				fmt.Sprintf("渠道 %d 密钥校验失败: %v", ch.ID, err))
+		}
+	}
+
+	// --- 渠道 BaseURL 出口校验(与正常写接口同规则) ---
+	// 备份导入同样不能成为 SSRF 防护的旁路: 非 custom 渠道会被 relay 直接用于
+	// 上游访问, 必须在这里做完整 egress 校验(私网/环回/metadata/保留段拒绝)。
+	for _, ch := range dump.Channels {
+		if ch.Type == model.ChannelProviderCustom {
+			continue
+		}
+		if err := ValidateChannelEgressBaseURL(ch.BaseURL); err != nil {
+			preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
+				Table: "channels",
+				ID:    ch.ID,
+				Desc:  fmt.Sprintf("渠道 %d BaseURL 校验失败: %v", ch.ID, err),
+			})
 		}
 	}
 
@@ -503,9 +527,25 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 	cycles := detectGroupCycles(existingGroups, existingGroupIDs, existingGroupItemIDs, dump)
 	preview.Cycles = cycles
 
-	// --- API Key 唯一性 ---
+	// --- API Key 领域校验与唯一性 ---
+	// 导出端对所有 API Key 做了 "****" 掩码脱敏。掩码不是可用的上游凭据,
+	// 直接导入会得到一个明文恰为 "****" 的启用 Key(已通过最小长度? 仅为 4 字符),
+	// 必须拒绝; 其余 Key 沿用创建/更新接口的 validateAPIKeyCustom 最小长度规则。
 	dumpAPIKeyValues := make(map[string]int, len(dump.APIKeys))
 	for _, ak := range dump.APIKeys {
+		if ak.APIKey == "****" {
+			preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
+				Table: "api_keys",
+				ID:    ak.ID,
+				Desc:  "API key 已脱敏(****)，无法作为可用密钥导入；请在导入后重新生成或编辑该 Key",
+			})
+			continue
+		}
+		if err := validateAPIKeyCustom(ak.APIKey); err != nil {
+			preview.SettingsIssues = append(preview.SettingsIssues,
+				fmt.Sprintf("API key id=%d 校验失败: %v", ak.ID, err))
+			continue
+		}
 		if prevID, dup := dumpAPIKeyValues[ak.APIKey]; dup {
 			preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
 				Table: "api_keys",
@@ -532,9 +572,36 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 		}
 		return false
 	})
+	dumpChannelModelNatural := make(map[string]int, len(dump.ChannelModels))
+	for _, cm := range dump.ChannelModels {
+		key := channelModelNaturalKey(cm)
+		if prevID, dup := dumpChannelModelNatural[key]; dup {
+			preview.Conflicts = append(preview.Conflicts, model.DBImportConflict{
+				Table: "channel_models", ID: cm.ID,
+				Desc: fmt.Sprintf("渠道模型 id=%d 与 dump 内 id=%d 的 (channel_id,name) 唯一键冲突, 将跳过", cm.ID, prevID),
+			})
+		} else {
+			dumpChannelModelNatural[key] = cm.ID
+		}
+	}
 	analyzeTableConflict(preview, "channel_models", len(dump.ChannelModels), func(i int) bool {
-		_, exists := existingChannelModelIDs[dump.ChannelModels[i].ID]
-		return exists
+		cm := dump.ChannelModels[i]
+		if _, exists := existingChannelModelIDs[cm.ID]; exists {
+			return true
+		}
+		if conflictID, naturalDup := existingChannelModelNatural[channelModelNaturalKey(cm)]; naturalDup {
+			preview.Conflicts = append(preview.Conflicts, model.DBImportConflict{
+				Table: "channel_models", ID: cm.ID,
+				Desc: fmt.Sprintf("渠道模型 id=%d 的 (channel_id=%d, name=%q) 与现存 id=%d 唯一键冲突, 将跳过", cm.ID, cm.ChannelID, cm.Name, conflictID),
+			})
+			return true
+		}
+		if prevID, dup := dumpChannelModelNatural[channelModelNaturalKey(cm)]; dup && prevID != cm.ID {
+			// dump 内重复项: 前面的行会被 INSERT(若与现存库不冲突), 后面的行 DO NOTHING 跳过。
+			_ = prevID
+			return true
+		}
+		return false
 	})
 	analyzeTableConflict(preview, "groups", len(dump.Groups), func(i int) bool {
 		g := dump.Groups[i]
@@ -573,10 +640,32 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 		_, exists := existingClientStatIPs[dump.ClientStats[i].IP]
 		return exists
 	})
-	// usage_buckets: 以 ID 为主键, DO NOTHING。
+	// usage_buckets: 以 ID 为主键, 同时有 (bucket_at, model_name) 唯一键, DO NOTHING 均为冲突跳过。
+	dumpUsageBucketNatural := make(map[string]int64, len(dump.UsageBuckets))
+	for _, ub := range dump.UsageBuckets {
+		key := usageBucketNaturalKey(ub)
+		if prevID, dup := dumpUsageBucketNatural[key]; dup {
+			preview.Conflicts = append(preview.Conflicts, model.DBImportConflict{
+				Table: "usage_buckets", ID: int(ub.ID),
+				Desc: fmt.Sprintf("用量桶 id=%d 与 dump 内 id=%d 的 (bucket_at, model_name) 唯一键冲突, 将跳过", ub.ID, prevID),
+			})
+		} else {
+			dumpUsageBucketNatural[key] = ub.ID
+		}
+	}
 	analyzeTableConflict(preview, "usage_buckets", len(dump.UsageBuckets), func(i int) bool {
-		_, exists := existingUsageBucketIDs[dump.UsageBuckets[i].ID]
-		return exists
+		ub := dump.UsageBuckets[i]
+		if _, exists := existingUsageBucketIDs[ub.ID]; exists {
+			return true
+		}
+		if conflictID, naturalDup := existingUsageBucketNatural[usageBucketNaturalKey(ub)]; naturalDup {
+			preview.Conflicts = append(preview.Conflicts, model.DBImportConflict{
+				Table: "usage_buckets", ID: int(ub.ID),
+				Desc: fmt.Sprintf("用量桶 id=%d 的 (bucket_at=%s, model_name=%q) 与现存 id=%d 唯一键冲突, 将跳过", ub.ID, ub.BucketAt.Format(time.RFC3339), ub.ModelName, conflictID),
+			})
+			return true
+		}
+		return false
 	})
 	// settings 按 key upsert: 已存在的 key 计为 Updated, 否则 New。
 	for _, s := range settingsFiltered {
@@ -605,6 +694,17 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 		len(preview.InvalidRefs) == 0 &&
 		len(preview.Cycles) == 0
 	return preview, nil
+}
+
+// channelModelNaturalKey 组装 channel_models 表的 (channel_id, name) 唯一键。
+func channelModelNaturalKey(cm model.ChannelModel) string {
+	return fmt.Sprintf("%d\x00%s", cm.ChannelID, cm.Name)
+}
+
+// usageBucketNaturalKey 组装 usage_buckets 表的 (bucket_at, model_name) 唯一键。
+// 时间先按纳秒格式化, 保证与数据库时间戳比较时仅同一时刻才视为重复。
+func usageBucketNaturalKey(ub model.UsageBucket) string {
+	return fmt.Sprintf("%s\x00%s", ub.BucketAt.UTC().Format(time.RFC3339Nano), ub.ModelName)
 }
 
 // analyzeTableConflict 统计单表的新增/跳过行数; exists 返回 true 表示该行因主键或唯一键冲突将跳过。

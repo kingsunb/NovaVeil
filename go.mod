@@ -7,7 +7,7 @@ require (
 	github.com/charmbracelet/log v1.0.0
 	github.com/dlclark/regexp2 v1.12.0
 	github.com/gin-contrib/cors v1.7.8
-	github.com/gin-contrib/sse v1.1.1
+	github.com/gin-contrib/sse v1.1.2
 	github.com/gin-gonic/gin v1.12.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -125,6 +125,6 @@ require (
 	modernc.org/sqlite v1.58.0 // indirect
 )
 
-replace github.com/gin-contrib/sse => github.com/looplj/sse v0.0.0-20260223020440-b463add2d52f
-
+// tmaxmax/go-sse 上游 v0.11.0 缺少 axonhub/llm httpclient/decoder.go 使用的
+// Stream/NewStreamWithConfig API；该 fork 仅补齐这两个符号。上游补齐后应切回。
 replace github.com/tmaxmax/go-sse => github.com/looplj/go-sse v0.0.0-20250909130008-e74a1155bc3b

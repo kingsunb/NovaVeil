@@ -14,7 +14,9 @@ const (
 	ErrTooManyLoginAttempts = "Too many failed login attempts, please try again later"
 	// 密钥级限速(internal/keylimit)的 429 文案, fail-fast 语义下客户端按
 	// Retry-After 头退避, 文案只作人读说明。
+	// #nosec G101 -- 错误文案中的 "API key" 不是硬编码凭据。
 	ErrAPIKeyConcurrencyFull = "API key concurrency limit reached"
+	// #nosec G101 -- 错误文案中的 "API key" 不是硬编码凭据。
 	ErrAPIKeyRateLimited     = "API key rate limit exceeded"
 )
 

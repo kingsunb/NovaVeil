@@ -96,8 +96,8 @@ func TestDBExportAllCredentialAudit(t *testing.T) {
 	if dump.Note == "" {
 		t.Fatal("export must carry sensitivity note in header field")
 	}
-	if !strings.Contains(dump.Note, "敏感") || !strings.Contains(dump.Note, "API Key") || !strings.Contains(dump.Note, "渠道 Key") {
-		t.Fatalf("sensitivity note must mention plaintext credentials, got %q", dump.Note)
+	if !strings.Contains(dump.Note, "敏感") || !strings.Contains(dump.Note, "API Key") || !strings.Contains(dump.Note, "渠道 Key") || !strings.Contains(dump.Note, "脱敏") {
+		t.Fatalf("sensitivity note must mention redacted credentials, got %q", dump.Note)
 	}
 	if !strings.Contains(exported, `"note"`) {
 		t.Fatal("note field missing from serialized export")

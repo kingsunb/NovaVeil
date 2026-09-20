@@ -80,13 +80,14 @@ func TestShutdownContinuesAfterHookTimeout(t *testing.T) {
 		t.Fatal("shutdown did not continue after hook timeout")
 	}
 
+	// Shutdown 现在必须等超时钩子 goroutine 归零后才返回：最终器（如 db.Close）
+	// 不能与仍在活动的钩子并发。释放阻塞钩子后应能正常返回。
+	close(release)
 	select {
 	case <-shutdownDone:
 	case <-time.After(time.Second):
-		t.Fatal("shutdown did not return after continuing past timeout")
+		t.Fatal("shutdown did not return after timed-out hook finished")
 	}
-
-	close(release)
 	select {
 	case <-finished:
 	case <-time.After(time.Second):

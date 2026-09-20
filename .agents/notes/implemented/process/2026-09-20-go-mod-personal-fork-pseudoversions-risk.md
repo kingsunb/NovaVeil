@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> **部分取代**：2026-09-21 起 `gin-contrib/sse` 已切回官方 `v1.1.2`，本文中关于该 fork 的决定被 [2026-09-21-remove-gin-contrib-sse-fork-keep-go-sse-fork](./2026-09-21-remove-gin-contrib-sse-fork-keep-go-sse-fork.md) 接管；`tmaxmax/go-sse` 与 `axonhub/llm` 的保留决定及理由同样以新笔记为当前权威。
+
 ## 问题
 
 2026-09-20 后续审计 DEV-04 指出：`go.mod` 直接依赖 `github.com/looplj/axonhub/llm v0.0.0-20260917094421-19a3c27d8b94`（伪版本），且 `replace github.com/gin-contrib/sse => github.com/looplj/sse v0.0.0-20260223020440-b463add2d52f` 与 `replace github.com/tmaxmax/go-sse => github.com/looplj/go-sse v0.0.0-20250909130008-e74a1155bc3b` 都指向个人 fork 的伪版本。伪版本无法表达可审计的语义版本，个人 fork 也不在官方供应链信任范围内。

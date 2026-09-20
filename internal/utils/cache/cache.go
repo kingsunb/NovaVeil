@@ -51,7 +51,7 @@ func New[K comparable, V any](shards int) Cache[K, V] {
 
 	c := &cache[K, V]{
 		shardMask: uint64(shards - 1),
-		refreshMu: sync.Mutex{},
+		refreshMu: sync.RWMutex{},
 	}
 	c.gen.Store(newGeneration[K, V](shards))
 
@@ -61,8 +61,9 @@ func New[K comparable, V any](shards int) Cache[K, V] {
 type cache[K comparable, V any] struct {
 	gen       atomic.Pointer[generation[K, V]]
 	shardMask uint64
-	// refreshMu 串行化 RefreshAll/Clear 的代际替换; 读者不取此锁, 只原子加载 gen。
-	refreshMu sync.Mutex
+	// refreshMu 串行化 RefreshAll/Clear 的代际替换；Set/Del 持读锁、
+	// RefreshAll/Clear 持写锁，避免“写入落到刚被替换的退休旧代”而悄然丢失。
+	refreshMu sync.RWMutex
 }
 
 // generation 是一代完整的 shard 集合, 发布后只读; RefreshAll/Clear 构造新一代
@@ -89,6 +90,8 @@ func (c *cache[K, V]) current() *generation[K, V] {
 
 func (c *cache[K, V]) Set(k K, v V) {
 	hashedKey := xxhash.Sum64String(keyToString(k))
+	c.refreshMu.RLock()
+	defer c.refreshMu.RUnlock()
 	c.getShard(c.current(), hashedKey).set(k, v)
 }
 
@@ -110,6 +113,8 @@ func (c *cache[K, V]) GetAll() map[K]V {
 }
 
 func (c *cache[K, V]) Del(ks ...K) int {
+	c.refreshMu.RLock()
+	defer c.refreshMu.RUnlock()
 	g := c.current()
 	var count int
 	for _, k := range ks {

@@ -52,7 +52,9 @@ var startCmd = &cobra.Command{
 			log.Errorf("database init error: %v", err)
 			return fmt.Errorf("数据库初始化失败: %w", err)
 		}
-		shutdown.Register(db.Close)
+		// 数据库 Close 必须排他：作为最终器在所有常规钩子全部结束
+		// （包括等待超时的钩子 goroutine 归零）之后同步执行。
+		shutdown.RegisterFinalizer(db.Close)
 
 		// 静态加密必须先于任何业务读写初始化: builtin 补建渠道、op.InitCache 刷新
 		// 缓存都会接触敏感字段, 这里未 Configure 时 seal 会回退到进程临时密钥,

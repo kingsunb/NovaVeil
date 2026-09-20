@@ -125,7 +125,7 @@ services:
   # 基础镜像 tag 与 web-next/Dockerfile 的 runtime 阶段保持一致（完整版本 tag，
   # 离线无法查 Docker Hub digest，待 registry-lookup 后应改为 @sha256:...）。
   web-router:
-    image: nginx:1.27.5-alpine
+    image: nginx:1.27.5-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
     container_name: novaveil-web-router
     restart: unless-stopped
     # 与主服务同级的只读 rootfs；nginx master 在容器内监听 80，因此保留

@@ -144,7 +144,7 @@ func copyFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	if err := os.MkdirAll(filepath.Dir(dst), os.ModePerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
 
@@ -309,6 +309,7 @@ func CheckPendingUpdate() {
 	_ = os.Remove(markerPath)
 	// 直接 re-exec 旧版本, 不走 shutdown(此时可能尚未初始化)。
 	if runtime.GOOS == "windows" {
+		// #nosec G702 -- 自更新回滚 re-exec：路径来自 os.Executable，参数为自身 os.Args，非外部输入。
 		cmd := exec.Command(execPath, os.Args...)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
@@ -319,6 +320,7 @@ func CheckPendingUpdate() {
 		}
 		os.Exit(0)
 	}
+	// #nosec G702 -- 自更新回滚 re-exec：路径来自 os.Executable，参数为自身 os.Args，非外部输入。
 	if err := syscall.Exec(execPath, os.Args, os.Environ()); err != nil {
 		log.Errorf("回滚 re-exec 失败: %v", err)
 		os.Exit(1)
@@ -395,6 +397,7 @@ func restartExecutable(execPath string) {
 	log.Infof("restarting: %q %q", execPath, os.Args[1:])
 
 	if runtime.GOOS == "windows" {
+		// #nosec G702 -- 自更新重启：路径来自 os.Executable，参数为自身 os.Args，非外部输入。
 		cmd := exec.Command(execPath, os.Args[1:]...)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
@@ -412,6 +415,7 @@ func restartExecutable(execPath string) {
 		return
 	}
 
+	// #nosec G702 -- 自更新重启：路径来自 os.Executable，参数为自身 os.Args，非外部输入。
 	if err := syscall.Exec(execPath, os.Args, os.Environ()); err != nil {
 		log.Errorf("restarting failed: %v", err)
 		// Exec 失败：以非零退出码退出，避免监控器误判为正常重启成功。

@@ -21,6 +21,9 @@ const (
 	evalTimeout      = 10 * time.Minute
 	evalSaveTimeout  = 10 * time.Second
 	evalTickInterval = 2 * time.Second
+	// evalQueueReapInterval 控制运行中任务租约回收的周期；过期 running 由
+	// op.ModelEvalQueueResetRunning 基于 15 分钟租约判定，这里每分钟扫一次。
+	evalQueueReapInterval = time.Minute
 )
 
 // Default 进程内调度器，供 handler 通过包级 Notify/Subscribe 访问。
@@ -34,9 +37,11 @@ type Scheduler struct {
 	running  atomic.Int32
 	loopWG   sync.WaitGroup
 	workerWG sync.WaitGroup
-	startMu  sync.Mutex
-	started  bool
-	stopOnce sync.Once
+	// stateMu 串行化 Start/Stop 的状态迁移。Stop 在持锁期间等待 loop 与 worker
+	// 全部退出后才把 started 置回 false，因此 Start 不可能在旧循环还在运行、
+	// 或 stopOnce 式"只停一次"失效的窗口内创建第二套循环/取消函数。
+	stateMu sync.Mutex
+	started bool
 
 	subMu sync.Mutex
 	subs  map[chan []model.ModelEvalQueueTask]struct{}
@@ -75,14 +80,16 @@ func Unsubscribe(ch chan []model.ModelEvalQueueTask) {
 }
 
 func (s *Scheduler) Start(ctx context.Context) error {
-	s.startMu.Lock()
-	defer s.startMu.Unlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	if s.started {
 		return nil
 	}
 	s.ctx, s.cancel = context.WithCancel(ctx)
 	if err := op.ModelEvalQueueResetRunning(s.ctx); err != nil {
 		s.cancel()
+		s.ctx = nil
+		s.cancel = nil
 		return err
 	}
 	s.started = true
@@ -93,13 +100,19 @@ func (s *Scheduler) Start(ctx context.Context) error {
 }
 
 func (s *Scheduler) Stop() error {
-	s.stopOnce.Do(func() {
-		if s.cancel != nil {
-			s.cancel()
-		}
-		s.loopWG.Wait()
-		s.workerWG.Wait()
-	})
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if !s.started {
+		return nil
+	}
+	// 先取消 ctx 让 loop 退出；worker 用的是 ctx 派生上下文，也会被取消。
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.loopWG.Wait()
+	s.workerWG.Wait()
+	s.started = false
+	s.cancel = nil
 	return nil
 }
 
@@ -117,6 +130,8 @@ func (s *Scheduler) loop() {
 	defer s.loopWG.Done()
 	ticker := time.NewTicker(evalTickInterval)
 	defer ticker.Stop()
+	reapTicker := time.NewTicker(evalQueueReapInterval)
+	defer reapTicker.Stop()
 	for {
 		s.dispatch()
 		select {
@@ -124,7 +139,22 @@ func (s *Scheduler) loop() {
 			return
 		case <-s.notify:
 		case <-ticker.C:
+		case <-reapTicker.C:
+			s.reapExpiredRunning()
 		}
+	}
+}
+
+// reapExpiredRunning 周期回收租约过期的 running 任务：任一实例都可执行，
+// 但 WHERE 条件(X 租约）保证不会重置健康实例仍在执行的评估。
+func (s *Scheduler) reapExpiredRunning() {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), 30*time.Second)
+	defer cancel()
+	if err := op.ModelEvalQueueResetRunning(ctx); err != nil {
+		if !errors.Is(err, context.Canceled) {
+			log.Warnf("eval queue reap expired running: %v", err)
+		}
+		return
 	}
 }
 

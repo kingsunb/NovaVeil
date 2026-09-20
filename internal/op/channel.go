@@ -130,11 +130,23 @@ func ChannelImportFromText(ctx context.Context, text string) (success, failed in
 		}
 		baseURL := block[1]
 		keys := make([]model.ChannelKey, 0, len(block)-2)
+		maskedKey := false
 		for _, keyLine := range block[2:] {
 			if keyLine == "" {
 				continue
 			}
+			// 管理端导出的文本对 Key 做固定掩码(如 ****1234)。掩码不是可用
+			// 凭据, 直接把掩码当作上游 Key 导入会创建坏渠道; 这里整块拒绝。
+			if strings.Contains(keyLine, "****") {
+				maskedKey = true
+				break
+			}
 			keys = append(keys, model.ChannelKey{Key: keyLine})
+		}
+		if maskedKey {
+			failed++
+			errors = append(errors, fmt.Sprintf("%s: 文本密钥已脱敏(含 ****)，无法作为上游凭据导入，请使用未脱敏的完整密钥重新导出或手动填写", name))
+			continue
 		}
 		channel := model.Channel{
 			Name:    name,
@@ -713,6 +725,13 @@ func validateEgressHost(host string) error {
 	// host 形如 [::1]:8080 时剥掉括号; 普通 host 不会带括号。
 	literal := strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
 	if ip := net.ParseIP(literal); ip != nil {
+		// 过时的 IPv4-compatible/translated IPv6 字面量(::127.0.0.1、
+		// ::ffff:0:127.0.0.1)可编码 IPv4 环回/内网地址, 而 Go 对这类 16 字节
+		// 表示 IsLoopback/IsPrivate 均返回 false。含点分十进制的 IPv6 字面量
+		// 一律拒绝, 不试图猜测其意图; 正规 IPv6 公网地址不会写成这种形式。
+		if strings.Contains(literal, ":") && strings.Contains(literal, ".") && ip.To4() == nil {
+			return fmt.Errorf("渠道地址不允许使用 IPv4 兼容的 IPv6 字面量: %s", literal)
+		}
 		return validateEgressIP(ip)
 	}
 
@@ -733,12 +752,49 @@ func validateEgressHost(host string) error {
 	return nil
 }
 
-// validateEgressIP 拒绝私网、环回、链路本地、未指定地址与组播地址。IPv4-mapped
-// IPv6 同样按上述规则命中; 公网单播地址通过。
-func validateEgressIP(ip net.IP) error {
+// reservedIPv4Blocks 是 Go 标准库 IsPrivate/IsLoopback 等未覆盖、但不应作为
+// 渠道上游直连目标的 IPv4 保留段(CGN、基准测试、文档示例、未来保留段)。
+// 这些地址要么不可公网路由, 要么仅用于特殊场景, 直连它们属于 SSRF 面。
+var reservedIPv4Blocks = func() []*net.IPNet {
+	cidrs := []string{
+		"0.0.0.0/8",       // "本网络" 保留段
+		"100.64.0.0/10",   // CGNAT 共享地址空间
+		"192.0.0.0/24",    // IETF 协议分配保留段
+		"192.0.2.0/24",    // TEST-NET-1
+		"198.18.0.0/15",   // 网络基准测试
+		"198.51.100.0/24", // TEST-NET-2
+		"203.0.113.0/24",  // TEST-NET-3
+		"240.0.0.0/4",     // 未来保留段(含广播)
+	}
+	blocks := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, block, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks
+}()
+
+// validateEgressIP 拒绝私网、环回、链路本地、未指定地址、组播与广播地址, 以及
+// IPv4 保留段(CGN/测试网段/未来保留段)。IPv4-mapped IPv6 先归一化到 4 字节再判。
+func validateEgressIP(raw net.IP) error {
+	ip := raw
+	if ip4 := raw.To4(); ip4 != nil {
+		ip = ip4
+	}
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-		return fmt.Errorf("禁止访问内网/环回/链路本地地址")
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() ||
+		!ip.IsGlobalUnicast() {
+		return fmt.Errorf("禁止访问内网/环回/链路本地/保留地址")
+	}
+	if ip.To4() != nil {
+		for _, block := range reservedIPv4Blocks {
+			if block.Contains(ip) {
+				return fmt.Errorf("禁止访问内网/环回/链路本地/保留地址")
+			}
+		}
 	}
 	return nil
 }

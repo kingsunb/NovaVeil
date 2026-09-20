@@ -94,7 +94,9 @@ func TestCannedFixedReplyStreamOpenAI(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), cannedTestReply) {
 		t.Fatalf("流式响应应包含固定文案: %s", recorder.Body.String())
 	}
-	if !strings.Contains(recorder.Body.String(), "data: [DONE]") {
+	// gin-contrib/sse 上游 v1.1.2 的 IO 格式为 "data:<payload>"（冒号后无空格），
+	// 浏览器 EventSource 对冒号后可选空格兼容，此处锁定上游格式。
+	if !strings.Contains(recorder.Body.String(), "data:[DONE]") {
 		t.Fatalf("流式响应应以 [DONE] 收尾: %s", recorder.Body.String())
 	}
 }

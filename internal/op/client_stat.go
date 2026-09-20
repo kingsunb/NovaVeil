@@ -13,8 +13,13 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// clientStatMu 保护 clientStatCache 的并发访问。
+// clientStatMu 保护 clientStatCache 与 clientStatOrphaned 的并发访问。
 var clientStatMu sync.Mutex
+
+// clientStatOrphaned 保存因缓存触顶/过期被逐出的条目, 等待下一次 ClientStatFlush
+// 落库后清空。这样逐出不丢未刷增量, 且该 IP 再次出现时可沿用原累计值,
+// 避免"数据库已有 RequestCount 100, 重插入后按 1 覆盖"的丢计数问题。
+var clientStatOrphaned = make(map[string]*model.ClientStat)
 
 // maxClientStatCacheFallback 内存缓存的 IP 条目上限回退值: 设置未配置或读取失败时使用。
 const maxClientStatCacheFallback = 10000
@@ -43,6 +48,19 @@ func TrackClientStat(ip string) {
 	clientStatMu.Lock()
 	row, ok := clientStatCache[ip]
 	if !ok {
+		// 被逐出的 IP 再出现时沿用其未刷累计值, 避免重插入覆盖数据库总计数。
+		if orphan, exists := clientStatOrphaned[ip]; exists {
+			maxCount := getClientStatMaxCount()
+			if maxCount > 0 && len(clientStatCache) >= maxCount {
+				evictClientStatLocked(now)
+			}
+			delete(clientStatOrphaned, ip)
+			orphan.LastSeen = now
+			orphan.RequestCount++
+			clientStatCache[ip] = orphan
+			clientStatMu.Unlock()
+			return
+		}
 		maxCount := getClientStatMaxCount()
 		// maxCount=0 表示不限制; 否则触顶淘汰。
 		if maxCount > 0 && len(clientStatCache) >= maxCount {
@@ -67,6 +85,7 @@ func evictClientStatLocked(now time.Time) {
 	cutoff := now.AddDate(0, 0, -clientStatRetentionDays)
 	for ip, row := range clientStatCache {
 		if row.LastSeen.Before(cutoff) {
+			clientStatOrphaned[ip] = row
 			delete(clientStatCache, ip)
 		}
 	}
@@ -74,14 +93,17 @@ func evictClientStatLocked(now time.Time) {
 		return
 	}
 	var oldestIP string
+	var oldestRow *model.ClientStat
 	var oldest time.Time
 	for ip, row := range clientStatCache {
 		if oldestIP == "" || row.LastSeen.Before(oldest) {
 			oldestIP = ip
+			oldestRow = row
 			oldest = row.LastSeen
 		}
 	}
 	if oldestIP != "" {
+		clientStatOrphaned[oldestIP] = oldestRow
 		delete(clientStatCache, oldestIP)
 	}
 }
@@ -141,12 +163,26 @@ func ClientStatFlush(ctx context.Context) error {
 	for _, v := range clientStatCache {
 		values = append(values, *v)
 	}
+	orphanSnapshot := make(map[string]*model.ClientStat, len(clientStatOrphaned))
+	for ip, v := range clientStatOrphaned {
+		values = append(values, *v)
+		orphanSnapshot[ip] = v
+	}
 	clientStatMu.Unlock()
 
 	if len(values) > 0 {
 		if err := upsertClientStats(ctx, values); err != nil {
 			return err
 		}
+		// 仅在已成功落库的孤儿条目移除占位。写入期间新逐出的条目是新的指针,
+		// 按指针判等可避免误删。
+		clientStatMu.Lock()
+		for ip, v := range orphanSnapshot {
+			if clientStatOrphaned[ip] == v {
+				delete(clientStatOrphaned, ip)
+			}
+		}
+		clientStatMu.Unlock()
 	}
 
 	gormDB := db.GetDB()
@@ -194,8 +230,12 @@ func ClientStatLoad(ctx context.Context) error {
 	}
 	for i := range rows {
 		// 仅补入内存没有的条目; 内存已有条目保留其累计值(含未刷增量)。
+		// 若该 IP 已作为逐出孤儿存在, 保留孤儿值(其累计计数覆盖数据库旧值),
+		// 避免同一 IP 同时出现在 cache 与 orphan 导致单批 UPSERT 内重复键。
 		if _, exists := clientStatCache[rows[i].IP]; !exists {
-			clientStatCache[rows[i].IP] = &rows[i]
+			if _, orphaned := clientStatOrphaned[rows[i].IP]; !orphaned {
+				clientStatCache[rows[i].IP] = &rows[i]
+			}
 		}
 	}
 	return nil

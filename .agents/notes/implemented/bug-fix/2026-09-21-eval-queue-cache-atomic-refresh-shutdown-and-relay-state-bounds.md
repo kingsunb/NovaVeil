@@ -16,11 +16,12 @@ Status: implemented
 
 ## 决定
 
-- **RELI-04**：PopNext 在事务内查完候选后，对 `RowsAffected != len(tasks)` 的 UPDATE 结果按未成功派发处理并返回空；调度器下一轮重试，绝不返回已由他人置 running 的任务。
-- **RELI-05**：Enqueue 的 `MAX(position)` 读取、去重与 `Create` 移入同一个 `db.Transaction`，SQLite 写事务串行化，position 不再由锁外 MAX 生成。
-- **RELI-06**：`internal/utils/cache` 引入 `generation`（一整套只读 shard 集合）+ 原子 `atomic.Pointer` 发布；`RefreshAll`/`Clear` 先构造新一代再一次替换，读者始终看某一代的完整视图。
-- **RELI-07**：新增 `internal/op/apikey_lastused.go`：单 writer goroutine，`apiKeyTouchPending` 去重 map、1024 有界队列、256 批量合并、2s 去抖；停用后丢弃新触碰。`cmd/start.go` 在 shutdown 时调用 `APIKeyTouchLastUsedFlush`。
-- **RELI-08**：`shutdown.RegisterWithTimeout(task.StopAll, 5*time.Minute)` 与 `eval.Default.Stop()` 的 5 分钟有界超时，server 停 ingress 的钩子注册在 LIFO 之后；`APIKeyTouchLastUsedFlush` 先于 DB close；任务与 eval 在 DB close 前停。
+- **RELI-04**：PopNext 在事务内查完候选后，对 `RowsAffected != len(tasks)` 的 UPDATE 结果按未成功派发处理并返回空；调度器下一轮重试，绝不返回已由他人置 running 的任务。`ModelEvalQueueStop`/`ModelEvalQueueMoveUp` 也使用 `WHERE id = ? AND status = 'queued'` + `RowsAffected == 1` 判定，避免把并行派发的 running/已离队任务误置回 queued。
+- **RELI-05**：Enqueue 的 `MAX(position)` 读取、去重与 `Create` 移入同一个 `db.Transaction`，SQLite 写事务串行化；MySQL 在事务内加 `GET_LOCK('novaveil:model_eval_queue:enqueue',10)`，PostgreSQL 在事务内加 `pg_advisory_lock(0x4e5651455145)`，把多实例并发也串行化，position 不再由锁外 MAX 生成。
+- **RELI-06**：`internal/utils/cache` 引入 `generation`（一整套只读 shard 集合）+ 原子 `atomic.Pointer` 发布；`RefreshAll`/`Clear` 在 `refreshMu` 写锁下构造新一代再一次替换；`Set`/`Del` 持 `refreshMu` 读锁，避免写入落到刚被替换的退休旧代而悄然丢失。读者始终看某一代的完整视图。
+- **RELI-07**：新增 `internal/op/apikey_lastused.go`：单 writer goroutine，`apiKeyTouchPending` 去重 map、1024 有界队列、256 批量合并、2s 去抖；停用后丢弃新触碰，停写路径把已 pending 但与 channel 调度窗口竞态的事件也迁入最后一批 flush。`cmd/start.go` 在 shutdown 时调用 `APIKeyTouchLastUsedFlush`。
+- **RELI-08**：`shutdown.RegisterWithTimeout(task.StopAll, 5*time.Minute)` 与 `eval.Default.Stop()` 的 5 分钟有界超时，server 停 ingress 的钩子注册在 LIFO 之后；`APIKeyTouchLastUsedFlush` 先于 DB close；任务与 eval 在 DB close 前停。`internal/utils/shutdown` 用 `hookWG` 追踪每个钩子 goroutine，Shutdown 返回前等全部钩子 goroutine 结束（最多 `outstandingHooksWaitTimeout`，10 分钟）；`RegisterFinalizer` 钩子(如 `db.Close`)在所有普通钩子（含超时钩子的 goroutine）结束后再按注册顺序执行，超时未等完则跳过 finalizer 依赖 OS 退出清理。
+- **新增收尾**：`internal/op/error_log.go` 的 writer 在停机 flush 时把队列排干并等待 writer 最多 35s，期间并后续入队走短超时同步直写（`errorLogShuttingDown`），防止错误日志停机上丢；`internal/op/client_stat.go` 在缓存淘汰/触顶逐出时把行移入 orphaned map 而不是直接删除，flush 失败还能在下轮重试，停机 flush 也会带上 orphaned UPSERT；`internal/eval/scheduler.go` 用 `stateMu` 代替 `startMu`+`stopOnce`，`Start` 失败复位、`Stop` 幂等可重入，并带 1 分钟 `reapTicker` 调用 `ModelEvalQueueResetRunning` 回收超出租约(15 分钟)的 running 任务。
 - **REL-07**：`cloneRouteState` 深拷贝 `emergencyCounts/emergencyBlocks` 两个 map。
 - **OLD-10**：`clientIPSet` 触顶时按最近访问时间淘汰半数最久未见 IP，不再整体重置。
 - **OLD-11**：`trimFinishedRequestsLocked` 改为按完成队列出队 O(1) 裁剪，避免每次终态全表扫描。
@@ -30,9 +31,10 @@ Status: implemented
 ## 备选方案
 
 - **PopNext 用事务内循环重试**——SQLite 的读事务快照会让重试看到的仍是旧快照；选择单次条件更新 + 空返回让下一调度周期重试。
-- **Cache 用 RWMutex 包整个 RefreshAll**——实现改动更小，但 RefreshAll 期间会阻塞全部读者；代际替换保留读写无锁。
+- **Cache 用 RWMutex 包整个 RefreshAll**——实现改动更小，但 RefreshAll 期间会阻塞全部读者；代际替换保留读写无锁，再加 `refreshMu` 解决写丢失缺口。
 - **touch-last-used 用定时批量合并队列**——保留，但无界队列会在慢 DB 时无界增长；选择有界队列 + 满时丢弃。
 - **停机直接给 eval 10min 无限等待**——最安全但可能拖死部署；选择 5 分钟有界上界，部署可配置。
+- **入队跨实例用 Redis/etcd 分布式锁**——引入新外部依赖不划算；选择 MySQL `GET_LOCK`/PostgreSQL advisory lock 这些 DB 原生原语。
 
 ## 后果
 
@@ -41,7 +43,8 @@ Status: implemented
 
 ## 验证
 
-- `internal/utils/cache/cache_test.go`：RefreshAll 原子替换。
+- `internal/utils/cache/cache_test.go`：RefreshAll 原子替换与 Set 写丢失窗口覆盖。
 - `internal/relay/route_state_clone_test.go`、`internal/relay/state_bounded_test.go`：深拷贝与分片/队列有界行为。
-- `internal/server/handlers/loginratelimit_test.go`、`internal/op/apikey_lastused_test.go`、`internal/op/model_eval_queue` 路径等单测。
+- `internal/server/handlers/loginratelimit_test.go`、`internal/op/apikey_lastused_test.go`、`internal/op/model_eval_queue`、`internal/op/error_log_queue`、`internal/op/client_stat` 路径等单测。
+- `internal/utils/shutdown/shutdown_test.go`：含超时钩子时的返回行为与 finalizer 顺序。
 - 全量 `go build ./...`、`go test ./...`、`go vet ./...` 通过。

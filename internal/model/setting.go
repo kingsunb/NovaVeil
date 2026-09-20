@@ -19,6 +19,7 @@ const (
 	SettingKeyConversationLog           SettingKey = "conversation_log_enabled"    // 对话留存开关: "1"记录全部终态对话到 data/conversations 供本地审计使用, "0"(默认)关闭
 	SettingKeyConversationRetentionDays SettingKey = "conversation_retention_days" // 对话留存归档保留天数(天), 默认 3, 受 ConversationRetentionDaysMin/Max 校验
 	SettingKeyConversationDirMaxGB      SettingKey = "conversation_dir_max_gb"     // 对话留存目录硬预算(GB), 默认 5, 受 ConversationDirMaxGBMin/Max 校验
+	// #nosec G101 -- 设置键名字符串是配置项名称，不是硬编码凭据。
 	SettingKeyAuthJWTSecret             SettingKey = "auth_jwt_secret"             // JWT 签名密钥(32字节随机数的hex, 64字符). 为空时首次使用自动生成并持久化; 轮换后所有已签发 token 失效. 仅内部管理, 禁止通过设置接口读写
 	SettingKeyHeaderTemplates           SettingKey = "header_templates"            // 渠道自定义请求头模板(JSON 数组), 供渠道表单一键填充
 	SettingKeyChannelRandomHeaders      SettingKey = "channel_random_headers"      // 按渠道指向头名的随机请求头规则(JSON 数组), 值由系统按会话自动生成并注入

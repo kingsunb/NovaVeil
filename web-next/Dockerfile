@@ -17,9 +17,8 @@
 # =============================================================================
 
 # ---- Stage 1: builder ----
-# 基础镜像固定到与 CI 相同的完整版本 tag；离线无法查询 Docker Hub digest，
-# 待 registry-lookup 后应改为 @sha256:... 不可变引用。
-FROM node:22.19.0-alpine AS builder
+# 基础镜像固定到与 CI 相同的完整版本 tag，并 pin 到不可变 digest。
+FROM node:22.19.0-alpine@sha256:d2166de198f26e17e5a442f537754dd616ab069c47cc57b889310a717e0abbf9 AS builder
 WORKDIR /app
 
 # 利用层缓存：单独先装依赖。
@@ -39,9 +38,9 @@ RUN pnpm build
 # 供 Go embed 抓取；在容器内构建时产物落在 /static/out。
 
 # ---- Stage 2: runtime (nginx alpine) ----
-# 基础镜像固定到完整版本 tag；与 docker-compose.yml 的 web-router 服务保持一致。
-# 离线无法查询 Docker Hub digest，待 registry-lookup 后应改为 @sha256:... 不可变引用。
-FROM nginx:1.27.5-alpine AS runtime
+# 基础镜像固定到完整版本 tag，并 pin 到不可变 digest；与 docker-compose.yml
+# 的 web-router 服务保持一致。
+FROM nginx:1.27.5-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 AS runtime
 
 # 用 wget 替代 curl 做健康检查（更小的 alpine 基础）
 RUN apk add --no-cache wget \

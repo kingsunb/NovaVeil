@@ -19,6 +19,7 @@ import (
 
 	"github.com/kingsunb/NovaVeil/internal/db"
 	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/seal"
 	"gorm.io/gorm"
 )
 
@@ -83,19 +84,19 @@ var BuiltinFreeChannels = []model.Channel{
 		},
 	},
 	{
-		Name:     "UncloseAI Free",
-		Type:     model.ChannelProviderOpenAI,
-		BaseURL:  "https://hermes.ai.unturf.com",
-		Key:      "builtin",
+		Name:    "UncloseAI Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://hermes.ai.unturf.com",
+		Key:     "builtin",
 		Models: []model.ChannelModel{
 			{Name: "Lorbus/Qwen3.6-27B-int4-AutoRound"},
 		},
 	},
 	{
-		Name:     "AI Horde Free",
-		Type:     model.ChannelProviderOpenAI,
-		BaseURL:  "https://oai.aihorde.net",
-		Key:      "0000000000",
+		Name:    "AI Horde Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://oai.aihorde.net",
+		Key:     "0000000000",
 		Models: []model.ChannelModel{
 			{Name: "aphrodite/TheDrummer/Cydonia-24B-v4.3"},
 			{Name: "aphrodite/TheDrummer/Skyfall-31B-v4.2"},
@@ -103,9 +104,9 @@ var BuiltinFreeChannels = []model.Channel{
 		},
 	},
 	{
-		Name:     "Pollinations Free",
-		Type:     model.ChannelProviderOpenAI,
-		BaseURL:  "https://gen.pollinations.ai",
+		Name:    "Pollinations Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://gen.pollinations.ai",
 		Models: []model.ChannelModel{
 			{Name: "openai/gpt-5.4-nano"},
 			{Name: "openai/gpt-4o-mini"},
@@ -115,9 +116,9 @@ var BuiltinFreeChannels = []model.Channel{
 		},
 	},
 	{
-		Name:     "OVH AI Endpoints Free",
-		Type:     model.ChannelProviderOpenAI,
-		BaseURL:  "https://oai.endpoints.kepler.ai.cloud.ovh.net",
+		Name:    "OVH AI Endpoints Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://oai.endpoints.kepler.ai.cloud.ovh.net",
 		Models: []model.ChannelModel{
 			{Name: "Mistral-Nemo-Instruct-2407"},
 			{Name: "Mistral-Small-3.2-24B-Instruct-2506"},
@@ -127,9 +128,9 @@ var BuiltinFreeChannels = []model.Channel{
 		},
 	},
 	{
-		Name:     "LLM7 Free",
-		Type:     model.ChannelProviderOpenAI,
-		BaseURL:  "https://api.llm7.io",
+		Name:    "LLM7 Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://api.llm7.io",
 		Models: []model.ChannelModel{
 			{Name: "DeepSeek-V4.1-Flash"},
 			{Name: "GLM-5.3-Flash"},
@@ -138,9 +139,9 @@ var BuiltinFreeChannels = []model.Channel{
 		},
 	},
 	{
-		Name:     "Kilo Gateway Free",
-		Type:     model.ChannelProviderOpenAI,
-		BaseURL:  "https://api.kilo.ai/api/gateway",
+		Name:    "Kilo Gateway Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://api.kilo.ai/api/gateway",
 		Models: []model.ChannelModel{
 			{Name: "kilo-auto/free"},
 			{Name: "deepseek/deepseek-v4.1-flash"},
@@ -149,9 +150,9 @@ var BuiltinFreeChannels = []model.Channel{
 		},
 	},
 	{
-		Name:     "Airforce Free",
-		Type:     model.ChannelProviderOpenAI,
-		BaseURL:  "https://api.airforce",
+		Name:    "Airforce Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://api.airforce",
 		Models: []model.ChannelModel{
 			{Name: "gpt-oss-20b"},
 			{Name: "gemini-3.6-flash"},
@@ -160,9 +161,9 @@ var BuiltinFreeChannels = []model.Channel{
 		},
 	},
 	{
-		Name:     "G4F Space NVIDIA Free",
-		Type:     model.ChannelProviderOpenAI,
-		BaseURL:  "https://g4f.space/api/nvidia",
+		Name:    "G4F Space NVIDIA Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://g4f.space/api/nvidia",
 		Models: []model.ChannelModel{
 			{Name: "meta/llama-3.3-70b-instruct"},
 			{Name: "deepseek-ai/deepseek-r1"},
@@ -288,7 +289,11 @@ func ensureFreeBuiltinChannels(ctx context.Context) error {
 			return fmt.Errorf("检查内置免费渠道 %q 失败: %w", channel.Name, err)
 		}
 
-		if err := gormDB.Create(&channel).Error; err != nil {
+		sealedChannel, sErr := sealBuiltinChannelForDB(channel)
+		if sErr != nil {
+			return fmt.Errorf("加密内置免费渠道 %q 失败: %w", channel.Name, sErr)
+		}
+		if err := gormDB.Create(&sealedChannel).Error; err != nil {
 			return fmt.Errorf("创建内置免费渠道 %q 失败: %w", channel.Name, err)
 		}
 	}
@@ -328,11 +333,50 @@ func ensureOfficialBuiltinChannels(ctx context.Context) error {
 			return fmt.Errorf("检查内置官方渠道 %q 失败: %w", channel.Name, err)
 		}
 
-		if err := gormDB.Create(&channel).Error; err != nil {
+		sealedChannel, sErr := sealBuiltinChannelForDB(channel)
+		if sErr != nil {
+			return fmt.Errorf("加密内置官方渠道 %q 失败: %w", channel.Name, sErr)
+		}
+		if err := gormDB.Create(&sealedChannel).Error; err != nil {
 			return fmt.Errorf("创建内置官方渠道 %q 失败: %w", channel.Name, err)
 		}
 	}
 	return nil
+}
+
+// sealBuiltinChannelForDB 返回敏感字段已加密的内置渠道副本, 与 op.sealChannelForDB
+// 同一规则; 内置免费渠道带公开 Key(如 "public"), 也必须以密文落库, 不能因
+// “公开”就在数据库里明文存放。库里旧明文由 openChannelForCache 按迁移兼容读取。
+func sealBuiltinChannelForDB(channel model.Channel) (model.Channel, error) {
+	dbChannel := channel
+	if channel.Key != "" {
+		sealed, err := seal.Seal(channel.Key)
+		if err != nil {
+			return model.Channel{}, fmt.Errorf("加密渠道 Key 失败: %w", err)
+		}
+		dbChannel.Key = sealed
+	}
+	if channel.ChannelProxy != nil && *channel.ChannelProxy != "" {
+		sealed, err := seal.Seal(*channel.ChannelProxy)
+		if err != nil {
+			return model.Channel{}, fmt.Errorf("加密渠道代理凭据失败: %w", err)
+		}
+		dbChannel.ChannelProxy = &sealed
+	}
+	if len(channel.Keys) > 0 {
+		dbChannel.Keys = append([]model.ChannelKey(nil), channel.Keys...)
+		for i := range dbChannel.Keys {
+			if dbChannel.Keys[i].Key == "" {
+				continue
+			}
+			sealed, err := seal.Seal(dbChannel.Keys[i].Key)
+			if err != nil {
+				return model.Channel{}, fmt.Errorf("加密渠道 Key 失败: %w", err)
+			}
+			dbChannel.Keys[i].Key = sealed
+		}
+	}
+	return dbChannel, nil
 }
 
 // ---------------------------------------------------------------------------

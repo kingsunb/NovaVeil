@@ -1,12 +1,13 @@
 name: security-scan
 
 # 供应链安全基线：周频 + 手动触发。
-# - Go: go vet 是离线可保证的 SAST 基线。
+# - Go: go vet + gosec(高置信度门禁) + govulncheck(官方漏洞库)。
 # - 前端: pnpm audit 审计 web-next 生产依赖。
-# 后续 runner 允许安装外部工具时，可在本 job 追加：
-#   gosec ./...           # Go SAST
-#   golangci-lint run     # lint 兜底
-#   govulncheck ./...     # Go 漏洞数据库扫描
+# 说明：
+#   - gosec 只拦 severity=high 且未注释豁免的发现；G115(整型窄化转换)在
+#     序列化/位运算等惯用写法里误报率高，单独排除。medium/low 发现由本地
+#     完整扫描人工复核，不作为 CI 门禁，避免 SAST 噪声淹没真实回归。
+#   - golangci-lint 待 runner 允许安装后再追加入本 job。
 # 注意：pnpm audit 需要解析 lockfile；web-next/pnpm-lock.yaml 已跟踪并在 CI 使用。
 
 on:
@@ -53,6 +54,18 @@ jobs:
 
       - name: Go vet (SAST baseline)
         run: go vet ./...
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+
+      - name: Run gosec (high severity gate)
+        run: $(go env GOPATH)/bin/gosec -quiet -severity=high -exclude=G115 ./...
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+
+      - name: Run govulncheck
+        run: $(go env GOPATH)/bin/govulncheck ./...
 
       - name: Frontend dependency audit
         working-directory: web-next

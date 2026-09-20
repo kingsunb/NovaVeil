@@ -66,16 +66,17 @@ func Start() error {
 		return err
 	}
 
-	httpSrv = &http.Server{}
-	httpSrv.Addr = fmt.Sprintf("%s:%d", conf.AppConfig.Server.Host, conf.AppConfig.Server.Port)
-	httpSrv.Handler = r
 	// 头部慢发(Slowloris)需要 ReadHeaderTimeout 显式限制; 闲置长连接需要 IdleTimeout 主动回收。
 	// 流式转发(LLM SSE)的写出时长由请求上下文与客户端连接控制, 不在这里设 WriteTimeout, 避免
 	// 误截长流。MaxHeaderBytes 收紧到 1MB 防止异常大的 header 撑爆内存。
-	httpSrv.ReadHeaderTimeout = 10 * time.Second
-	httpSrv.ReadTimeout = 60 * time.Second
-	httpSrv.IdleTimeout = 120 * time.Second
-	httpSrv.MaxHeaderBytes = 1 << 20
+	httpSrv = &http.Server{
+		Addr:              fmt.Sprintf("%s:%d", conf.AppConfig.Server.Host, conf.AppConfig.Server.Port),
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 
 	// 为所有请求注入共享根 context: CancelInFlight 取消后, 每个活动请求的
 	// context 立即进入 Done, handler 可据此尽快收尾, 而非被动等待 Shutdown 超时。
