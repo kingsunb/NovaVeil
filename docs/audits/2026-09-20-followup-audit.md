@@ -125,7 +125,7 @@ DevOps 域完整子代理复核已补录。DEV-01 与上期 H-05 同源、按 hi
 - **文档漂移（low）**：`6d61562` 删除 release/deploy workflow 后，`README.md:64` 仍称可手动触发 `release` / `build` workflow，`docs/SECURE_DEPLOYMENT.md:40-43` 也仍引用不存在的 `release` workflow。
 - **DEV-09（low，新）**：`web-next/Dockerfile:23-27` 写死并启用 pnpm@9，而 CI/docs 当前要求 pnpm 11.21+，独立前端镜像的工具链与 CI 不一致；`README.md:64-72` 与 `docs/SECURE_DEPLOYMENT.md:40-43` 仍引用已被 `6d61562` 删除的 release workflow。
 - **正向确认**：`test.yaml` 在 PR/push 跑 Go 测试并 pin checkout（SHA）；`web-next-ci` 在 web-next 变更的 PR 上运行；`docker-publish` 镜像名正确为 `ghcr.io/kingsunb/novaveil`；checkout 等多数 action 已 pin。
-- **残余风险（DevOps 子代理）**：生产 `novaveil` 服务硬化良好（UID 10001、read_only、cap_drop ALL、no-new-privileges、limits、healthcheck），但这些控制未覆盖 web-router；`docker-compose.yml:30` 的 `NOVAVEIL_WEB_NEXT_IMAGE` 在未启用 profile 的 Compose 上可能因插值语义导致默认 `up` 失败（未实测，INFERENCE）；`docker-compose.local.yml:10-12` 用 `NOVAVEIL_BIND` 而 `docs/SECURE_DEPLOYMENT.md:90-92` 用 `NOVAVEIL_BIND_ADDRESS`，是运维 footgun；release/update 完整性仍只靠 checksum、无 Sigstore 签名。
+- **残余风险（DevOps 子代理）**：生产 `novaveil` 服务硬化良好（UID 10001、read_only、cap_drop ALL、no-new-privileges、limits、healthcheck），但这些控制未覆盖 web-router；`docker-compose.yml:30` 的 `NOVAVEIL_WEB_NEXT_IMAGE` 在未启用 profile 的 Compose 上可能因插值语义导致默认 `up` 失败（未实测，INFERENCE）；`docker-compose.local.yml:10-12` 用 `NOVAVEIL_BIND` 而 `docs/SECURE_DEPLOYMENT.md:90-92` 用 `NOVAVEIL_BIND_ADDRESS`，是运维 footgun；release/update 完整性仍只靠 checksum、无 Sigstore 签名；仓库无 Dependabot/CODEOWNERS 配置；根 `pnpm-lock.yaml` 被 `.gitignore` 忽略（根包仅 agent-notes 工具），而 `web-next/pnpm-lock.yaml` 被跟踪并在 CI 使用 `--frozen-lockfile`。
 
 ---
 
