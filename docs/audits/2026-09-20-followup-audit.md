@@ -13,7 +13,7 @@
 
 ## 0. 执行摘要
 
-**没有新的 Critical。** 上次的 High 项大部分已修复：H-01（模型同步清库）在 fetch 层与 sync 层双防御；H-02（Chat localStorage）已在 login/logout 双侧清理；H-03（fresh clone 编译失败）已由 `static/out/.gitkeep` 修复；H-04（Dockerfile tailwind COPY）已修复；H-06（版本号不一致）已修复（`main.go` 与 `web-next/package.json` 均为 0.2.0，release workflow 已删除）。**H-05 部分保留（DevOps 复核记为 high，见 DEV-01）**：`docker-publish` 仍在不跑测试/漏洞门禁的情况下推 `:latest`，且 `docker/build-push-action@v6` 未 pin SHA；DEV-06 发现 PR 模板检查与 PR 模板不一致，按模板填写的合法 PR 会被自动关闭。
+**没有新的 Critical。** 上次的 High 项大部分已修复：H-01（模型同步清库）在 fetch 层与 sync 层双防御；H-02（Chat localStorage）登录/登出双侧清理已落地，但“新会话”与 401 路径仍留残余（部分修复）；H-03（fresh clone 编译失败）已由 `static/out/.gitkeep` 修复；H-04（Dockerfile tailwind COPY）已修复；H-06（版本号不一致）已修复（`main.go` 与 `web-next/package.json` 均为 0.2.0，release workflow 已删除）。**H-05 部分保留（DevOps 复核记为 high，见 DEV-01）**：`docker-publish` 仍在不跑测试/漏洞门禁的情况下推 `:latest`，且 `docker/build-push-action@v6` 未 pin SHA；DEV-06 发现 PR 模板检查与 PR 模板不一致，按模板填写的合法 PR 会被自动关闭。
 
 本次最值得关注的新发现：
 
@@ -25,12 +25,12 @@
 
 ---
 
-## 1. 已验证修复清单（截稿前确认）
+## 1. 已验证修复/部分修复清单
 
 | ID | 结论 | 证据（当前代码） |
 |---|---|---|
 | H-01 | **已修复** | `internal/helper/fetch.go:115-120,167-179,230-242` 三个 fetch 函数解码前校验 2xx；`internal/task/sync.go:60-77` 空列表且已有 auto 模型时跳过删除。 |
-| H-02/F-H1 | **已修复** | `web-next/src/store/auth.tsx:39-50` `clearChatLocalStorage()` 删除所有 `novaveil:chat:*`；`login`（111-114）与 `logout`（143）均调用。 |
+| H-02/F-H1 | **部分修复** | 登录/登出已清理：`clearChatLocalStorage()`（`auth.tsx:39-45`）删除所有 `novaveil:chat:*`，`login`(113) 与 `logout`(143) 均调用。残余：会话仍存 localStorage；`Chat.tsx:56-58,262-265` “新会话”只删 `CHAT_SESSION_KEY`、不删 mask-session ID；Chat 401 不触发清理（见 F-M1）。 |
 | H-03 | **已修复** | `static/out/.gitkeep` 已被跟踪（`git ls-files static` 可见），`static/static.go:8` 的 `//go:embed all:out` 有目录可嵌。 |
 | H-04 | **已修复** | `web-next/Dockerfile:30` 的 COPY 行不再含 `tailwind.config.ts`。 |
 | H-05 | **部分保留（复核 high）** | `docker-publish.yaml:82-89` 仍只构建即 `push: true`，无 `go test`/`pnpm test`/漏洞门禁；`:83` 仍用 `docker/build-push-action@v6` 未 pin。镜像名已统一为 `ghcr.io/kingsunb/novaveil`。 |
@@ -129,15 +129,29 @@ DevOps 域完整子代理复核已补录。DEV-01 与上期 H-05 同源、按 hi
 
 ---
 
-## 8. 历史清单核对状态（截稿前未完成完整核对）
+## 8. 历史清单核对状态（已由历史核对子代理逐条完成）
 
-已确认修复/存续的部分见第 1 节。以下上期“未修复-回归”项在本次主域复核中被再次观察到仍未修复（其余未逐一复核）：
+结论：旧清单绝大多数仍 **STILL OPEN**，唯一确认修复的历史项是 **OLD-29**；抽样的 P1（S-M1/S-M2/S-M3/R-M2/R-M4/F-M1/F-M3）全部 **STILL OPEN**。逐条证据（file:line）已由子代理核对并存档：
 
-- M-5 / L-6 / L-7（明文凭据、单管理员无 2FA、渠道导入信息丢失）— 存续。
-- OLD-10、OLD-11、OLD-12、OLD-13（IP 集重置、定稿全量扫描、探测 context.Background、loginratelimit context.Background）— 观察存续。
-- OLD-18、OLD-19、OLD-20、OLD-22（前端镜像 pin、web-router 硬化、nginx tag、CSP）— 观察存续。
-- OLD-23、OLD-24、OLD-26、OLD-27、OLD-28、OLD-30、OLD-32（SAST、Dependabot、管理 API 限流、`.env` 忽略、改密二次确认、Settings `confirm()`、CODEOWNERS）— 未逐条复核，按本次观察多数存续。
-- OLD-29（http/https 白名单）已修复。
+- M-5 / L-6 / L-7：明文凭据与备份导出滤密不完整、单管理员无 2FA、渠道导入丢失类型/模型/分组/限额/标签并硬编码 OpenAI — 均 **STILL OPEN**。
+- OLD-10：`clientIPSet` 触顶 4096 整体重置（`relay/state.go:1064-1078`）。
+- OLD-11：`trimFinishedRequestsLocked` 每次定稿 O(N) 全量扫描（`relay/state.go:630-644`）。
+- OLD-12：`recoverExpiredItems` 仍用 `context.Background()` 且与请求取消解耦（`relay/route.go:311-312`）。
+- OLD-13：`loginratelimit` 四处 DB 调用仍 `context.Background()` 无超时（`handlers/loginratelimit.go:65,89,96,113`）。
+- OLD-18：`web-next/Dockerfile:20,39` 基础镜像未 pin digest。
+- OLD-19：`docker-compose.yml:125-139` web-router 无 read_only/cap_drop/security_opt/limits/healthcheck。
+- OLD-20：`docker-compose.yml:126` web-router 仍 `nginx:1.27-alpine` 可变 tag。
+- OLD-22：`web-next/nginx.conf:41` CSP 仍含 `'unsafe-inline'`；子 location 因 `add_header` 继承丢失父级安全头。
+- OLD-23：CI/CD 仍无 gosec/golangci/staticcheck SAST。
+- OLD-24：仍无 Dependabot。
+- OLD-25：配置 unmarshal 后仍无端口/host/路径校验（`conf/config.go:79-83`）。
+- OLD-26：管理 API 仍无限流，仅登录有限流。
+- OLD-27：`.gitignore` 仍缺 `.env`/`*.pem`/`*.key`。
+- OLD-28：改密表单仍无二次确认（`ChangePasswordForm.tsx:19-21,41-55`）。
+- OLD-30：Settings 仍使用原生 `confirm()`（`Settings.tsx:1075-1078`）。
+- OLD-32：仍无 CODEOWNERS。
+- **OLD-29（http/https 白名单）已修复**：本报告唯一确认修复的历史项。
+- 抽样 P1 复核：S-M1 与 S-M3（SSRF 校验绕过，`fetch-model` 完全跳过校验）、S-M2（TLS 反代下默认无 Secure）、R-M2（`task.StopAll` 与 ticker 竞态）、R-M4（eval panic 后 DB 行永久 running）、F-M1（Chat 401 不广播且不触发清理）、F-M3（CSP/子 location 头丢失）— 均 **STILL OPEN**。
 
 ---
 
@@ -169,7 +183,7 @@ DevOps 域完整子代理复核已补录。DEV-01 与上期 H-05 同源、按 hi
 
 ## 10. 审计局限
 
-- DevOps 完整子代理复核与 REL-02 独立对抗复核已在本修订版补充（见 2.1 与第 7 节）；历史清单 61 条逐条核对子代理仍未返回。
+- 全部子代理复核已完成并入本修订版：REL-02 对抗复核见 2.1，REL-04/05 见第 4 节，DevOps 完整复核见第 7 节，历史清单逐条核对见第 8 节。
 - 未跑 docker 基线的镜像构建/冒烟；静态结论仍可能受环境差异影响。
 - 后端全量文件并非逐行审阅，深度覆盖核心链路与全库反模式 grep。
 - 所有“存续”结论基于当前代码片段与行号，未做动态攻击复现（SSRF、DNS rebinding、Set-Cookie 注入等）。
