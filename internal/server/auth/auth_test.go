@@ -22,11 +22,11 @@ func TestMain(m *testing.M) {
 }
 
 func TestGenerateAndVerifyTokenUsesKVSecret(t *testing.T) {
-	token, maxAge, err := GenerateJWTToken(3600)
+	token, maxAge, err := GenerateJWTToken()
 	if err != nil {
 		t.Fatalf("GenerateJWTToken error: %v", err)
 	}
-	if token == "" || maxAge != 3600 {
+	if token == "" || maxAge != sessionMaxAge {
 		t.Fatalf("unexpected token/maxAge: %q/%d", token, maxAge)
 	}
 	if !VerifyJWTToken(token) {
@@ -61,7 +61,7 @@ func mangleToken(token string) string {
 }
 
 func TestSecretRotationInvalidatesTokens(t *testing.T) {
-	oldToken, _, err := GenerateJWTToken(3600)
+	oldToken, _, err := GenerateJWTToken()
 	if err != nil {
 		t.Fatalf("GenerateJWTToken error: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestSecretRotationInvalidatesTokens(t *testing.T) {
 	if VerifyJWTToken(oldToken) {
 		t.Fatal("token signed with previous secret must be invalid after rotation")
 	}
-	newToken, _, err := GenerateJWTToken(3600)
+	newToken, _, err := GenerateJWTToken()
 	if err != nil {
 		t.Fatalf("GenerateJWTToken after rotate: %v", err)
 	}
@@ -83,13 +83,15 @@ func TestSecretRotationInvalidatesTokens(t *testing.T) {
 	}
 }
 
-func TestGenerateJWTTokenCapsAtOneDay(t *testing.T) {
-	_, maxAge, err := GenerateJWTToken(30 * 24 * 3600)
+// TestGenerateJWTTokenFixedDuration 钉死登录会话固定 24 小时:
+// 客户端可配置 expire 已移除, maxAge 恒为 sessionMaxAge。
+func TestGenerateJWTTokenFixedDuration(t *testing.T) {
+	_, maxAge, err := GenerateJWTToken()
 	if err != nil {
 		t.Fatalf("GenerateJWTToken: %v", err)
 	}
-	if maxAge != 24*3600 {
-		t.Fatalf("maxAge = %d, want 86400", maxAge)
+	if maxAge != sessionMaxAge {
+		t.Fatalf("maxAge = %d, want %d (fixed 24h)", maxAge, sessionMaxAge)
 	}
 }
 

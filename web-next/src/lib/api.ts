@@ -184,6 +184,21 @@ function broadcastAuthFailure(
   }
 }
 
+/**
+ * broadcastStreamAuthFailure 供 Chat 等不使用 http() 信封的裸 fetch 路径(SSE)复用:
+ * 与 http() 相同的 401/403 广播语义, 避免聊天页请求在 JWT 过期后停留原地而不是
+ * 登出跳登录(审计 FE-01)。
+ */
+export function broadcastStreamAuthFailure(res: Response, message: string): void {
+  broadcastAuthFailure(
+    res.status,
+    message,
+    "/chat/completions",
+    true,
+    isPasswordChangeRequired(res, message),
+  );
+}
+
 async function http<T>(
   path: string,
   init: {
@@ -716,7 +731,7 @@ export function parseHeaderTemplates(
 
 export const api = {
   // ----- 用户 -----
-  login: (body: { username: string; password: string; expire: number }) =>
+  login: (body: { username: string; password: string }) =>
     http<UserStatus>("/user/login", {
       method: "POST",
       body: JSON.stringify(body),

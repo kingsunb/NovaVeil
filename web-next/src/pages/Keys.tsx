@@ -489,29 +489,54 @@ function KeyEditor({
       : undefined;
   const canSubmit = !nameError && !expireError && !limitError;
 
-  // 密钥明文查看：列表接口只回掩码，首次点眼睛时按需拉取（仅管理员会话）。
+  // 密钥明文查看：列表接口只回掩码，首次点眼睛时按需直接 fetch。
+  // 不走 React Query 缓存：明文只在组件 state 里存续，隐藏或关闭编辑器时
+  // 立即丢弃，避免 reveal 后仍留在 query cache 中（审计 FE-02）。
   const [secretVisible, setSecretVisible] = useState(false);
-  const [revealRequested, setRevealRequested] = useState(false);
-  const { data: secret, isError: secretError } = useQuery({
-    queryKey: ["apikeys", "secret", isNew ? 0 : (k as APIKeySummary).id],
-    queryFn: () => api.getAPIKeySecret((k as APIKeySummary).id),
-    enabled: revealRequested && !isNew,
-    // 明文密钥是敏感数据：仅在「查看期间」短窗口复用缓存（避免切换眼睛重复
-    // 请求），60s 后即过期重新拉取；登出时 auth.tsx 会 queryClient.clear()
-    // 彻底清除，不会跨会话复用。
-    staleTime: 60_000,
-  });
+  const [secret, setSecret] = useState<string | null>(null);
+  const [secretLoading, setSecretLoading] = useState(false);
+  const secretFetchGenRef = useRef(0);
 
-  useEffect(() => {
-    if (revealRequested && secretError) {
-      toast.error("密钥明文拉取失败");
+  async function fetchKeySecret() {
+    if (isNew) return;
+    const id = (k as APIKeySummary).id;
+    const gen = ++secretFetchGenRef.current;
+    setSecretLoading(true);
+    try {
+      const value = await api.getAPIKeySecret(id);
+      if (gen !== secretFetchGenRef.current) return;
+      setSecret(value);
+    } catch (err) {
+      if (gen !== secretFetchGenRef.current) return;
+      setSecret(null);
+      toast.error(
+        err instanceof Error ? err.message : "密钥明文拉取失败",
+      );
+    } finally {
+      if (gen === secretFetchGenRef.current) setSecretLoading(false);
     }
-  }, [revealRequested, secretError]);
+  }
 
   const toggleSecretVisible = () => {
-    if (!secretVisible && !isNew) setRevealRequested(true);
-    setSecretVisible((v) => !v);
+    const next = !secretVisible;
+    if (next && !isNew) {
+      void fetchKeySecret();
+    } else {
+      // 隐藏时立即丢弃内存中的明文，不做跨眼睛/跨编辑器保留。
+      setSecret(null);
+    }
+    setSecretVisible(next);
   };
+
+  // 编辑器关闭（open=false）时清理明文与在途请求，防御性双保险：
+  // 父级虽会用 key 强制重挂载本组件，但这里保证关闭后不依赖重挂载时序。
+  useEffect(() => {
+    if (open) return;
+    setSecretVisible(false);
+    setSecret(null);
+    setSecretLoading(false);
+    secretFetchGenRef.current += 1;
+  }, [open]);
 
   function toggleModel(name: string) {
     const next = new Set(selectedModels);
@@ -615,7 +640,11 @@ function KeyEditor({
                   type={secretVisible ? "text" : "password"}
                   // secret 未返回时给占位文案，避免 controlled→uncontrolled 闪烁
                   value={
-                    secretVisible ? (secret ?? "加载中…") : "••••••••••••••••"
+                    secretVisible
+                      ? secretLoading
+                        ? "加载中…"
+                        : (secret ?? "")
+                      : "••••••••••••••••"
                   }
                   className="mono pr-9"
                   aria-label="API 密钥明文"

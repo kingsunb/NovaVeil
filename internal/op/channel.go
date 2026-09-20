@@ -4,17 +4,21 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"maps"
+	"net"
 	"net/url"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/kingsunb/NovaVeil/internal/db"
 	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/seal"
 	"github.com/kingsunb/NovaVeil/internal/utils/cache"
 	"gorm.io/gorm"
 )
@@ -65,9 +69,15 @@ func ChannelCreate(channel *model.Channel, ctx context.Context) error {
 			return fmt.Errorf("渠道模型名称不能为空")
 		}
 	}
-	if err := db.GetDB().WithContext(ctx).Create(channel).Error; err != nil {
+	dbChannel, err := sealChannelForDB(*channel)
+	if err != nil {
 		return err
 	}
+	if err := db.GetDB().WithContext(ctx).Create(&dbChannel).Error; err != nil {
+		return err
+	}
+	// 写库完成后把自增主键写回明文请求体; 缓存保持明文供进程内转发与返回使用。
+	channel.ID = dbChannel.ID
 	channelCache.Set(channel.ID, cacheableChannel(*channel))
 	for _, channelModel := range channel.Models {
 		channelModelCache.Set(channelModel.ID, channelModel)
@@ -294,6 +304,34 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		updates.PassThroughBodyEnabled = *req.PassThroughBodyEnabled
 	}
 
+	// 敏感字段在写入前落为密文: 进程内存缓存与返回继续使用明文。
+	if updates.Key != "" {
+		sealedKey, sealErr := seal.Seal(updates.Key)
+		if sealErr != nil {
+			return nil, fmt.Errorf("加密渠道密钥失败: %w", sealErr)
+		}
+		updates.Key = sealedKey
+	}
+	if len(updates.Keys) > 0 {
+		for i := range updates.Keys {
+			if updates.Keys[i].Key == "" {
+				continue
+			}
+			sealedKey, sealErr := seal.Seal(updates.Keys[i].Key)
+			if sealErr != nil {
+				return nil, fmt.Errorf("加密渠道密钥失败: %w", sealErr)
+			}
+			updates.Keys[i].Key = sealedKey
+		}
+	}
+	if updates.ChannelProxy != nil && *updates.ChannelProxy != "" {
+		sealedProxy, sealErr := seal.Seal(*updates.ChannelProxy)
+		if sealErr != nil {
+			return nil, fmt.Errorf("加密渠道代理凭据失败: %w", sealErr)
+		}
+		updates.ChannelProxy = &sealedProxy
+	}
+
 	// 请求未携带任何可更新字段时显式报错而非静默成功: 该形态历史上会直接返回
 	// 200 且不写任何列, 前端 toast「已保存」但读回旧值, 排查成本极高。当前前端
 	// 全量编辑器、行内优先级与模型同步任务都不会发出空更新, 此守卫为异常客户端
@@ -332,6 +370,10 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		return nil
 	})
 	if err != nil {
+		return nil, err
+	}
+	// DB 读回为密文; 解密后再进缓存, 确保转发/列表/导出路径拿到明文。
+	if err := openChannelForCache(&channel); err != nil {
 		return nil, err
 	}
 
@@ -466,6 +508,11 @@ func channelRefreshCache(ctx context.Context) error {
 		return err
 	}
 	// 以 RefreshAll 原子替换两个缓存，消除先 Clear 再 Set 的空窗口。
+	for i := range channels {
+		if err := openChannelForCache(&channels[i]); err != nil {
+			return err
+		}
+	}
 	channelMap := make(map[int]model.Channel, len(channels))
 	for _, channel := range channels {
 		channel.Models = nil
@@ -609,19 +656,97 @@ func normalizeChannelTags(tags []string) []string {
 	return normalized
 }
 
+// validateChannelBaseURL 校验渠道上游地址。生产环境执行完整出口校验(语法 + DNS
+// 解析后的私网/环回/metadata 拒绝); Go 测试二进制放宽为仅语法校验, 方便 httptest
+// 等回环上游跑集成测试。fetch-model 等接受未保存渠道表单的入口必须调用
+// validateChannelEgressBaseURL 强制完整校验, 不能退化成仅语法校验(审计 SEC-01)。
 func validateChannelBaseURL(raw string) error {
+	if isTestBinary() {
+		return validateChannelBaseURLSyntax(raw)
+	}
+	return validateChannelEgressBaseURL(raw)
+}
+
+// ValidateChannelEgressBaseURL 对未保存渠道表单/已存渠道回退路径执行完整出口校验。
+// 导出给 handlers 使用, 避免私网地址经 fetch-model 绕过 ChannelCreate 的校验。
+func ValidateChannelEgressBaseURL(raw string) error {
+	return validateChannelEgressBaseURL(raw)
+}
+
+// validateChannelEgressBaseURL 对渠道地址做完整出口校验:
+// 必须是 http/https 且不含 userinfo, 并且域名解析后的所有 IP 都不是内网/环回/
+// 链路本地/metadata 等禁止直连地址。
+func validateChannelEgressBaseURL(raw string) error {
+	if err := validateChannelBaseURLSyntax(raw); err != nil {
+		return err
+	}
+	parsed, _ := url.Parse(strings.TrimSpace(raw))
+	if err := validateEgressHost(parsed.Hostname()); err != nil {
+		return fmt.Errorf("渠道地址 %s 不允许访问: %w", strings.TrimSpace(raw), err)
+	}
+	return nil
+}
+
+func validateChannelBaseURLSyntax(raw string) error {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return fmt.Errorf("渠道地址不能为空")
 	}
 	parsed, err := url.Parse(trimmed)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+	if err != nil || parsed.Host == "" || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return fmt.Errorf("渠道地址必须以 http:// 或 https:// 开头")
 	}
 	if parsed.User != nil {
 		return fmt.Errorf("渠道地址不能包含 userinfo")
 	}
 	return nil
+}
+
+// validateEgressHost 校验出站目标主机名: 先按字面 IP 判定, 否则做 DNS 解析并逐一
+// 拒绝落入禁止范围的地址。需要访问真实内网域名(如自建网关)的部署, 可由管理员改用
+// 该内网服务的公网地址或显式代理; 渠道出口不允许默认连通任意内网主机。
+func validateEgressHost(host string) error {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return fmt.Errorf("主机不能为空")
+	}
+	// host 形如 [::1]:8080 时剥掉括号; 普通 host 不会带括号。
+	literal := strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	if ip := net.ParseIP(literal); ip != nil {
+		return validateEgressIP(ip)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Errorf("域名解析失败: %w", err)
+	}
+	if len(addrs) == 0 {
+		return fmt.Errorf("域名未解析到任何 IP")
+	}
+	for _, addr := range addrs {
+		if err := validateEgressIP(addr.IP); err != nil {
+			return fmt.Errorf("域名 %s 解析到禁止地址 %s: %w", host, addr.IP, err)
+		}
+	}
+	return nil
+}
+
+// validateEgressIP 拒绝私网、环回、链路本地、未指定地址与组播地址。IPv4-mapped
+// IPv6 同样按上述规则命中; 公网单播地址通过。
+func validateEgressIP(ip net.IP) error {
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+		return fmt.Errorf("禁止访问内网/环回/链路本地地址")
+	}
+	return nil
+}
+
+// isTestBinary 检测当前二进制是否为 go test 测试二进制: testing 包注册的 test.v
+// flag 仅存在于测试二进制。仅用于放宽渠道出口校验, 生产二进制不受影响。
+func isTestBinary() bool {
+	return flag.Lookup("test.v") != nil
 }
 
 // cacheableChannel 返回可写入缓存或对外发布的渠道副本:

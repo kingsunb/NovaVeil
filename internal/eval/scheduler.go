@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -155,12 +156,24 @@ func (s *Scheduler) dispatch() {
 }
 
 func (s *Scheduler) runWorker(task model.ModelEvalQueueTask) {
-	defer s.running.Add(-1)
+	// defer 按注册逆序执行(执行顺序: recover → running+Nofity → workerWG.Done)。
+	// Notify 必须在 running 递减之后触发, 否则 loop 被唤醒时看到的 running 仍占满
+	// 并发槽, 本次唤醒无效、队列可能迟迟不派发下一个任务(RELI-03 defer LIFO)。
 	defer s.workerWG.Done()
-	defer s.Notify()
+	defer func() {
+		s.running.Add(-1)
+		s.Notify()
+	}()
 	defer func() {
 		if r := recover(); r != nil {
 			log.Errorf("eval worker panicked: %v\n%s", r, debug.Stack())
+			// 兜底把队列行置为失败: 若只记日志, 该行将永久停留在 running,
+			// 重启 reset 期间也不再被派发(RELI-02)。
+			saveCtx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), evalSaveTimeout)
+			if err := op.ModelEvalQueueMarkDone(saveCtx, task.ID, 0, fmt.Sprintf("eval worker panic: %v", r)); err != nil {
+				log.Warnf("eval queue mark done after panic: %v", err)
+			}
+			cancel()
 		}
 	}()
 	s.executeTask(task)

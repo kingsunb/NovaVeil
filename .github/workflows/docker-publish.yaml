@@ -22,8 +22,48 @@ env:
   IMAGE: ghcr.io/kingsunb/novaveil
 
 jobs:
+  test-gate:
+    name: Test, vet, and typecheck gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0 (peeled commit)
+        with:
+          version: '11.21.0'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.19.0'
+          cache: pnpm
+          cache-dependency-path: web-next/pnpm-lock.yaml
+
+      - name: Setup Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: '1.26.7'
+          cache: true
+
+      - name: Typecheck frontend
+        working-directory: web-next
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+
+      - name: Test and vet Go packages
+        run: |
+          go test -count=1 -timeout=10m ./...
+          go vet ./...
+
   build-and-publish:
     name: Build & publish Docker image
+    needs: test-gate
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -80,7 +120,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push multi-arch image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0 (full tag SHA; no mutable @v6)
         with:
           context: .
           file: scripts/dockerfile/Dockerfile

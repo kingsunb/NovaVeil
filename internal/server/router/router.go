@@ -122,16 +122,20 @@ func RegisterAll(engine *gin.Engine) error {
 			handlers = append(handlers, route.Middlewares...)
 			handlers = append(handlers, route.Handlers...)
 
-			registerRoute(group, route.Method, route.Path, handlers)
+			if err := registerRoute(group, route.Method, route.Path, handlers); err != nil {
+				return fmt.Errorf("invalid route %s %s in group %s: %w", route.Method, route.Path, router.Path, err)
+			}
 		}
 	}
 	return nil
 }
 
 // registerRoute registers a single route to a Gin route group.
-func registerRoute(group *gin.RouterGroup, method string, path string, handlers []gin.HandlerFunc) {
+// 未知 method 返回错误而不是静默注册成 GET: 路由声明若打错会以 404 形式在生产暴露,
+// 而错误把所有请求都落到 GET 处理器(审计 SEC-07)。
+func registerRoute(group *gin.RouterGroup, method string, path string, handlers []gin.HandlerFunc) error {
 	if len(handlers) == 0 {
-		return
+		return fmt.Errorf("route must have at least one handler")
 	}
 
 	if path != "" {
@@ -156,6 +160,7 @@ func registerRoute(group *gin.RouterGroup, method string, path string, handlers 
 	case http.MethodPatch:
 		group.PATCH(path, handlers...)
 	default:
-		group.GET(path, handlers...)
+		return fmt.Errorf("unsupported HTTP method %q", method)
 	}
+	return nil
 }

@@ -7,6 +7,7 @@ import {
   setLocalOverride,
   userBucket,
   shouldUseNewWeb,
+  safeLegacyHref,
   type Flags,
 } from "./flags";
 
@@ -424,5 +425,29 @@ describe("匿名灰度桶 (§3.4)", () => {
     clearAnonymousBucket();
     const a = getAnonymousBucket();
     expect(getAnonymousBucket()).toBe(a);
+  });
+});
+
+describe("safeLegacyHref", () => {
+  it("允许 http/https/mailto 与相对路径", () => {
+    expect(safeLegacyHref("https://old.example.com/legacy")).toBe(
+      "https://old.example.com/legacy",
+    );
+    expect(safeLegacyHref("http://old.example.com")).toBe(
+      "http://old.example.com",
+    );
+    expect(safeLegacyHref("mailto:admin@example.com")).toBe(
+      "mailto:admin@example.com",
+    );
+    expect(safeLegacyHref("/legacy")).toBe("/legacy");
+    expect(safeLegacyHref("./legacy")).toBe("./legacy");
+    expect(safeLegacyHref("../legacy")).toBe("../legacy");
+  });
+
+  it("拒绝 javascript:、协议相对 // 与其它非法值，回退 /legacy", () => {
+    expect(safeLegacyHref("javascript:alert(1)")).toBe("/legacy");
+    expect(safeLegacyHref("//evil.example.com")).toBe("/legacy");
+    expect(safeLegacyHref("data:text/html,hi")).toBe("/legacy");
+    expect(safeLegacyHref("")).toBe("/legacy");
   });
 });

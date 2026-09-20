@@ -28,7 +28,6 @@ type UserStatus struct {
 type UserLogin struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
-	Expire   int    `json:"expire"`
 }
 
 // UserChangePassword is the request body for changing the current password.

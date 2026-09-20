@@ -48,4 +48,18 @@ describe("<ConfirmButton />", () => {
     const btn = screen.getByRole("button", { name: /删除中/ });
     expect(btn).toBeDisabled();
   });
+
+  it("自定义 loadingLabel 与 disabled 可用于「清空归档」等非删除场景", () => {
+    render(
+      <ConfirmButton
+        onConfirm={() => {}}
+        label="清空归档"
+        loadingLabel="清空中…"
+        loading
+        disabled
+      />,
+    );
+    const btn = screen.getByRole("button", { name: /清空中/ });
+    expect(btn).toBeDisabled();
+  });
 });

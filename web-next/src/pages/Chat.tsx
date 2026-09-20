@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Eraser, Send, Square, User, Bot, MessageSquare, AlertTriangle } from "lucide-react";
 
-import { api } from "@/lib/api";
+import { api, apiUnauthorizedEvent, broadcastStreamAuthFailure } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
@@ -56,6 +56,9 @@ function saveSession(session: ChatSession): void {
 function clearSession(): void {
   try {
     localStorage.removeItem(CHAT_SESSION_KEY);
+    // H-02 残余: 新会话必须同时清除 X-Session-Id 对应的 mask-session 粘合 ID,
+    // 否则下周会话仍带着旧 sticky key 继续粘到同一上游成员。
+    localStorage.removeItem(CHAT_MASK_SESSION_KEY);
   } catch {
     // ignore
   }
@@ -104,6 +107,8 @@ async function streamChatCompletion(
     } catch {
       // keep default
     }
+    // 与 api.http() 走同一套认证失败广播: 401 全局登出、403 强制改密引导(审计 FE-01)。
+    broadcastStreamAuthFailure(res, msg);
     throw new Error(msg);
   }
 
@@ -168,6 +173,18 @@ export default function ChatPage() {
     return () => {
       abortRef.current?.abort();
     };
+  }, []);
+
+  useEffect(() => {
+    // Chat 裸 fetch 收到 401 时由 broadcastStreamAuthFailure 广播 apiUnauthorizedEvent;
+    // 这里同步清理本地会话, 避免重新登录后接着展示过期会话与旧粘合 ID(H-02 残余)。
+    const onUnauthorized = () => {
+      clearSession();
+      sessionIdRef.current = maskSessionId();
+      setMessages([]);
+    };
+    window.addEventListener(apiUnauthorizedEvent, onUnauthorized);
+    return () => window.removeEventListener(apiUnauthorizedEvent, onUnauthorized);
   }, []);
 
   useEffect(() => {
@@ -262,6 +279,8 @@ export default function ChatPage() {
   const handleClear = useCallback(() => {
     setMessages([]);
     clearSession();
+    // 清掉粘合 ID 后立即生成新 ID: 本周对话用全新 X-Session-Id, 不继承旧粘合。
+    sessionIdRef.current = maskSessionId();
   }, []);
 
   return (

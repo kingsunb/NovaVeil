@@ -10,12 +10,17 @@ import { Button } from "./button";
 export function ConfirmButton({
   onConfirm,
   label = "删除",
+  loadingLabel = "删除中…",
   loading,
+  disabled,
   tone = "primary",
 }: {
   onConfirm: () => void;
   label?: string;
+  /** loading 时显示的替换文案，让「清空归档」等非删除操作也能复用本组件。 */
+  loadingLabel?: string;
   loading?: boolean;
+  disabled?: boolean;
   tone?: "primary" | "destructive";
 }) {
   const [armed, setArmed] = useState(false);
@@ -24,14 +29,14 @@ export function ConfirmButton({
     const timer = setTimeout(() => setArmed(false), 2200);
     return () => clearTimeout(timer);
   }, [armed]);
-  const disabled = loading;
+  const isDisabled = loading || disabled;
   return (
     <Button
       // 未武装态就用危险色勾勒（danger-outline），让「删除」的后果一眼可见，
       // 而不是点完第一下才变色（审计 1.13）。
       variant={armed ? tone : tone === "destructive" ? "danger-outline" : "ghost"}
       size="sm"
-      disabled={disabled}
+      disabled={isDisabled}
       onClick={() => {
         if (armed) {
           onConfirm();
@@ -47,7 +52,7 @@ export function ConfirmButton({
           再次点击确认
         </span>
       ) : loading ? (
-        "删除中…"
+        loadingLabel
       ) : (
         label
       )}

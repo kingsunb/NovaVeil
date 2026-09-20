@@ -22,31 +22,21 @@ var (
 // ModelEvalQueueEnqueue 把一批渠道模型加入评估队列（追加末尾）。
 // 逐个解析 channel_model_id 为渠道+模型快照，校验渠道启用且模型存在；
 // 同 (channel_id, model_name) 已存在 queued/running 时应用层去重跳过。
+// 审计 RELI-05/R-L2: position 的读取(MAX)与写入必须在同一事务内完成，
+// 两个并发入队不再各自读到同一个 MAX 并生成重复 position。
 func ModelEvalQueueEnqueue(ctx context.Context, channelModelIDs []int) ([]model.ModelEvalQueueTask, error) {
 	if len(channelModelIDs) == 0 {
 		return []model.ModelEvalQueueTask{}, nil
 	}
 
-	var active []model.ModelEvalQueueTask
-	if err := db.GetDB().WithContext(ctx).Model(&model.ModelEvalQueueTask{}).
-		Where("status IN ?", []model.QueueTaskStatus{model.QueueTaskQueued, model.QueueTaskRunning}).
-		Find(&active).Error; err != nil {
-		return nil, err
-	}
-	dup := make(map[string]struct{}, len(active))
-	for _, t := range active {
-		dup[fmt.Sprintf("%d:%s", t.ChannelID, t.ModelName)] = struct{}{}
-	}
-
-	var maxPos int
-	if err := db.GetDB().WithContext(ctx).Model(&model.ModelEvalQueueTask{}).
-		Select("COALESCE(MAX(position), -1)").
-		Scan(&maxPos).Error; err != nil {
-		return nil, err
-	}
-
+	// 先解析渠道模型快照, 事务外失败不占事务; 事务内只做去重 + position 分配 + 写入。
 	now := time.Now()
-	tasks := make([]model.ModelEvalQueueTask, 0, len(channelModelIDs))
+	type candidate struct {
+		key  string
+		task model.ModelEvalQueueTask
+	}
+	candidates := make([]candidate, 0, len(channelModelIDs))
+	seenInput := make(map[string]struct{}, len(channelModelIDs))
 	for _, cmID := range channelModelIDs {
 		cm, err := ChannelModelGet(cmID)
 		if err != nil {
@@ -60,27 +50,60 @@ func ModelEvalQueueEnqueue(ctx context.Context, channelModelIDs []int) ([]model.
 			return nil, fmt.Errorf("%w: %s", ErrEvalQueueModelUnavailable, cm.Name)
 		}
 		key := fmt.Sprintf("%d:%s", channel.ID, cm.Name)
-		if _, exists := dup[key]; exists {
+		if _, exists := seenInput[key]; exists {
 			continue
 		}
-		dup[key] = struct{}{}
-		maxPos++
-		tasks = append(tasks, model.ModelEvalQueueTask{
+		seenInput[key] = struct{}{}
+		candidates = append(candidates, candidate{key: key, task: model.ModelEvalQueueTask{
 			ChannelID:      channel.ID,
 			ChannelModelID: cm.ID,
 			ChannelName:    channel.Name,
 			ChannelType:    channel.Type,
 			ModelName:      cm.Name,
 			Status:         model.QueueTaskQueued,
-			Position:       maxPos,
 			CreatedAt:      now,
-		})
+		}})
+	}
+	if len(candidates) == 0 {
+		return []model.ModelEvalQueueTask{}, nil
 	}
 
-	if len(tasks) > 0 {
-		if err := db.GetDB().WithContext(ctx).Create(&tasks).Error; err != nil {
-			return nil, err
+	tasks := make([]model.ModelEvalQueueTask, 0, len(candidates))
+	err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var active []model.ModelEvalQueueTask
+		if err := tx.Model(&model.ModelEvalQueueTask{}).
+			Where("status IN ?", []model.QueueTaskStatus{model.QueueTaskQueued, model.QueueTaskRunning}).
+			Find(&active).Error; err != nil {
+			return err
 		}
+		dup := make(map[string]struct{}, len(active))
+		for _, t := range active {
+			dup[fmt.Sprintf("%d:%s", t.ChannelID, t.ModelName)] = struct{}{}
+		}
+
+		var maxPos int
+		if err := tx.Model(&model.ModelEvalQueueTask{}).
+			Select("COALESCE(MAX(position), -1)").
+			Scan(&maxPos).Error; err != nil {
+			return err
+		}
+
+		for _, cand := range candidates {
+			if _, exists := dup[cand.key]; exists {
+				continue
+			}
+			dup[cand.key] = struct{}{}
+			maxPos++
+			cand.task.Position = maxPos
+			tasks = append(tasks, cand.task)
+		}
+		if len(tasks) == 0 {
+			return nil
+		}
+		return tx.Create(&tasks).Error
+	})
+	if err != nil {
+		return nil, err
 	}
 	return tasks, nil
 }
@@ -122,9 +145,19 @@ func ModelEvalQueuePopNext(ctx context.Context, limit int) ([]model.ModelEvalQue
 			ids[i] = tasks[i].ID
 		}
 		now := time.Now()
-		return tx.Model(&model.ModelEvalQueueTask{}).
+		res := tx.Model(&model.ModelEvalQueueTask{}).
 			Where("id IN ? AND status = ?", ids, model.QueueTaskQueued).
-			Updates(map[string]interface{}{"status": model.QueueTaskRunning, "started_at": now}).Error
+			Updates(map[string]interface{}{"status": model.QueueTaskRunning, "started_at": now})
+		if res.Error != nil {
+			return res.Error
+		}
+		// 审计 RELI-04/R-L1: 条件 UPDATE 返回值同时部分派发由其它实例完成说明所有任务
+		// 都未被本实例唯一取走; 返回空按"本轮未取得可派发任务"处理, 调度器下一轮会重试，
+		// 绝不退回已经处于 running 的任务。
+		if res.RowsAffected != int64(len(tasks)) {
+			tasks = nil
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err

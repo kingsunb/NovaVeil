@@ -17,13 +17,16 @@
 # =============================================================================
 
 # ---- Stage 1: builder ----
-FROM node:22-alpine AS builder
+# 基础镜像固定到与 CI 相同的完整版本 tag；离线无法查询 Docker Hub digest，
+# 待 registry-lookup 后应改为 @sha256:... 不可变引用。
+FROM node:22.19.0-alpine AS builder
 WORKDIR /app
 
 # 利用层缓存：单独先装依赖。
-# pnpm@9 与 pnpm-lock.yaml lockfileVersion 9.0 对齐（与 scripts/build.sh 一致）。
+# pnpm 与 CI/web-next-ci 保持同版本 11.21.0（package.json 未声明 packageManager，
+# Dockerfile 与 CI 都以 11.21.0 为准）。
 COPY package.json pnpm-lock.yaml* ./
-RUN corepack enable && corepack prepare pnpm@9 --activate \
+RUN corepack enable && corepack prepare pnpm@11.21.0 --activate \
  && pnpm install --frozen-lockfile
 
 # 复制源码 + 构建
@@ -36,7 +39,9 @@ RUN pnpm build
 # 供 Go embed 抓取；在容器内构建时产物落在 /static/out。
 
 # ---- Stage 2: runtime (nginx alpine) ----
-FROM nginx:1.27-alpine AS runtime
+# 基础镜像固定到完整版本 tag；与 docker-compose.yml 的 web-router 服务保持一致。
+# 离线无法查询 Docker Hub digest，待 registry-lookup 后应改为 @sha256:... 不可变引用。
+FROM nginx:1.27.5-alpine AS runtime
 
 # 用 wget 替代 curl 做健康检查（更小的 alpine 基础）
 RUN apk add --no-cache wget \

@@ -29,6 +29,12 @@ Thumbs.db
 # Logs
 *.log
 
+# Local secrets / key material
+.env
+.env.*
+*.pem
+*.key
+
 # Database
 *.db
 *.db-wal

@@ -17,12 +17,16 @@ export function ChangePasswordForm() {
   const { refreshStatus } = useAuth();
   const [old, setOld] = useState("");
   const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const confirmMismatch = next.length >= 8 && confirm.length > 0 && next !== confirm;
+  const canSubmit = !!old && next.length >= 8 && confirm === next;
   const mut = useMutation({
     mutationFn: () => api.changePassword(old, next),
     onSuccess: () => {
       toast.success("密码已更新");
       setOld("");
       setNext("");
+      setConfirm("");
       void refreshStatus();
     },
     onError: (e: Error) => toast.error(e.message || "修改失败"),
@@ -45,13 +49,28 @@ export function ChangePasswordForm() {
           placeholder="新密码（≥8 位）"
           autoComplete="new-password"
         />
+        <Input
+          type="password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          placeholder="确认新密码"
+          autoComplete="new-password"
+          invalid={confirmMismatch}
+          aria-invalid={confirmMismatch || undefined}
+          aria-label="确认新密码"
+        />
       </div>
+      {confirmMismatch && (
+        <p role="alert" className="text-xs text-destructive">
+          两次输入的新密码不一致
+        </p>
+      )}
       <div className="flex justify-end">
         <Button
           variant="primary"
           size="sm"
           loading={mut.isPending}
-          disabled={!old || next.length < 8}
+          disabled={!canSubmit}
           onClick={() => mut.mutate()}
         >
           更新密码

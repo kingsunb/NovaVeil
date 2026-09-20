@@ -38,9 +38,10 @@ changing only the image reference to a reviewed GHCR version/digest while retain
 same `/app/data` volume.
 
 > No versioned tag has been published yet: pushes to `main` auto-publish
-> `ghcr.io/kingsunb/novaveil:latest` and `:sha-<short>`; the `novaveil` versioned
-> image is produced by the manual `release` / `build` workflows. Pin the reviewed digest
-> rather than a version string until a tag is released.
+> `ghcr.io/kingsunb/novaveil:latest` and `:sha-<short>` via the `docker-publish`
+> workflow. The manual `build` workflow runs the full multi-arch archive/image audit
+> (Trivy + SBOM + smoke tests). Pin the reviewed digest rather than a version string
+> until a tag is released.
 
 Prefer a digest-qualified reference:
 

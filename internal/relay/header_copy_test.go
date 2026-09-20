@@ -68,3 +68,60 @@ func TestCopyUpstreamHeadersNonStreamingKeepsAll(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want application/json", got)
 	}
 }
+
+// TestCopyUpstreamHeadersDropsDangerousHeaders 验证永远丢弃 Set-Cookie/Location/
+// WWW-Authenticate 等危险头与逐跳头, 防止透传渠道注入这些头驱逐管理员 cookie 或重定向客户端。
+func TestCopyUpstreamHeadersDropsDangerousHeaders(t *testing.T) {
+	src := http.Header{
+		"Content-Type":      {"text/event-stream"},
+		"Set-Cookie":        {"auth=evil; Path=/"},
+		"Set-Cookie2":       {"auth=evil2"},
+		"Location":          {"https://evil.example/"},
+		"Www-Authenticate":  {"Basic realm=\"x\""},
+		"Connection":        {"keep-alive"},
+		"Transfer-Encoding": {"chunked"},
+	}
+	dst := http.Header{}
+
+	copyUpstreamHeaders(dst, src, false)
+
+	if got := dst.Get("Set-Cookie"); got != "" {
+		t.Fatalf("Set-Cookie must be dropped, got %q", got)
+	}
+	if got := dst.Get("Set-Cookie2"); got != "" {
+		t.Fatalf("Set-Cookie2 must be dropped, got %q", got)
+	}
+	if got := dst.Get("Location"); got != "" {
+		t.Fatalf("Location must be dropped, got %q", got)
+	}
+	if got := dst.Get("WWW-Authenticate"); got != "" {
+		t.Fatalf("WWW-Authenticate must be dropped, got %q", got)
+	}
+	if got := dst.Get("Connection"); got != "" {
+		t.Fatalf("Connection must be dropped, got %q", got)
+	}
+	if got := dst.Get("Transfer-Encoding"); got != "" {
+		t.Fatalf("Transfer-Encoding must be dropped, got %q", got)
+	}
+	if got := dst.Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+}
+
+// TestCopyUpstreamHeadersDropsDangerousHeadersCaseInsensitive 验证危险头的大小写变体同样被丢弃。
+func TestCopyUpstreamHeadersDropsDangerousHeadersCaseInsensitive(t *testing.T) {
+	src := http.Header{
+		"set-cookie": {"auth=evil; Path=/"},
+		"location":   {"https://evil.example/"},
+	}
+	dst := http.Header{}
+
+	copyUpstreamHeaders(dst, src, false)
+
+	if got := dst.Get("Set-Cookie"); got != "" {
+		t.Fatalf("lowercase set-cookie must be dropped, got %q", got)
+	}
+	if got := dst.Get("Location"); got != "" {
+		t.Fatalf("lowercase location must be dropped, got %q", got)
+	}
+}

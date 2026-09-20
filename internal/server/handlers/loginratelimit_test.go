@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,18 +65,18 @@ func TestRateLimitBlocksAtThreshold(t *testing.T) {
 
 	// 4 次失败仍在阈值内
 	for i := 0; i < 4; i++ {
-		if allowed, _ := l.check(ip); !allowed {
+		if allowed, _ := l.check(context.Background(), ip); !allowed {
 			t.Fatalf("attempt %d should be allowed", i+1)
 		}
-		l.recordFailure(ip)
+		l.recordFailure(context.Background(), ip)
 	}
-	if allowed, _ := l.check(ip); !allowed {
+	if allowed, _ := l.check(context.Background(), ip); !allowed {
 		t.Fatal("5th attempt should still be allowed before 5th failure")
 	}
-	l.recordFailure(ip)
+	l.recordFailure(context.Background(), ip)
 
 	// 5 次失败后拒绝并给出 Retry-After(全部失败发生在注入时钟的同一时刻, 等待时长应等于整个窗口)
-	allowed, retryAfter := l.check(ip)
+	allowed, retryAfter := l.check(context.Background(), ip)
 	if allowed {
 		t.Fatal("must be blocked after 5 failures")
 	}
@@ -90,18 +91,18 @@ func TestRateLimitSlidingWindowExpiry(t *testing.T) {
 	l := newTestLimiter(newTestLimiterDB(t), 50*time.Millisecond, 2, &now)
 
 	const ip = "203.0.113.11"
-	l.recordFailure(ip)
+	l.recordFailure(context.Background(), ip)
 	advance(&now, 30*time.Millisecond)
-	l.recordFailure(ip)
+	l.recordFailure(context.Background(), ip)
 
 	// 第 1 次失败尚未滑出窗口 -> 阻断
-	if allowed, _ := l.check(ip); allowed {
+	if allowed, _ := l.check(context.Background(), ip); allowed {
 		t.Fatal("should be blocked while both failures are inside window")
 	}
 
 	// 越过第一次失败的时间点后, 仅剩一次失败 -> 放行
 	advance(&now, 21*time.Millisecond)
-	if allowed, _ := l.check(ip); !allowed {
+	if allowed, _ := l.check(context.Background(), ip); !allowed {
 		t.Fatal("should be allowed after oldest failure slides out of window")
 	}
 }
@@ -114,19 +115,19 @@ func TestRateLimitResetOnSuccess(t *testing.T) {
 
 	const ip = "203.0.113.12"
 	for i := 0; i < 3; i++ {
-		l.recordFailure(ip)
+		l.recordFailure(context.Background(), ip)
 	}
 	if got := countAttempts(t, conn); got != 3 {
 		t.Fatalf("failure rows = %d, want 3", got)
 	}
-	if allowed, _ := l.check(ip); allowed {
+	if allowed, _ := l.check(context.Background(), ip); allowed {
 		t.Fatal("should be blocked at threshold")
 	}
-	l.reset(ip)
+	l.reset(context.Background(), ip)
 	if got := countAttempts(t, conn); got != 0 {
 		t.Fatalf("rows after reset = %d, want 0", got)
 	}
-	if allowed, _ := l.check(ip); !allowed {
+	if allowed, _ := l.check(context.Background(), ip); !allowed {
 		t.Fatal("successful login must clear failure counter")
 	}
 }
@@ -139,22 +140,22 @@ func TestRateLimitIsolatesIPsAndSweepsExpiredRows(t *testing.T) {
 
 	blockedIP := "203.0.113.13"
 	otherIP := "203.0.113.14"
-	l.recordFailure(blockedIP)
-	l.recordFailure(blockedIP)
-	if allowed, _ := l.check(otherIP); !allowed {
+	l.recordFailure(context.Background(), blockedIP)
+	l.recordFailure(context.Background(), blockedIP)
+	if allowed, _ := l.check(context.Background(), otherIP); !allowed {
 		t.Fatal("failure counting must be isolated per IP")
 	}
-	if allowed, _ := l.check(blockedIP); allowed {
+	if allowed, _ := l.check(context.Background(), blockedIP); allowed {
 		t.Fatal("blocked IP must stay blocked")
 	}
 
 	// 窗口整体过期后触发惰性清理(时钟已推进超过 window/4): 过期行被删除, 该 IP 恢复可登录。
 	advance(&now, 2*time.Minute)
-	l.recordFailure(otherIP) // 触发全表惰性清理并写入一条新失败记录
+	l.recordFailure(context.Background(), otherIP) // 触发全表惰性清理并写入一条新失败记录
 	if got := countAttempts(t, conn); got != 1 {
 		t.Fatalf("expired rows must be swept, remaining = %d, want only the fresh one", got)
 	}
-	if allowed, _ := l.check(blockedIP); !allowed {
+	if allowed, _ := l.check(context.Background(), blockedIP); !allowed {
 		t.Fatal("expired entries must unblock the IP")
 	}
 	var remaining model.LoginAttempt

@@ -69,17 +69,19 @@ func TestAuthJWTRotateSecret(t *testing.T) {
 
 func TestFilterSecretSettings(t *testing.T) {
 	rows := []model.Setting{
+		{Key: model.SettingKeyProxyPool, Value: `[{"url":"http://127.0.0.1:9000"}]`},
 		{Key: model.SettingKeyProxyURL, Value: "http://127.0.0.1:7890"},
 		{Key: model.SettingKeyAuthJWTSecret, Value: "top-secret"},
 		{Key: model.SettingKeyCORSAllowOrigins, Value: "*"},
 	}
 	filtered := filterSecretSettings(rows)
-	if len(filtered) != 2 {
-		t.Fatalf("filtered len = %d, want 2", len(filtered))
+	if len(filtered) != 1 {
+		t.Fatalf("filtered len = %d, want 1", len(filtered))
 	}
 	for _, s := range filtered {
-		if s.Key == model.SettingKeyAuthJWTSecret {
-			t.Fatal("jwt secret must be filtered out")
+		switch s.Key {
+		case model.SettingKeyAuthJWTSecret, model.SettingKeyProxyURL, model.SettingKeyProxyPool:
+			t.Fatalf("secret setting %q must be filtered out", s.Key)
 		}
 	}
 }

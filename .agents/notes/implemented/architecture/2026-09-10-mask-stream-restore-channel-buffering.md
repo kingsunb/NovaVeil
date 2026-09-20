@@ -10,7 +10,7 @@ Status: implemented
 
 `internal/relay/mask/stream_restore.go` 增量还原器：
 
-1. **每个增量文本槽位用独立通道键缓冲**（如 `c0.content` / `c0.tool0` / `a0.text`），半截占位符只在本通道缓冲，不跨字段串。
+1. **每个增量文本槽位用独立通道键缓冲**（`DefaultChannel` / `ReasoningChannel` / `ToolChannelPrefix + "<index>"`），半截占位符只在本通道缓冲，不跨字段串；`Push`/`Flush` 委托给 `PushChannel(DefaultChannel, …)`/`FlushChannel(DefaultChannel)`，`FlushChannels` 返回按通道名索引的残留。
 2. **并行工具用 `tool_calls[].index` 标识**（协议标明增量属于第几个工具），不用数组下标。
 3. **中途无事件返回空列表**，不写出、不 Flush——绝不返回空字节触发 chunked 终止块。
 4. **终止事件前吐净各通道滞留缓冲**，补发用最后一个同通道事件做模板（克隆真实事件保证客户端 SDK 字段校验通过），补发事件不带 `finish_reason`。

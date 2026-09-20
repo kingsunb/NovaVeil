@@ -191,7 +191,7 @@ func TestChannel(ctx context.Context, channelID int, modelName string, message s
 	if err != nil {
 		return nil, err
 	}
-	return sendChannelTestRequest(ctx, channel, modelName, message, channelKeyLabel(keyIndex, key))
+	return sendChannelTestRequest(ctx, channel, modelName, message, channelKeyLabel(keyIndex, key), testPanelMaxTokens)
 }
 
 // evalKeyAttemptLimit 单渠道单模型评估时最多尝试的密钥把数。密钥极多的渠道若逐把
@@ -233,7 +233,9 @@ func TestChannelKeyFailover(ctx context.Context, channelID int, modelName string
 			errs = append(errs, fmt.Sprintf("#%d(%s): %v", index+1, key.ID, err))
 			continue
 		}
-		result, err := sendChannelTestRequest(ctx, effective, modelName, message, channelKeyLabel(index, key))
+		// 评估路径需要完整的长 HTML+SVG 产物, 沿用 testMaxTokens(100k) 上限。
+		// 面板单模型/逐密钥/分组诊断路径使用 testPanelMaxTokens(4k) 控制计费。
+		result, err := sendChannelTestRequest(ctx, effective, modelName, message, channelKeyLabel(index, key), testMaxTokens)
 		if err == nil {
 			return result, nil
 		}
@@ -339,7 +341,7 @@ func sendKeyTestRequest(ctx context.Context, effective model.Channel, modelName 
 	if err != nil {
 		return err
 	}
-	raw, err := newTestRequest(format, modelName, message)
+	raw, err := newTestRequest(format, modelName, message, testPanelMaxTokens)
 	if err != nil {
 		return err
 	}
@@ -381,20 +383,29 @@ func effectiveTestChannel(channel model.Channel, keyID string) (model.Channel, i
 	return model.Channel{}, 0, model.ChannelKey{}, fmt.Errorf("渠道上不存在指定的密钥")
 }
 
-// testMaxTokens 非流式测试请求的输出 token 上限。模型评估页会要求模型生成
-// 完整的 HTML+SVG 动画, 产物动辄数万 token; 早期硬编码 1024 会截断 Anthropic
-// 渠道的输出导致渲染残缺, 统一放宽到 100k 与各协议上限留出余量。
+// testMaxTokens 模型评估路径的输出 token 上限: 评估页要求模型生成完整 HTML+SVG
+// 动画, 产物动辄数万 token; 早期硬编码 1024 会截断 Anthropic 渠道的输出导致渲染
+// 残缺, 统一放宽到 100k 与各协议上限留出余量。面板诊断路径不使用该值。
 const testMaxTokens = 100000
 
-// newTestRequest 按 format 构造一条非流式测试请求, 供单模型/逐密钥/分组测试共用。
-// 透传渠道(原生格式)直接以渠道协议报文发出; 转换渠道一律以 OpenAI Chat 报文发出,
-// 由 pipeline 转换为渠道上游协议。各协议必填字段差异在此对齐:
+// testPanelMaxTokens 面板/分组诊断测试请求的输出 token 上限。
+// 诊断只需确认渠道与该模型可服务, 不需要数万 token 的完整产物; 4k 足以覆盖回复
+// 摘要与错误信息, 并把管理后台单次误测/恶意触发的计费上限压在低位。
+const testPanelMaxTokens = 4096
+
+// newTestRequest 按 format 构造一条非流式测试请求。maxTokens 指定输出上限:
+// 评估路径传 testMaxTokens, 面板/分组诊断路径传 testPanelMaxTokens, 传 0 时回退
+// testPanelMaxTokens(诊断默认)。透传渠道(原生格式)直接以渠道协议报文发出;
+// 转换渠道一律以 OpenAI Chat 报文发出, 由 pipeline 转换为渠道上游协议。
 //   - OpenAI Chat / Anthropic Messages: messages 数组; Anthropic 另需 max_tokens。
 //   - OpenAI Responses: input 字段。
 //
-// 三种协议均显式注入 testMaxTokens 输出上限, 避免上游默认值(部分渠道仅 1024)
-// 截断长 HTML 产物; 个别模型不接受该字段时会以错误返回, 由调用方按测试失败处理。
-func newTestRequest(format llm.APIFormat, modelName, message string) (*httpclient.Request, error) {
+// 三种协议均显式注入输出上限, 避免上游默认值(部分渠道仅 1024)截断诊断回复;
+// 个别模型不接受该字段时会以错误返回, 由调用方按测试失败处理。
+func newTestRequest(format llm.APIFormat, modelName, message string, maxTokens int) (*httpclient.Request, error) {
+	if maxTokens <= 0 {
+		maxTokens = testPanelMaxTokens
+	}
 	body := []byte("{}")
 	var err error
 	switch format {
@@ -405,7 +416,7 @@ func newTestRequest(format llm.APIFormat, modelName, message string) (*httpclien
 		if body, err = sjson.SetBytes(body, "messages", []map[string]string{{"role": "user", "content": message}}); err != nil {
 			return nil, err
 		}
-		if body, err = sjson.SetBytes(body, "max_tokens", testMaxTokens); err != nil {
+		if body, err = sjson.SetBytes(body, "max_tokens", maxTokens); err != nil {
 			return nil, err
 		}
 		if body, err = sjson.SetBytes(body, "stream", false); err != nil {
@@ -418,7 +429,7 @@ func newTestRequest(format llm.APIFormat, modelName, message string) (*httpclien
 		if body, err = sjson.SetBytes(body, "input", message); err != nil {
 			return nil, err
 		}
-		if body, err = sjson.SetBytes(body, "max_output_tokens", testMaxTokens); err != nil {
+		if body, err = sjson.SetBytes(body, "max_output_tokens", maxTokens); err != nil {
 			return nil, err
 		}
 		if body, err = sjson.SetBytes(body, "stream", false); err != nil {
@@ -431,7 +442,7 @@ func newTestRequest(format llm.APIFormat, modelName, message string) (*httpclien
 		if body, err = sjson.SetBytes(body, "messages", []map[string]string{{"role": "user", "content": message}}); err != nil {
 			return nil, err
 		}
-		if body, err = sjson.SetBytes(body, "max_tokens", testMaxTokens); err != nil {
+		if body, err = sjson.SetBytes(body, "max_tokens", maxTokens); err != nil {
 			return nil, err
 		}
 		if body, err = sjson.SetBytes(body, "stream", false); err != nil {
@@ -448,20 +459,21 @@ func newTestRequest(format llm.APIFormat, modelName, message string) (*httpclien
 
 // newTestChatRequest 构造一条 OpenAI Chat 非流式测试请求; 保留为旧调用点兼容入口。
 func newTestChatRequest(modelName string, message string) (*httpclient.Request, error) {
-	return newTestRequest(llm.APIFormatOpenAIChatCompletion, modelName, message)
+	return newTestRequest(llm.APIFormatOpenAIChatCompletion, modelName, message, testPanelMaxTokens)
 }
 
 // sendChannelTestRequest 发送单模型测试请求并聚合回复摘要、耗时与 token 用量。
+// maxTokens 由调用方按场景传入: 面板诊断用 testPanelMaxTokens, 模型评估用 testMaxTokens。
 // 以 openai_chat 作为代表客户端协议构造请求, 路径决定与真实转发(客户端发
 // openai_chat)一致: 同协议渠道整包透传, 异协议渠道经 pipeline 转换。
 // 无论成败, 都把这次探针作为终态请求写入日志流(keyLabel 标识所用密钥)。
-func sendChannelTestRequest(ctx context.Context, channel model.Channel, modelName string, message string, keyLabel string) (*ChannelTestResult, error) {
+func sendChannelTestRequest(ctx context.Context, channel model.Channel, modelName string, message string, keyLabel string, maxTokens int) (*ChannelTestResult, error) {
 	format := testProbeClientFormat
 	outbound, passthrough, err := buildOutbound(channel, format)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := newTestRequest(format, modelName, message)
+	raw, err := newTestRequest(format, modelName, message, maxTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -677,7 +689,7 @@ func testGroupMember(ctx context.Context, channelModelID int, groupName, message
 	if err != nil {
 		return GroupTestResult{ChannelName: channel.Name, Model: cm.Name, Status: "fail", Error: err.Error()}
 	}
-	raw, err := newTestRequest(format, cm.Name, message)
+	raw, err := newTestRequest(format, cm.Name, message, testPanelMaxTokens)
 	if err != nil {
 		return GroupTestResult{ChannelName: channel.Name, Model: cm.Name, Status: "fail", Error: err.Error()}
 	}

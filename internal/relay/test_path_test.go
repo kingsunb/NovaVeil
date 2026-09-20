@@ -131,7 +131,7 @@ func TestSendChannelTestRequestPathConsistency(t *testing.T) {
 
 			// 调用 sendChannelTestRequest, 忽略 error: 转换路径可能因响应格式不完全匹配
 			// 而校验失败, 但请求已发出, 路径已被捕获。
-			_, _ = sendChannelTestRequest(context.Background(), channel, "test-model", "ping", "")
+			_, _ = sendChannelTestRequest(context.Background(), channel, "test-model", "ping", "", testPanelMaxTokens)
 
 			if capturedPath == "" {
 				t.Fatalf("探针未发出请求, capturedPath 为空")
@@ -223,7 +223,7 @@ func TestSendChannelTestRequestPassthroughPath(t *testing.T) {
 	beforeID := idSeq.Load()
 	defer cleanupProbeRequests(beforeID)
 
-	_, _ = sendChannelTestRequest(context.Background(), channel, "m", "ping", "")
+	_, _ = sendChannelTestRequest(context.Background(), channel, "m", "ping", "", testPanelMaxTokens)
 
 	if capturedPath != "/v1/chat/completions" {
 		t.Fatalf("完全透传渠道探针路径应为 /v1/chat/completions(沿用客户端原始路径), 实际 %s", capturedPath)
@@ -251,7 +251,7 @@ func TestSendChannelTestRequestRawURLPath(t *testing.T) {
 	beforeID := idSeq.Load()
 	defer cleanupProbeRequests(beforeID)
 
-	_, _ = sendChannelTestRequest(context.Background(), channel, "m", "ping", "")
+	_, _ = sendChannelTestRequest(context.Background(), channel, "m", "ping", "", testPanelMaxTokens)
 
 	if capturedPath != "/custom/path" {
 		t.Fatalf("## 标记渠道探针路径应为 /custom/path(直接使用原始地址), 实际 %s", capturedPath)
@@ -263,22 +263,22 @@ func TestSendChannelTestRequestRawURLPath(t *testing.T) {
 // 与实际所走路径一致。覆盖 openai(透传)与 anthropic(转换)两种渠道。
 func TestSendChannelTestRequestClientFormat(t *testing.T) {
 	tests := []struct {
-		name         string
-		channelType  model.ChannelProvider
+		name          string
+		channelType   model.ChannelProvider
 		wantRelayMode string
-		responseBody string
+		responseBody  string
 	}{
 		{
-			name:         "openai 渠道透传 passthrough",
-			channelType:  model.ChannelProviderOpenAI,
+			name:          "openai 渠道透传 passthrough",
+			channelType:   model.ChannelProviderOpenAI,
 			wantRelayMode: "passthrough",
-			responseBody: testPathOpenAIChatResponse,
+			responseBody:  testPathOpenAIChatResponse,
 		},
 		{
-			name:         "anthropic 渠道转换 converted",
-			channelType:  model.ChannelProviderAnthropic,
+			name:          "anthropic 渠道转换 converted",
+			channelType:   model.ChannelProviderAnthropic,
 			wantRelayMode: "converted",
-			responseBody: testPathAnthropicResponse,
+			responseBody:  testPathAnthropicResponse,
 		},
 	}
 	for _, tt := range tests {
@@ -301,7 +301,7 @@ func TestSendChannelTestRequestClientFormat(t *testing.T) {
 			defer cleanupProbeRequests(beforeID)
 
 			// 无论探针成败, recordTestRequest 都会写入日志流。
-			_, _ = sendChannelTestRequest(context.Background(), channel, "m", "ping", "")
+			_, _ = sendChannelTestRequest(context.Background(), channel, "m", "ping", "", testPanelMaxTokens)
 
 			afterID := idSeq.Load()
 			mu.Lock()

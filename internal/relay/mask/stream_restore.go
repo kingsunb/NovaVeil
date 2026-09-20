@@ -6,9 +6,13 @@ import "bytes"
 // 必须缓冲拼接后才能完整匹配还原。设计详见 docs/脱敏开发/03-流式还原设计.md。
 
 const (
-	// defaultChannel 单通道键。多槽位(正文/tool 参数并行)场景下应按槽位独立缓冲,
-	// 本简化版按单通道实现, 结构保留 map 以便扩展。
-	defaultChannel = "default"
+	// DefaultChannel 正文通道键。reasoning_content / tool-call arguments 使用独立通道键,
+	// 各通道的 pending 互不干扰, 避免不同字段的占位符前缀在缓冲中混合。
+	DefaultChannel = "default"
+	// ReasoningChannel 推理增量字段通道键。
+	ReasoningChannel = "reasoning"
+	// ToolChannelPrefix tool-call arguments 按槽位缓冲的通道键前缀, 完整键为 tool-<index>。
+	ToolChannelPrefix = "tool-"
 	// pendingMax 占位符最长约 {{LABEL_6位}} ≈ 23 字节; pending 超过 64 字节仍未闭合,
 	// 说明不是占位符(可能是代码里的 {{ 模板语法), 直接刷出避免无限缓冲。
 	pendingMax = 64
@@ -28,7 +32,7 @@ func NewStreamRestorer(mapping *Mapping) *StreamRestorer {
 // Mapping 返回底层映射表, 供 tool-call arguments 等按事件整词还原复用。
 func (r *StreamRestorer) Mapping() *Mapping { return r.mapping }
 
-// Push 喂入一个增量 chunk, 返回可立即写给客户端的已还原字节。
+// Push 喂入一个增量 chunk 到默认通道, 返回可立即写给客户端的已还原字节。
 //
 // 处理流程(详见 docs/脱敏开发/03 §2.2):
 //  1. 拼接 buffer = pending + chunk;
@@ -38,7 +42,15 @@ func (r *StreamRestorer) Mapping() *Mapping { return r.mapping }
 //
 // 中途无内容时返回空切片, 调用方不写出、不 Flush, 等待下一 event(绝不主动断流)。
 func (r *StreamRestorer) Push(chunk []byte) []byte {
-	buf := append(r.pending[defaultChannel], chunk...)
+	return r.PushChannel(DefaultChannel, chunk)
+}
+
+// PushChannel 喂入一个增量 chunk 到指定通道, 返回可立即写给客户端的已还原字节。
+// 不同字段(content/reasoning_content/tool-call arguments)使用独立通道,
+// 避免不同字段的占位符前缀在 pending 中互相干扰。
+func (r *StreamRestorer) PushChannel(channel string, chunk []byte) []byte {
+	buf := append([]byte(nil), r.pending[channel]...)
+	buf = append(buf, chunk...)
 
 	out, remain := r.scanAndRestore(buf)
 	if len(remain) > pendingMax {
@@ -47,19 +59,45 @@ func (r *StreamRestorer) Push(chunk []byte) []byte {
 		remain = nil
 	}
 	if remain == nil {
-		delete(r.pending, defaultChannel)
+		delete(r.pending, channel)
 	} else {
-		r.pending[defaultChannel] = remain
+		r.pending[channel] = remain
 	}
 	return out
 }
 
-// Flush 在流终止时调用, 把滞留的 pending 原样吐出。pending 只含未闭合前缀(非占位符),
-// 原样输出让客户端可见, 绝不猜。
+// Flush 在流终止时调用, 把默认通道滞留的 pending 原样吐出。
+// pending 只含未闭合前缀(非占位符), 原样输出让客户端可见, 绝不猜。
 func (r *StreamRestorer) Flush() []byte {
-	remain := r.pending[defaultChannel]
-	delete(r.pending, defaultChannel)
+	return r.FlushChannel(DefaultChannel)
+}
+
+// FlushChannel 在流终止时把指定通道滞留的 pending 原样吐出。
+// 用于 reasoning_content / tool-call arguments 等独立通道的收尾。
+func (r *StreamRestorer) FlushChannel(channel string) []byte {
+	remain := r.pending[channel]
+	delete(r.pending, channel)
 	return remain
+}
+
+// PendingChannels 返回当前仍滞留 pending 的通道名。用于评估是否需要在流终止时收尾。
+func (r *StreamRestorer) PendingChannels() []string {
+	channels := make([]string, 0, len(r.pending))
+	for ch := range r.pending {
+		channels = append(channels, ch)
+	}
+	return channels
+}
+
+// FlushChannels 把所有通道滞留的 pending 原样吐出, 返回按通道名索引的残留。
+// 调用方负责按各通道对应的 SSE 字段分别包装, 避免把 reasoning/tool 通道残留误写成 content。
+func (r *StreamRestorer) FlushChannels() map[string][]byte {
+	out := make(map[string][]byte, len(r.pending))
+	for ch, remain := range r.pending {
+		out[ch] = remain
+		delete(r.pending, ch)
+	}
+	return out
 }
 
 // scanAndRestore 扫描 buf: 还原其中完整占位符, 并把尾部可能不完整的占位符前缀分离到 pending。

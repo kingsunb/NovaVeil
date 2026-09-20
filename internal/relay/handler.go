@@ -110,13 +110,20 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		if sessionKey == "" {
 			sessionKey = c.GetHeader(opencodeSessionHeader)
 		}
+		// 脱敏映射表按 API Key 隔离: 两个 API Key 使用相同会话 ID 时不应共享一张 Mapping,
+		// 否则存在条件性跨租户还原泄漏。会话粘合仍用原始 sessionKey(按会话粘合, 不按 Key 隔离)。
+		apiKeyID := c.GetInt("api_key_id")
+		maskSessionKey := sessionKey
+		if apiKeyID > 0 && sessionKey != "" {
+			maskSessionKey = itoa(apiKeyID) + ":" + sessionKey
+		}
 		// 脱敏: 全局开关 + 分组开关均开时对请求体执行一次脱敏, 映射表供响应还原复用。
 		// 每轮重试复用同一脱敏结果, 不重复扫描(文档 01 §二)。fail-closed: 脱敏失败拒绝放行明文。
 		// 分组暂不可得时跳过脱敏(循环内会等待分组出现), 开关任一关时零开销短路(文档 04 §1.4)。
 		var maskMapping *mask.Mapping
 		var streamRestorer *mask.StreamRestorer
 		if g, gErr := op.GroupGetByName(metadataModel); gErr == nil {
-			masked, mapping, matches, mErr := applyRequestMask(raw.Body, sessionKey, g.RelayConfig.MaskEnabled)
+			masked, mapping, matches, mErr := applyRequestMask(raw.Body, maskSessionKey, g.RelayConfig.MaskEnabled)
 			if mErr != nil {
 				rejectRequest(c, inbound, fmt.Errorf("脱敏失败, 拒绝放行明文: %w", mErr))
 				return
@@ -217,7 +224,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 手动模式取人工指定的成员, 故障转移模式按优先级选择未禁用且不在冷却中的成员;
 				// 选路层会跳过被禁用渠道的成员, 派发处另有兜底检查覆盖粘合等旁路。
 				// 没有目标时等待重新选择, 期间人工切换渠道, 补齐成员或成员冷却到期即可让请求继续。
-				item = pickGroupItem(group, exclude, format)
+				item = pickGroupItemWithContext(ctx, group, exclude, format)
 			}
 			if item.ID == 0 {
 				// 全冷却自动清除: 分组配置了 AllCooldownRetryBaseSeconds 且所有非禁用成员都在冷却中时,
@@ -250,7 +257,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 目标分组无可选成员、目标不存在或链路成环超限属于结构性不可用, 几秒的等待窗口内不会自愈:
 			// 对齐 OmniRoute skipped_before_dispatch 的思想按本次请求内跳过处理, 不计失败连击、
 			// 不给引用成员上冷却也不等待, 立即排除该引用改试顶层下一优先级。
-			hops, failedIdx = resolveGroupRefChain(group, item, sessionKey, exclude)
+			// 把客户端协议 format 透传给引用链解析: 目标分组启用 PreferPassthrough 时,
+			// 嵌套引用选路也要按客户端协议做同协议优先排序, 与顶层 pickGroupItem 一致。
+			hops, failedIdx = resolveGroupRefChainWithContext(ctx, group, item, sessionKey, exclude, format)
 			if failedIdx >= 0 {
 				// 防热旋: 单个 exclude 变量记不住多个损坏的兄弟引用, 全部引用都结构性失效时
 				// 会交替重选形成紧循环。跳过次数超过成员总数即视为整组不可用, 退避一轮后
@@ -597,10 +606,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					bindSessionSticky(hop.group, sessionKey, hop.item.ID)
 				}
 			}
-			// 同协议透传时原样返回上游响应头; 跨协议响应没有需要透传的响应头。
-			// 流式分支须剔除 Content-Length 类定长分帧头: 上游 SSE 若误带定长声明,
-			// 原样复制会与逐事件写出(以及污染流追加合成终止帧)的分帧冲突, 破坏客户端解析;
-			// Connection 等其余逐跳头由 HTTP 库层处理, 这里只补长度类剔除。
+			// 同协议透传时复制上游响应头, 但永远丢弃 Set-Cookie/Location/WWW-Authenticate
+			// 等危险头与逐跳头, 防止恶意/被攻陷渠道注入这些头驱逐管理员 cookie 或重定向客户端。
+			// 流式分支额外剔除 Content-Length 类定长分帧头: 上游 SSE 若误带定长声明,
+			// 原样复制会与逐事件写出(以及污染流追加合成终止帧)的分帧冲突, 破坏客户端解析。
 			copyUpstreamHeaders(c.Writer.Header(), result.header, metadataStreaming)
 
 			// 非流式响应已经完整取得, 提交后一次写给客户端。
@@ -802,9 +811,13 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 			}
 			disarmIdle()
-			// 脱敏流式还原: 流结束后 Flush 残留 pending, 作为最终 delta 事件写给客户端。
+			// 脱敏流式还原: 流结束后 Flush 各通道残留 pending, 作为各自字段的最终 delta
+			// 事件写给客户端(默认正文通道、reasoning_content 通道与每个 tool-call 槽位独立成帧)。
 			if streamRestorer != nil {
-				if flushData := flushStreamRestorer(streamRestorer, format); flushData != nil {
+				for _, flushData := range flushStreamRestorer(streamRestorer, format) {
+					if len(flushData) == 0 {
+						continue
+					}
 					encoded.Reset()
 					if sse.Encode(&encoded, sse.Event{Data: flushData}) == nil {
 						c.Writer.Write(encoded.Bytes())
@@ -1015,12 +1028,37 @@ func armRoundTimeout(cancelRound context.CancelCauseFunc, seconds int) (stop fun
 	}
 }
 
+// droppedUpstreamHeaders 是永远不从上游响应复制到客户端响应的头名称集合。
+// 这些头可被恶意/被攻陷的透传渠道注入, 用于驱逐管理员 auth cookie (Set-Cookie)、
+// 重定向浏览器到钓鱼站点 (Location)、触发认证弹窗 (WWW-Authenticate) 等。
+// 逐跳头 (RFC 7230 §6.1) 由 HTTP 库层处理, 此处额外显式丢弃以双重防御。
+var droppedUpstreamHeaders = map[string]bool{
+	"Set-Cookie":          true,
+	"Set-Cookie2":         true,
+	"Location":            true,
+	"Www-Authenticate":    true,
+	"Proxy-Authenticate":  true,
+	"Connection":          true,
+	"Keep-Alive":          true,
+	"Proxy-Authorization": true,
+	"Te":                  true,
+	"Trailer":             true,
+	"Transfer-Encoding":   true,
+	"Upgrade":             true,
+}
+
 // copyUpstreamHeaders 复制上游响应头到客户端响应。
-// 流式分支剔除 Content-Length 类定长分帧头(大小写不敏感), 防止上游误带的定长声明
-// 破坏逐事件分帧与合成终止帧追加; 非流式分支原样保留全部响应头。
+// 永远丢弃 droppedUpstreamHeaders 中的危险头与逐跳头, 防止透传渠道注入 Set-Cookie
+// 等头驱逐管理员认证 cookie 或重定向客户端。
+// 流式分支额外剔除 Content-Length 类定长分帧头(大小写不敏感), 防止上游误带的定长声明
+// 破坏逐事件分帧与合成终止帧追加; 非流式分支保留 Content-Length。
 func copyUpstreamHeaders(dst, src http.Header, streaming bool) {
 	for key, values := range src {
-		if streaming && http.CanonicalHeaderKey(key) == "Content-Length" {
+		canon := http.CanonicalHeaderKey(key)
+		if droppedUpstreamHeaders[canon] {
+			continue
+		}
+		if streaming && canon == "Content-Length" {
 			continue
 		}
 		dst[key] = values

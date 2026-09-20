@@ -450,7 +450,7 @@ describe("http 错误分支", () => {
         ),
       );
       await expect(
-        api.login({ username: "u", password: "p", expire: 0 }),
+        api.login({ username: "u", password: "p" }),
       ).rejects.toBeInstanceOf(APIError);
       expect(handler).not.toHaveBeenCalled();
     } finally {

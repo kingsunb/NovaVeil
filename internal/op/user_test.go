@@ -37,6 +37,35 @@ func hashForTest(password string) (string, error) {
 }
 
 // resetTestUser 用已知密码准备唯一的管理员行, 并同步 op 层用户缓存
+
+func TestUserConsumeInitialPasswordFileRemovesSeed(t *testing.T) {
+	// SEC-08/L6: 首次登录成功后一次性初始密码文件必须从磁盘删除。
+	// 若删除失败(权限等)返回 ErrInitialPasswordFileConsumeFailed, 由登录 handler 记录。
+	oldPath := initialPasswordFilePath
+	t.Cleanup(func() { initialPasswordFilePath = oldPath })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, initialPasswordFilename)
+	if err := os.WriteFile(path, []byte("username: admin\npassword: seed-pass-123\n"), 0o600); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	initialPasswordFilePath = path
+
+	if err := UserConsumeInitialPasswordFile(); err != nil {
+		t.Fatalf("UserConsumeInitialPasswordFile: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("seed file must be removed after consume, stat err=%v", err)
+	}
+	if initialPasswordFilePath != "" {
+		t.Fatalf("initialPasswordFilePath = %q, want empty after consume", initialPasswordFilePath)
+	}
+
+	// 幂等: 再次消费没有文件可删也不应报错。
+	if err := UserConsumeInitialPasswordFile(); err != nil {
+		t.Fatalf("second UserConsumeInitialPasswordFile: %v", err)
+	}
+}
 func resetTestUser(t *testing.T, password string, mustChange bool) {
 	t.Helper()
 	hashed, err := hashForTest(password)

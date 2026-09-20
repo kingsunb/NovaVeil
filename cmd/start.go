@@ -13,6 +13,7 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/eval"
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/kingsunb/NovaVeil/internal/relay"
+	"github.com/kingsunb/NovaVeil/internal/seal"
 	"github.com/kingsunb/NovaVeil/internal/server"
 	"github.com/kingsunb/NovaVeil/internal/task"
 	"github.com/kingsunb/NovaVeil/internal/update"
@@ -53,6 +54,16 @@ var startCmd = &cobra.Command{
 		}
 		shutdown.Register(db.Close)
 
+		// 静态加密必须先于任何业务读写初始化: builtin 补建渠道、op.InitCache 刷新
+		// 缓存都会接触敏感字段, 这里未 Configure 时 seal 会回退到进程临时密钥,
+		// 本次写入的密文重启后无法解密。dataDir 提前至此, 与后续会话/初始密码
+		// 文件的目录派生保持同源。
+		dataDir := dataDirectory()
+		if err := seal.Configure(conf.AppConfig.Security.EncryptionKey, filepath.Join(dataDir, "novaveil-encryption.key")); err != nil {
+			log.Errorf("encryption init error: %v", err)
+			return fmt.Errorf("加密初始化失败: %w", err)
+		}
+
 		// 内置渠道（免费 + 官方）在缓存加载前补建，保证启动后即出现在渠道列表。
 		// 免费渠道出厂启用、内置 Key；官方渠道出厂禁用、无 Key，管理员配置后参与路由。
 		if err := builtin.EnsureBuiltinChannels(context.Background()); err != nil {
@@ -60,7 +71,6 @@ var startCmd = &cobra.Command{
 			return fmt.Errorf("内置渠道初始化失败: %w", err)
 		}
 
-		dataDir := dataDirectory()
 		if err := op.InitCache(); err != nil {
 			log.Errorf("cache init error: %v", err)
 			return fmt.Errorf("缓存初始化失败: %w", err)
@@ -112,13 +122,21 @@ var startCmd = &cobra.Command{
 			defer cancel()
 			return op.FlushConversations(ctx)
 		})
-		shutdown.Register(task.StopAll)
 		shutdown.Register(func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			return op.APIKeyTouchLastUsedFlush(ctx)
+		})
+		// 任务泵与评估 worker 允许在停机时处理较长的收尾(如跑完当前 10 分钟 eval),
+		// 但不能无限悬挂: 给 5 分钟有界超时。注册顺序上 server shutdown 在它们之后,
+		// LIFO 执行时先停 ingress, 再停 eval, 再停任务, 最后才到 DB close。
+		shutdown.RegisterWithTimeout(task.StopAll, 5*time.Minute)
+		shutdown.RegisterWithTimeout(func() error {
 			if eval.Default != nil {
 				return eval.Default.Stop()
 			}
 			return nil
-		})
+		}, 5*time.Minute)
 		shutdown.Register(func() error {
 			// 先取消所有活动 HTTP 请求的根 context, 让在途 handler 感知停机并尽快收尾;
 			// 再以有界超时 drain 等待 handler 终态, 超时则 server.Shutdown 内部调用

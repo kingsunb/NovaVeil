@@ -35,6 +35,11 @@ var (
 	// runningWG 跟踪所有已启动的任务执行 goroutine(guardedCall)。
 	// StopAll 关闭 stopCh 后等待该 WaitGroup, 确保没有任务 goroutine 在 DB 关闭后仍在运行。
 	runningWG sync.WaitGroup
+	// runningWGMu/runningStopped 同步 goGuardedCall 的 Add 与 StopAll 的 Wait:
+	// 仅靠 stopCh 存在竞态——ticker 事件可能已在 select 中胜出, 在 Wait 开始后才调用
+	// Add(1), 使本轮执行逃脱 StopAll 的等待并在 DB 关闭后继续写库(审计 RELI-01)。
+	runningWGMu    sync.Mutex
+	runningStopped bool
 
 	// runStopCh 在 StopAll 时关闭, 使 RUN() 能解除阻塞并返回。
 	runStopCh   chan struct{}
@@ -62,6 +67,9 @@ func resetLifecycle() {
 	lifecycleCtx, lifecycleCancel = context.WithCancel(context.Background())
 	runStopCh = make(chan struct{})
 	runStopOnce = sync.Once{}
+	runningWGMu.Lock()
+	runningStopped = false
+	runningWGMu.Unlock()
 }
 
 // Register 注册一个定时任务
@@ -149,6 +157,13 @@ func StopAll() error {
 		entries = append(entries, entry)
 	}
 	tasksMu.Unlock()
+
+	// 先关闭 stop 屏障: 之后的任何 goGuardedCall 都必须看到 runningStopped 并放弃 Add,
+	// 已在屏障前 Add 的执行被 Wait 一并等待。锁序保证 Add 绝不会发生在 Wait 返回之后。
+	runningWGMu.Lock()
+	runningStopped = true
+	runningWGMu.Unlock()
+
 	for _, entry := range entries {
 		entry.stopOnce.Do(func() { close(entry.stopCh) })
 	}
@@ -184,12 +199,21 @@ func guardedCall(entry *taskEntry) {
 
 // goGuardedCall 在独立 goroutine 中执行 guardedCall 并通过 runningWG 跟踪,
 // 使 StopAll 能等待所有正在执行的任务 goroutine 终态。
+// Add 与 goroutine 启动必须在 runningWGMu 临界区内完成: 若 Add 之后、启动之前
+// StopAll 拿到锁并 Wait, 计数虽为 1 但永远不会 Done, StopAll 将永久阻塞;
+// 若不加锁, Add 又可能发生在 StopAll 的 Wait 之后, 让任务逃脱停机等待。
 func goGuardedCall(entry *taskEntry) {
+	runningWGMu.Lock()
+	if runningStopped {
+		runningWGMu.Unlock()
+		return
+	}
 	runningWG.Add(1)
 	go func() {
 		defer runningWG.Done()
 		guardedCall(entry)
 	}()
+	runningWGMu.Unlock()
 }
 
 func runTask(entry *taskEntry) {

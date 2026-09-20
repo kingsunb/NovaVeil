@@ -16,6 +16,12 @@ type stickyEntry struct {
 // sessionStickies 按分组 ID 保存各会话的粘合记录, 与分组路由状态共用 routeMu 保护。
 var sessionStickies = make(map[int]map[string]stickyEntry)
 
+// maxSessionStickiesPerGroup 单个分组最多保留的会话粘合条目数。会话粘合默认开启,
+// 客户端可任意指定 X-Session-Id; 不设上限等于允许无限增长进程内存(审计 REL-01)。
+// 选 4096 足够覆盖大规模租户, 又给每个分组的内存量设了有界上限; 满时新会话
+// 不再建立粘合, 已有会话的粘合/续期不受影响。
+const maxSessionStickiesPerGroup = 4096
+
 // sessionStickyEnabled 返回指定分组在当前请求下是否启用会话粘合:
 // 仅故障转移模式、分组配置开启且请求携带会话标识时生效; 引用链解析的每一层独立按自身配置判断。
 func sessionStickyEnabled(group model.Group, sessionKey string) bool {
@@ -88,6 +94,17 @@ func bindSessionSticky(group model.Group, sessionKey string, itemID int) {
 	if sessions == nil {
 		sessions = make(map[string]stickyEntry)
 		sessionStickies[group.ID] = sessions
+	} else if _, exists := sessions[sessionKey]; !exists && len(sessions) >= maxSessionStickiesPerGroup {
+		// 条目满: 先立即清理已过期/已删成员的残留, 清理后仍满则拒绝新增粘合。
+		// 已有会话的续期不受影响; 新会话退化为按优先级正常选路, 不额外消耗内存。
+		pruneSessionStickyLocked(group)
+		sessions = sessionStickies[group.ID]
+		if sessions == nil {
+			sessions = make(map[string]stickyEntry)
+			sessionStickies[group.ID] = sessions
+		} else if len(sessions) >= maxSessionStickiesPerGroup {
+			return
+		}
 	}
 	sessions[sessionKey] = stickyEntry{
 		ItemID:            itemID,

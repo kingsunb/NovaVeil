@@ -660,6 +660,18 @@ export function ChannelEditor({
     setDraft((d) => ({ ...d, [k]: v }));
   }
 
+  // 关闭编辑器时同步清理编辑态：明文 Key、眼睛状态、模型选择与批量测试都
+  // 不应跨编辑目标残留。父级 state 会在 onClose 后把 channel 置 null，但这里
+  // 主动清掉 draft，不依赖 effect 的滞后时序（审计 FE-02）。
+  function closeEditor() {
+    modelTestsAbortedRef.current = true;
+    setFetchedForSelect(null);
+    setFetchChecked(new Set());
+    setDraft(toDraft(null));
+    setTab("cred");
+    onClose();
+  }
+
   // 选择上游模型时全屏替换主编辑视图（隐藏 Tab + Footer），避免同时看到
   // 「保存/测试」与 FetchPicker 造成困惑；选择模式期间不允许 backdrop 关闭，
   // 否则会丢失勾选状态。
@@ -671,12 +683,9 @@ export function ChannelEditor({
       onOpenChange={(o) => {
         if (o) return;
         // 关闭时无论是否在模型拉取选择模式都重置临时状态, 避免下次打开
-        // 编辑器时残留 fetchedForSelect/fetchChecked/inFetchMode。
+        // 编辑器时残留 fetchedForSelect/fetchChecked/inFetchMode 或明文 Key。
         // 批量测试一并中止：组件不卸载，cleanup 不会触发。
-        modelTestsAbortedRef.current = true;
-        setFetchedForSelect(null);
-        setFetchChecked(new Set());
-        onClose();
+        closeEditor();
       }}
     >
       <DialogContent variant="wide">
@@ -806,7 +815,7 @@ export function ChannelEditor({
                 测试连通
               </Button>
             )}
-            <Button variant="ghost" size="sm" onClick={onClose}>
+            <Button variant="ghost" size="sm" onClick={closeEditor}>
               取消
             </Button>
             <Button
@@ -845,30 +854,46 @@ function CredTab({
  // 内置渠道身份字段由后端固定，前端同步禁用名称/类型/Base URL 编辑，避免提交后报错。
   const builtin = !!draft.builtin;
 
-  // 眼睛显示：默认掩码/密文态；已保存行首次点眼睛时按需拉取该渠道的密钥明文。
+  // 眼睛显示：默认掩码/密文态；已保存行首次点眼睛时按需直接 fetch 该渠道的
+  // 密钥明文。不走 React Query 缓存：明文只在 CredTab 的 state 里存续，
+  // 关闭编辑器/切换 Tab 卸载时即丢弃，避免 reveal 后仍留在 query cache 中
+  // （审计 FE-02）。
   const [visibleKeys, setVisibleKeys] = useState<Record<number, boolean>>({});
-  const [revealRequested, setRevealRequested] = useState(false);
+  const [secrets, setSecrets] = useState<ChannelKey[] | null>(null);
+  const secretsFetchGenRef = useRef(0);
   // 用户本会话明确清空的密钥行（按稳定 id / 掩码记录）：明文查询若在此之后
   // 才返回，不再自动回填，否则用户「清空 = 删除」的意图被静默撤销（审计 §1.8）。
   const clearedSecretIdsRef = useRef<Set<string>>(new Set());
   // 批量添加密钥弹窗开关。
   const [batchOpen, setBatchOpen] = useState(false);
-  const secrets = useQuery({
-    queryKey: ["channels", "keys", channelId],
-    queryFn: () => api.getChannelKeys(channelId!),
-    enabled: revealRequested && !!channelId,
-    staleTime: 5 * 60 * 1000, // 明文在查看期间复用缓存, 避免每次切换眼睛都请求
-  });
+
+  async function fetchChannelKeys() {
+    if (!channelId) return;
+    const gen = ++secretsFetchGenRef.current;
+    setSecrets(null);
+    try {
+      const rows = await api.getChannelKeys(channelId);
+      if (gen !== secretsFetchGenRef.current) return;
+      setSecrets(rows);
+    } catch (err) {
+      if (gen !== secretsFetchGenRef.current) return;
+      setSecrets(null);
+      toast.error(
+        err instanceof Error ? err.message : "密钥明文拉取失败",
+      );
+    }
+  }
 
   // 切换编辑目标时重置眼睛/明文/清除记录，避免上一渠道的状态泄漏到下一渠道。
   useEffect(() => {
+    secretsFetchGenRef.current += 1;
     setVisibleKeys({});
-    setRevealRequested(false);
+    setSecrets(null);
     clearedSecretIdsRef.current = new Set();
   }, [channelId]);
 
   useEffect(() => {
-    if (!secrets.data) return;
+    if (!secrets) return;
     // 回填仍无明文的已保存行；不覆盖用户手动输入的内容，也不回填被用户
     // 明确清空的行。
     let changed = false;
@@ -880,7 +905,7 @@ function CredTab({
         return row;
       }
       if (row.id) {
-        const found = secrets.data.find((s) => s.id === row.id);
+        const found = secrets.find((s) => s.id === row.id);
         if (found?.key) {
           changed = true;
           return { ...row, key: found.key };
@@ -888,21 +913,15 @@ function CredTab({
         return row;
       }
       // 旧式单 Key 渠道归一化行没有 id，凭后端下发的掩码行识别，取首条明文。
-      if (row.key_masked && secrets.data[0]?.key) {
+      if (row.key_masked && secrets[0]?.key) {
         changed = true;
-        return { ...row, key: secrets.data[0].key };
+        return { ...row, key: secrets[0].key };
       }
       return row;
     });
     if (changed) update("keys", next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [secrets.data]);
-
-  useEffect(() => {
-    if (revealRequested && secrets.isError) {
-      toast.error("密钥明文拉取失败");
-    }
-  }, [revealRequested, secrets.isError]);
+  }, [secrets]);
 
   function toggleKeyVisible(idx: number) {
     const row = draft.keys[idx];
@@ -910,11 +929,9 @@ function CredTab({
     // 明文为空时首次点眼睛都触发按需拉取。新建的空白行两者皆无，不触发。
     const savedRowNeedsSecret =
       !row?.key && !!(row?.id || row?.key_masked);
-    setVisibleKeys((prev) => {
-      const next = { ...prev, [idx]: !prev[idx] };
-      if (savedRowNeedsSecret && next[idx]) setRevealRequested(true);
-      return next;
-    });
+    const nextVisible = !visibleKeys[idx];
+    setVisibleKeys((prev) => ({ ...prev, [idx]: nextVisible }));
+    if (savedRowNeedsSecret && nextVisible) void fetchChannelKeys();
   }
 
   function addKey() {

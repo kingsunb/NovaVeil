@@ -198,7 +198,7 @@ describe("<SettingsPage /> TesterSection 分组模型测试", () => {
  * 否则用户导入后立即浏览各分区仍看到旧值，基于旧值编辑会把导入覆盖回去。
  */
 describe("<SettingsPage /> BackupSection 导入后失效受影响查询", () => {
-  it("导入后 channels / groups / keys 查询被标记为 invalidated", async () => {
+  it("导入后 channels / groups / keys 等全部分区查询被标记为 invalidated", async () => {
     const user = userEvent.setup();
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -207,6 +207,15 @@ describe("<SettingsPage /> BackupSection 导入后失效受影响查询", () => 
     qc.setQueryData(["channels"], [sampleChannel]);
     qc.setQueryData(["groups"], [{ id: 1, name: "g1" }]);
     qc.setQueryData(["keys"], [{ id: 1, name: "k1" }]);
+    qc.setQueryData(["apikeys", "secret", 1], { api_key: "sk-old" });
+    qc.setQueryData(["mask-config"], { masks: [] });
+    qc.setQueryData(["mask-rules"], { rules: [] });
+    qc.setQueryData(["usage-heatmap", 365], []);
+    qc.setQueryData(["token-trends", "30d"], []);
+    qc.setQueryData(["recent-errors", 5], []);
+    qc.setQueryData(["log-errors", "all"], []);
+    qc.setQueryData(["log-stop-all-state"], { stopping: false });
+    qc.setQueryData(["model-eval", "queue", "list"], []);
     expect(qc.getQueryState(["channels"])?.isInvalidated).toBe(false);
 
     function Wrapper({ children }: { children: React.ReactNode }) {
@@ -263,6 +272,15 @@ describe("<SettingsPage /> BackupSection 导入后失效受影响查询", () => 
     expect(qc.getQueryState(["channels"])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(["groups"])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(["keys"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["apikeys", "secret", 1])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["mask-config"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["mask-rules"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["usage-heatmap", 365])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["token-trends", "30d"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["recent-errors", 5])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["log-errors", "all"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["log-stop-all-state"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["model-eval", "queue", "list"])?.isInvalidated).toBe(true);
 
     vi.unstubAllGlobals();
   });

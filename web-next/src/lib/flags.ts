@@ -42,6 +42,19 @@ const DEFAULT_FLAGS: Flags = {
   "legacy-path": "/legacy",
 };
 
+/**
+ * legacy-path 会直接放进 <a href>。只允许 http/https/mailto 或相对路径
+ * （/、./、../；显式拒绝 // 协议相对地址），其余回退到默认旧版入口 /legacy
+ * （审计 FE-06 / F-L5）。
+ */
+export function safeLegacyHref(value: string): string {
+  const v = value.trim();
+  if (/^(?:https?:\/\/|mailto:)/i.test(v)) return v;
+  if (v.startsWith("./") || v.startsWith("../")) return v;
+  if (v.startsWith("/") && !v.startsWith("//")) return v;
+  return "/legacy";
+}
+
 let cache: { value: Flags; at: number } | null = null;
 const TTL = 30_000;
 

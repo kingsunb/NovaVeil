@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cespare/xxhash/v2"
 )
@@ -31,8 +32,9 @@ type Cache[K comparable, V any] interface {
 	Del(keys ...K) int
 	Len() int
 	Clear()
-	// RefreshAll 原子替换缓存的全部内容: 按目标 map 逐 shard 替换,
-	// 消除先 Clear 再 Set 之间的空窗口, 避免读者在刷新间隙看到空缓存。
+	// RefreshAll 原子替换缓存的全部内容: 先在后台构造完整新一代, 再一次
+	// 原子发布; 读者在替换前后始终看到某一代的完整视图, 不会看到全空或
+	// 半新的混合代。
 	RefreshAll(target map[K]V)
 }
 
@@ -48,37 +50,57 @@ func New[K comparable, V any](shards int) Cache[K, V] {
 	}
 
 	c := &cache[K, V]{
-		shards:    make([]*shard[K, V], shards),
 		shardMask: uint64(shards - 1),
+		refreshMu: sync.Mutex{},
 	}
-	for i := 0; i < shards; i++ {
-		c.shards[i] = &shard[K, V]{hashmap: map[K]V{}}
-	}
+	c.gen.Store(newGeneration[K, V](shards))
 
 	return c
 }
 
 type cache[K comparable, V any] struct {
-	shards    []*shard[K, V]
+	gen       atomic.Pointer[generation[K, V]]
 	shardMask uint64
-	refreshMu sync.Mutex // 保护 RefreshAll: 跨 shard 替换操作原子性, 消除空窗口
+	// refreshMu 串行化 RefreshAll/Clear 的代际替换; 读者不取此锁, 只原子加载 gen。
+	refreshMu sync.Mutex
+}
+
+// generation 是一代完整的 shard 集合, 发布后只读; RefreshAll/Clear 构造新一代
+// 再原子替换, 从而消除逐 shard 清空+重建造成的空窗口/混合代(审计 RELI-06/R-M1)。
+type generation[K comparable, V any] struct {
+	shards []*shard[K, V]
+}
+
+func newGeneration[K comparable, V any](shards int) *generation[K, V] {
+	g := &generation[K, V]{shards: make([]*shard[K, V], shards)}
+	for i := 0; i < shards; i++ {
+		g.shards[i] = &shard[K, V]{hashmap: map[K]V{}}
+	}
+	return g
+}
+
+func (c *cache[K, V]) current() *generation[K, V] {
+	if g := c.gen.Load(); g != nil {
+		return g
+	}
+	// Init 前理论不可达; 兜底一个空代避免 nil panic。
+	return newGeneration[K, V](int(c.shardMask) + 1)
 }
 
 func (c *cache[K, V]) Set(k K, v V) {
 	hashedKey := xxhash.Sum64String(keyToString(k))
-	shard := c.getShard(hashedKey)
-	shard.set(k, v)
+	c.getShard(c.current(), hashedKey).set(k, v)
 }
 
 func (c *cache[K, V]) Get(k K) (V, bool) {
 	hashedKey := xxhash.Sum64String(keyToString(k))
-	shard := c.getShard(hashedKey)
-	return shard.get(k)
+	return c.getShard(c.current(), hashedKey).get(k)
 }
 
 func (c *cache[K, V]) GetAll() map[K]V {
+	g := c.current()
 	result := make(map[K]V)
-	for _, shard := range c.shards {
+	for _, shard := range g.shards {
 		shardData := shard.snapshot()
 		for k, v := range shardData {
 			result[k] = v
@@ -88,43 +110,45 @@ func (c *cache[K, V]) GetAll() map[K]V {
 }
 
 func (c *cache[K, V]) Del(ks ...K) int {
+	g := c.current()
 	var count int
 	for _, k := range ks {
 		hashedKey := xxhash.Sum64String(keyToString(k))
-		shard := c.getShard(hashedKey)
-		count += shard.del(k)
+		count += c.getShard(g, hashedKey).del(k)
 	}
 	return count
 }
 
 func (c *cache[K, V]) Len() int {
+	g := c.current()
 	var count int
-	for _, shard := range c.shards {
+	for _, shard := range g.shards {
 		count += shard.size()
 	}
 	return count
 }
 
-func (c *cache[K, V]) getShard(hashedKey uint64) (shard *shard[K, V]) {
-	return c.shards[hashedKey&c.shardMask]
+func (c *cache[K, V]) getShard(g *generation[K, V], hashedKey uint64) *shard[K, V] {
+	return g.shards[hashedKey&c.shardMask]
 }
 
+// Clear 用新一代空缓存原子替换旧代, 不在旧 shard 上原地清空, 读者不会观察
+// 到"刚清空但新代尚未发布"的全空窗口。
 func (c *cache[K, V]) Clear() {
-	for _, s := range c.shards {
-		s.clear()
-	}
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	c.gen.Store(newGeneration[K, V](int(c.shardMask) + 1))
 }
 
-// RefreshAll 原子替换缓存的全部内容: 按目标 map 逐 shard 替换,
-// 消除先 Clear 再 Set 之间的空窗口, 避免读者在刷新间隙看到空缓存。
-// 持 refreshMu 串行化整个替换过程, 读者在替换期间仍走旧数据, 不会看到中间空态。
+// RefreshAll 先构造完整新一代再原子发布。构造在后台进行, 不阻塞读者;
+// 发布后新 Set/Get 全部落到新一代, 旧代由 GC 回收。
 func (c *cache[K, V]) RefreshAll(target map[K]V) {
 	c.refreshMu.Lock()
 	defer c.refreshMu.Unlock()
-	for _, shard := range c.shards {
-		shard.clear()
-	}
+	g := newGeneration[K, V](int(c.shardMask) + 1)
 	for k, v := range target {
-		c.Set(k, v)
+		hashedKey := xxhash.Sum64String(keyToString(k))
+		g.shards[hashedKey&c.shardMask].set(k, v)
 	}
+	c.gen.Store(g)
 }

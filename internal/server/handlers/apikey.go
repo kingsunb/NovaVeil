@@ -64,6 +64,9 @@ func createAPIKey(c *gin.Context) {
 	}
 	if err := op.APIKeyCreate(&req, c.Request.Context()); err != nil {
 		switch {
+		case errors.Is(err, op.ErrAPIKeyValidation):
+			// 自定义 Key 长度不足 16: 客户端输入错误(审计 SEC-05/S-L1)。
+			resp.Error(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, op.ErrAPIKeyValueExists):
 			// 用户提交了与现有 Key 相同的明文: 客户端冲突, 应明确 409。
 			resp.Error(c, http.StatusConflict, "API key value already exists")
@@ -140,6 +143,8 @@ func updateAPIKey(c *gin.Context) {
 	req.APIKey = strings.TrimSpace(req.APIKey)
 	if err := op.APIKeyUpdate(&req, c.Request.Context()); err != nil {
 		switch {
+		case errors.Is(err, op.ErrAPIKeyValidation):
+			resp.Error(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, op.ErrAPIKeyValueExists):
 			resp.Error(c, http.StatusConflict, "API key value already exists")
 		case errors.Is(err, op.ErrAPIKeyNotFound):

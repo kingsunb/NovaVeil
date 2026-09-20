@@ -190,12 +190,23 @@ func fetchModel(c *gin.Context) {
 			resp.Error(c, http.StatusNotFound, err.Error())
 			return
 		}
+		// 回退已存渠道同样执行完整出口校验, 防止较早版本写入的私网地址经 fetch-model 回放(审计 SEC-01)。
+		if err := op.ValidateChannelEgressBaseURL(stored.BaseURL); err != nil {
+			resp.Error(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		models, err := helper.FetchModels(c.Request.Context(), stored)
 		if err != nil {
 			resp.Error(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		resp.Success(c, models)
+		return
+	}
+	// 未保存/带 BaseURL 的表单: 提交值尚未经过 ChannelCreate 校验, 必须在发起探测前
+	// 用完整出口校验拦截私网/环回/metadata 地址(审计 SEC-01)。
+	if err := op.ValidateChannelEgressBaseURL(request.BaseURL); err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	request.Key = request.PrimaryKey() // 前端只提交 keys 数组时回退取第一把, 兼容旧客户端直接传 key 字段。
@@ -350,9 +361,10 @@ func importChannel(c *gin.Context) {
 	resp.Success(c, channelImportResult{Success: success, Failed: failed, Errors: errors})
 }
 
-// exportChannel 以纯文本导出全部渠道的地址与所有密钥:
-// 每个渠道一段(首行 # 渠道名, 其次地址, 之后每行一把密钥), 渠道间空行分隔。
-// 内容含明文凭据, 仅限管理员会话访问。
+// exportChannel 以纯文本导出全部渠道的地址与全部密钥掩码:
+// 每个渠道一段(首行 # 渠道名, 其次地址, 之后每行一把密钥掩码), 渠道间空行分隔。
+// 明文上游密钥不再随导出返回(审计 SEC-03): 掩码形如 **** 末四位, 用于跨实例迁移时
+// 核对渠道数量与密钥尾号, 新实例上由管理员重新录入明文。内容仅限管理员会话访问。
 func exportChannel(c *gin.Context) {
 	resp.NoStore(c)
 	log.Warnf("channel export ip=%s", c.ClientIP())
@@ -362,11 +374,11 @@ func exportChannel(c *gin.Context) {
 		keys := make([]string, 0, len(ch.Keys)+1)
 		for _, k := range ch.Keys {
 			if k.Key != "" {
-				keys = append(keys, k.Key)
+				keys = append(keys, channelKeyMasked(k.Key))
 			}
 		}
 		if len(keys) == 0 && ch.Key != "" {
-			keys = append(keys, ch.Key)
+			keys = append(keys, channelKeyMasked(ch.Key))
 		}
 		b.WriteString("# " + ch.Name + "\n")
 		b.WriteString(ch.BaseURL + "\n")

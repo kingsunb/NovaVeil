@@ -16,8 +16,6 @@ export interface UserStatus {
 export interface UserLoginRequest {
   username: string;
   password: string;
-  /** cookie 过期秒数；0 = 默认 */
-  expire: number;
 }
 
 // ============================================================

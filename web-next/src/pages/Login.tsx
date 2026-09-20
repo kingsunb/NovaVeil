@@ -15,7 +15,6 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [remember, setRemember] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const usernameRef = useRef<HTMLInputElement | null>(null);
@@ -31,8 +30,7 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      const expire = remember ? 24 * 3600 : 0;
-      await login(username, password, expire);
+      await login(username, password);
       toast.success(`欢迎回来，${username}`);
       navigate("/dashboard", { replace: true });
     } catch (err) {
@@ -91,21 +89,6 @@ export default function LoginPage() {
               required
               className="h-10"
             />
-          </label>
-
-          <label
-            htmlFor="remember-device"
-            className="flex cursor-pointer items-center gap-2 text-[13px] text-ink-muted"
-          >
-            <input
-              id="remember-device"
-              type="checkbox"
-              checked={remember}
-              onChange={(e) => setRemember(e.target.checked)}
-              aria-label="信任此设备（24 小时内免登录）"
-              className="h-4 w-4 rounded-md border-border/60 accent-[#007AFF]"
-            />
-            信任此设备（24 小时内免登录）
           </label>
 
           {error && (

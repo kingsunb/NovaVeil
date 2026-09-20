@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -165,6 +166,33 @@ func TestSessionSticky(t *testing.T) {
 
 		if _, ok := stickyEntryOf(t, 1, "s1"); ok {
 			t.Fatal("已删除成员的粘合残留未被清理")
+		}
+	})
+
+	t.Run("单分组条目上限", func(t *testing.T) {
+		resetStickyState()
+		group := stickyTestGroup(300, stickyTestItem(11), stickyTestItem(12))
+
+		// 达到单分组上限: 每个 session key 都能正常绑定。
+		for i := 0; i < maxSessionStickiesPerGroup; i++ {
+			key := strconv.Itoa(i)
+			bindSessionSticky(group, key, 11)
+		}
+		routeMu.Lock()
+		got := len(sessionStickies[1])
+		routeMu.Unlock()
+		if got != maxSessionStickiesPerGroup {
+			t.Fatalf("cap 未生效: 条目数 = %d, 期望 %d", got, maxSessionStickiesPerGroup)
+		}
+
+		// 满后新增会话不建立粘合, 已有会话续期不受影响。
+		bindSessionSticky(group, "overflow-session", 11)
+		if _, ok := stickyEntryOf(t, 1, "overflow-session"); ok {
+			t.Fatal("满后新会话不应建立粘合")
+		}
+		existingKey := "0"
+		if _, ok := stickyEntryOf(t, 1, existingKey); !ok {
+			t.Fatal("已有会话粘合不应被满拒绝")
 		}
 	})
 }

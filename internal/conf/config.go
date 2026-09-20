@@ -32,6 +32,16 @@ type Database struct {
 type Security struct {
 	// CookieSecure 控制 auth cookie 是否携带 Secure 属性(仅 HTTPS 下发送), 反代终止 TLS 时应开启
 	CookieSecure bool `mapstructure:"cookie_secure"`
+	// EncryptionKey 可选静态加密主密钥(任意字符串会派生为 32 字节 AES-256 密钥)。
+	// 为空时启动器在数据目录生成 novaveil-encryption.key 并加载, 保证重启后仍可解密库内密文。
+	EncryptionKey string `mapstructure:"encryption_key"`
+	// AdminAPIRateLimitEnabled 为 true 时对 /api/v1 已认证非登录接口启用内存令牌桶限速,
+	// 按 客户端 IP+路由 维度计数。默认关闭, 现有部署行为不变(审计 OLD-26)。
+	AdminAPIRateLimitEnabled bool `mapstructure:"admin_api_rate_limit_enabled"`
+	// AdminAPIRateLimitPerMinute 限速阈值, 仅在启用时生效(默认 120 请求/分钟/IP/路由)。
+	AdminAPIRateLimitPerMinute float64 `mapstructure:"admin_api_rate_limit_per_minute"`
+	// AdminAPIRateLimitBurst 令牌桶容量, 允许的瞬时突发请求数。
+	AdminAPIRateLimitBurst int `mapstructure:"admin_api_rate_limit_burst"`
 }
 
 type Config struct {
@@ -80,6 +90,37 @@ func Load(path string) error {
 		return fmt.Errorf("unable to decode config into struct: %w", err)
 	}
 	applyEnvOverrides()
+	// 审计 OLD-25: 反序列化来自配置文件/环境变量的 host/port/path 等关键项在启动早期
+	// 显式校验, 坏配置在 Init/Start 之前快速失败, 而不是运行到一半以不可读错误炸掉。
+	if err := AppConfig.Validate(); err != nil {
+		return fmt.Errorf("无效配置: %w", err)
+	}
+	return nil
+}
+
+// Validate 校验经 unmarshal + env overrides 后的关键配置项(审计 OLD-25)。
+// host 必须非空; port 必须在 1..65535; database.path 必须非空且不能包含 NUL。
+func (c Config) Validate() error {
+	if strings.TrimSpace(c.Server.Host) == "" {
+		return fmt.Errorf("server.host 不能为空")
+	}
+	if c.Server.Port < 1 || c.Server.Port > 65535 {
+		return fmt.Errorf("server.port 必须在 1-65535 之间")
+	}
+	if strings.TrimSpace(c.Database.Path) == "" {
+		return fmt.Errorf("database.path 不能为空")
+	}
+	if strings.ContainsRune(c.Database.Path, 0) {
+		return fmt.Errorf("database.path 包含非法 NUL 字节")
+	}
+	if c.Security.AdminAPIRateLimitEnabled {
+		if c.Security.AdminAPIRateLimitPerMinute <= 0 {
+			return fmt.Errorf("security.admin_api_rate_limit_per_minute 必须大于 0")
+		}
+		if c.Security.AdminAPIRateLimitBurst < 1 {
+			return fmt.Errorf("security.admin_api_rate_limit_burst 至少为 1")
+		}
+	}
 	return nil
 }
 
@@ -108,4 +149,8 @@ func setDefaults() {
 	viper.SetDefault("database.path", "data/data.db")
 	viper.SetDefault("log.level", "info")
 	viper.SetDefault("security.cookie_secure", false)
+	viper.SetDefault("security.encryption_key", "")
+	viper.SetDefault("security.admin_api_rate_limit_enabled", false)
+	viper.SetDefault("security.admin_api_rate_limit_per_minute", 120)
+	viper.SetDefault("security.admin_api_rate_limit_burst", 30)
 }

@@ -216,6 +216,27 @@ func UserChangeUsername(newUsername, password string) error {
 	return nil
 }
 
+// ErrInitialPasswordFileConsumeFailed 表示首次登录成功后一次性初始密码文件删除失败。
+// 与改密清理一样, 登录本身已成功, 仅遗留一个需运维处理的文件。
+var ErrInitialPasswordFileConsumeFailed = errors.New("login succeeded but initial password file cleanup failed")
+
+// UserConsumeInitialPasswordFile 在初始管理员首次成功登录后删除一次性密码文件,
+// 防止种子密码文件长期留盘(审计 SEC-08)。幂等、可安全重复调用。
+func UserConsumeInitialPasswordFile() error {
+	userMu.Lock()
+	defer userMu.Unlock()
+	if initialPasswordFilePath == "" {
+		return nil
+	}
+	path := initialPasswordFilePath
+	initialPasswordFilePath = ""
+	if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+		log.Warnf("login succeeded but failed to remove initial password file %s: %v", path, rmErr)
+		return ErrInitialPasswordFileConsumeFailed
+	}
+	return nil
+}
+
 func UserVerify(username, password string) error {
 	userMu.RLock()
 	defer userMu.RUnlock()

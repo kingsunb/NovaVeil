@@ -21,6 +21,8 @@ const (
 	loginFailWindow = 15 * time.Minute
 	// loginMaxFailures 滑动窗口内允许的最大失败次数, 达到后拒绝该 IP 登录
 	loginMaxFailures = 5
+	// loginRateLimitDBTimeout 单次限速数据库操作的上界, 避免慢查询拖死请求(审计 OLD-13)。
+	loginRateLimitDBTimeout = 5 * time.Second
 )
 
 // loginLimiter 登录限速器: 失败计数持久化在 login_attempts 表中, 多副本部署共享同一份窗口计数。
@@ -57,12 +59,18 @@ func (l *loginRateLimiter) dbConn() *gorm.DB {
 // check 返回该 IP 是否允许再次尝试登录; 不允许时同时返回建议等待时长(Retry-After)。
 // 数据库查询失败时拒绝放行(fail-close): 限速计数依赖数据库, 故障时放行等于放大
 // 限速失效风险; 返回 (false, 0) 由调用方按超限处理, 保证安全侧不因故障旁路。
-func (l *loginRateLimiter) check(ip string) (bool, time.Duration) {
+func (l *loginRateLimiter) check(ctx context.Context, ip string) (bool, time.Duration) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, loginRateLimitDBTimeout)
+	defer cancel()
+
 	now := l.now()
-	l.sweepIfNeeded(now)
+	l.sweepIfNeeded(ctx, now)
 
 	var attempts []model.LoginAttempt
-	err := l.dbConn().WithContext(context.Background()).
+	err := l.dbConn().WithContext(ctx).
 		Where("ip = ? AND created_at > ?", ip, now.Add(-l.window)).
 		Order("created_at ASC").
 		Limit(l.maxFails).
@@ -82,25 +90,36 @@ func (l *loginRateLimiter) check(ip string) (bool, time.Duration) {
 	return true, 0
 }
 
-func (l *loginRateLimiter) recordFailure(ip string) {
+func (l *loginRateLimiter) recordFailure(ctx context.Context, ip string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, loginRateLimitDBTimeout)
+	defer cancel()
+
 	now := l.now()
-	l.sweepIfNeeded(now)
+	l.sweepIfNeeded(ctx, now)
 	attempt := model.LoginAttempt{IP: ip, CreatedAt: now}
-	if err := l.dbConn().WithContext(context.Background()).Create(&attempt).Error; err != nil {
+	if err := l.dbConn().WithContext(ctx).Create(&attempt).Error; err != nil {
 		log.Errorf("login rate limit record error: %v", err)
 	}
 }
 
 // reset 登录成功后清零该 IP 的失败计数。
-func (l *loginRateLimiter) reset(ip string) {
-	if err := l.dbConn().WithContext(context.Background()).Where("ip = ?", ip).Delete(&model.LoginAttempt{}).Error; err != nil {
+func (l *loginRateLimiter) reset(ctx context.Context, ip string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, loginRateLimitDBTimeout)
+	defer cancel()
+	if err := l.dbConn().WithContext(ctx).Where("ip = ?", ip).Delete(&model.LoginAttempt{}).Error; err != nil {
 		log.Errorf("login rate limit reset error: %v", err)
 	}
 }
 
 // sweepIfNeeded 惰性全表清理: 距上次清扫超过 window/4 时删除全部窗口外过期行,
 // 防止长期运行下表无限增长。清理失败仅记日志, 不影响本次判定。
-func (l *loginRateLimiter) sweepIfNeeded(now time.Time) {
+func (l *loginRateLimiter) sweepIfNeeded(ctx context.Context, now time.Time) {
 	l.mu.Lock()
 	due := l.lastSweep.IsZero() || now.Sub(l.lastSweep) >= l.window/4
 	if due {
@@ -110,7 +129,7 @@ func (l *loginRateLimiter) sweepIfNeeded(now time.Time) {
 	if !due {
 		return
 	}
-	if err := l.dbConn().WithContext(context.Background()).Where("created_at <= ?", now.Add(-l.window)).Delete(&model.LoginAttempt{}).Error; err != nil {
+	if err := l.dbConn().WithContext(ctx).Where("created_at <= ?", now.Add(-l.window)).Delete(&model.LoginAttempt{}).Error; err != nil {
 		log.Errorf("login rate limit sweep error: %v", err)
 	}
 }

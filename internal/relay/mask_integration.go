@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"sort"
 	"strings"
 	"time"
 
@@ -115,14 +116,15 @@ func restoreNonStream(body []byte, mapping *mask.Mapping) []byte {
 //
 // 按客户端协议提取增量文本字段, 用 StreamRestorer.Push 做跨 chunk 缓冲拼接还原后写回。
 // sjson.SetBytes 自动处理 JSON 转义, 保证还原后的 JSON 结构合法。
-// 同时还原 tool_calls.N.function.arguments 中的占位符(按事件还原, 不缓冲)。
+// reasoning_content 使用独立通道 "reasoning" 缓冲, 避免与 content 通道的 pending 混合。
+// tool_calls.N.function.arguments 按槽位独立缓冲还原(跨 chunk 拆分的占位符可闭合)。
 // 中途无内容返回原 data(不写出空事件, 避免断流)。
 func restoreStreamEvent(data []byte, format llm.APIFormat, restorer *mask.StreamRestorer) []byte {
 	if restorer == nil {
 		return data
 	}
-	path := streamContentPath(data, format)
-	if path != "" {
+	// content / text 主文本字段: 使用默认通道。
+	if path := streamContentPath(data, format); path != "" {
 		text := gjson.GetBytes(data, path).String()
 		if text != "" {
 			restored := restorer.Push([]byte(text))
@@ -135,13 +137,26 @@ func restoreStreamEvent(data []byte, format llm.APIFormat, restorer *mask.Stream
 			data = out
 		}
 	}
-	// tool-call arguments 还原: 按事件整词替换(不缓冲, arguments 跨事件拆分极罕见)。
+	// reasoning_content: DeepSeek/Qwen 等推理字段, 使用独立通道避免与 content pending 混合。
+	if rcPath := streamReasoningPath(data, format); rcPath != "" {
+		text := gjson.GetBytes(data, rcPath).String()
+		if text != "" {
+			restored := restorer.PushChannel(mask.ReasoningChannel, []byte(text))
+			if len(restored) == 0 {
+				out, _ := sjson.SetBytes(data, rcPath, "")
+				return out
+			}
+			out, _ := sjson.SetBytes(data, rcPath, string(restored))
+			data = out
+		}
+	}
+	// tool-call arguments: 按槽位独立缓冲还原。
 	data = restoreToolCallArgs(data, format, restorer)
 	return data
 }
 
 // restoreToolCallArgs 还原 OpenAI Chat 流式 tool_calls 的 function.arguments 占位符。
-// arguments 是 JSON 字符串增量, 用 RestoreString 做整词替换。
+// arguments 是 JSON 字符串增量, 按 tool-call index 使用独立通道缓冲, 使跨 chunk 拆分的占位符可闭合。
 func restoreToolCallArgs(data []byte, format llm.APIFormat, restorer *mask.StreamRestorer) []byte {
 	if format != llm.APIFormatOpenAIChatCompletion {
 		return data
@@ -150,7 +165,6 @@ func restoreToolCallArgs(data []byte, format llm.APIFormat, restorer *mask.Strea
 	if !toolCalls.Exists() || !toolCalls.IsArray() {
 		return data
 	}
-	changed := false
 	arr := toolCalls.Array()
 	for i := range arr {
 		argPath := "choices.0.delta.tool_calls." + itoa(i) + ".function.arguments"
@@ -162,14 +176,14 @@ func restoreToolCallArgs(data []byte, format llm.APIFormat, restorer *mask.Strea
 		if s == "" {
 			continue
 		}
-		restored := mask.RestoreString(s, restorer.Mapping())
-		if restored != s {
-			out, _ := sjson.SetBytes(data, argPath, restored)
+		// 按 tool-call index 独立通道缓冲, 跨 chunk 拆分的占位符可闭合。
+		channel := mask.ToolChannelPrefix + itoa(i)
+		restored := restorer.PushChannel(channel, []byte(s))
+		if string(restored) != s {
+			out, _ := sjson.SetBytes(data, argPath, string(restored))
 			data = out
-			changed = true
 		}
 	}
-	_ = changed
 	return data
 }
 
@@ -196,29 +210,66 @@ func itoa(i int) string {
 	return string(buf[pos:])
 }
 
-// flushStreamRestorer 在流终止时调用, 返回残留 pending 的 SSE 事件 data(已按协议包装)。
+// flushStreamRestorer 在流终止时调用, 返回各通道残留 pending 的 SSE 事件 data(已按协议包装)。
 // 无残留返回 nil, 调用方跳过。残留只含未闭合前缀(非占位符), 原样输出让客户端可见。
-func flushStreamRestorer(restorer *mask.StreamRestorer, format llm.APIFormat) []byte {
+// 默认通道残留写入正文 delta, reasoning/tool-N 通道分别写回对应字段, 绝不混写。
+func flushStreamRestorer(restorer *mask.StreamRestorer, format llm.APIFormat) [][]byte {
 	if restorer == nil {
 		return nil
 	}
-	remain := restorer.Flush()
-	if len(remain) == 0 {
+	pending := restorer.FlushChannels()
+	if len(pending) == 0 {
 		return nil
 	}
-	s := string(remain)
+	// 出队顺序确定性: default → reasoning → tool-N(按槽位升序)。
+	channels := make([]string, 0, len(pending))
+	for ch := range pending {
+		channels = append(channels, ch)
+	}
+	sort.Strings(channels)
+	out := make([][]byte, 0, len(channels))
+	for _, ch := range channels {
+		if ch == mask.DefaultChannel {
+			data := flushChannelData(format, ch, string(pending[ch]))
+			if data != nil {
+				out = append(out, data)
+			}
+			continue
+		}
+		// 非默认通道只有 OpenAI Chat 协议支持(reasoning_content / tool_calls)。
+		if format != llm.APIFormatOpenAIChatCompletion {
+			continue
+		}
+		switch {
+		case ch == mask.ReasoningChannel:
+			out = append(out, mustSetJSONBytes(nil, "choices.0.delta.reasoning_content", string(pending[ch])))
+		case strings.HasPrefix(ch, mask.ToolChannelPrefix):
+			idx := strings.TrimPrefix(ch, mask.ToolChannelPrefix)
+			out = append(out, mustSetJSONBytes(nil, "choices.0.delta.tool_calls."+idx+".function.arguments", string(pending[ch])))
+		}
+	}
+	return out
+}
+
+// flushChannelData 把单通道残留包装为协议对应的内容 delta 事件。默认通道外的字段由
+// flushStreamRestorer 在 OpenAI Chat 分支单独构造。
+func flushChannelData(format llm.APIFormat, _ string, remain string) []byte {
 	switch format {
 	case llm.APIFormatOpenAIChatCompletion:
-		out, _ := sjson.SetBytes(nil, "choices.0.delta.content", s)
-		return out
+		return mustSetJSONBytes(nil, "choices.0.delta.content", remain)
 	case llm.APIFormatAnthropicMessage:
-		out, _ := sjson.SetBytes(nil, "delta.text", s)
-		return out
+		return mustSetJSONBytes(nil, "delta.text", remain)
 	case llm.APIFormatOpenAIResponse:
-		out, _ := sjson.SetBytes(nil, "delta", s)
-		return out
+		return mustSetJSONBytes(nil, "delta", remain)
 	}
 	return nil
+}
+
+// mustSetJSONBytes 与 sjson.SetBytes 同义, 仅在纯内存构造的 nil root 上使用,
+// 错误永远不会发生; 返回 nil 仅防御未来意外。便于 flush 路径保持零日志开销。
+func mustSetJSONBytes(root []byte, path, value string) []byte {
+	out, _ := sjson.SetBytes(root, path, value)
+	return out
 }
 
 // pruneMaskSessions 回收超过 TTL 未访问的脱敏会话映射。
@@ -226,7 +277,7 @@ func pruneMaskSessions() {
 	maskSessionStore.PruneExpired(time.Now())
 }
 
-// streamContentPath 按协议返回 SSE 事件中增量文本字段的 gjson 路径, 无匹配返回空。
+// streamContentPath 按协议返回 SSE 事件中增量正文文本字段的 gjson 路径, 无匹配返回空。
 func streamContentPath(data []byte, format llm.APIFormat) string {
 	switch format {
 	case llm.APIFormatOpenAIChatCompletion:
@@ -241,6 +292,18 @@ func streamContentPath(data []byte, format llm.APIFormat) string {
 		// response.output_text.delta 事件的 delta 是字符串增量
 		if gjson.GetBytes(data, "delta").Type == gjson.String {
 			return "delta"
+		}
+	}
+	return ""
+}
+
+// streamReasoningPath 返回 SSE 事件中推理增量字段的 gjson 路径, 无匹配返回空。
+// DeepSeek/Qwen 等模型在 choices.0.delta.reasoning_content 中输出推理过程,
+// 脱敏占位符可能出现在该字段中, 须与 content 独立缓冲还原。
+func streamReasoningPath(data []byte, format llm.APIFormat) string {
+	if format == llm.APIFormatOpenAIChatCompletion {
+		if gjson.GetBytes(data, "choices.0.delta.reasoning_content").Exists() {
+			return "choices.0.delta.reasoning_content"
 		}
 	}
 	return ""

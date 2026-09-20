@@ -82,6 +82,10 @@ func channelDisabledForRouting(item model.GroupItem) bool {
 // 配置了紧急兜底成员且常规规则一无所获(整批探测失败, 或其余成员全部冷却中被排除)时,
 // 在并发上限内节流式放行紧急成员作为本轮目标, 由 recordRouteSuccess/recordRouteFailure/releaseRouteProbe 归还占用。
 func pickGroupItem(group model.Group, exclude int, clientFormat ...llm.APIFormat) model.GroupItem {
+	return pickGroupItemWithContext(context.Background(), group, exclude, clientFormat...)
+}
+
+func pickGroupItemWithContext(ctx context.Context, group model.Group, exclude int, clientFormat ...llm.APIFormat) model.GroupItem {
 	if group.Mode == model.GroupModeManual {
 		for _, item := range group.Items {
 			if item.ID == group.ActiveItemID {
@@ -167,7 +171,7 @@ func pickGroupItem(group model.Group, exclude int, clientFormat ...llm.APIFormat
 		}
 		publishRouteLocked(route)
 		routeMu.Unlock()
-		if item := recoverExpiredItems(group, expired); item.ID != 0 {
+		if item := recoverExpiredItems(ctx, group, expired); item.ID != 0 {
 			return item
 		}
 		// 整批探测失败, 常规规则确认一无所获, 落入紧急兜底判定。
@@ -302,13 +306,14 @@ func syncEmergencySummaryLocked(route *RouteState) {
 // recoverExpiredItems 对已切换为 HALF_OPEN 的到期成员并行发送合成测试请求, 取最先成功者作为候选返回。
 // 任一成员成功即取消其余探测, 被取消成员不出结论并保持原冷却等待下一批; 整批失败时各成员等级加一,
 // 冷却按倍数指数退避且不超过上限后重新 OPEN。探测与请求生命周期解耦, 请求取消不影响全局状态收敛。
-func recoverExpiredItems(group model.Group, candidates []model.GroupItem) model.GroupItem {
+func recoverExpiredItems(ctx context.Context, group model.Group, candidates []model.GroupItem) model.GroupItem {
 	timeout := group.RelayConfig.MemberNonStreamResponseTimeoutSeconds
 	if timeout < 1 {
 		timeout = model.DefaultGroupRelayConfig().MemberNonStreamResponseTimeoutSeconds
 	}
 
-	ctx, cancelAll := context.WithCancel(context.Background())
+	// OLD-12: 探测取消与请求生命周期绑定, 不再使用 context.Background()。
+	ctx, cancelAll := context.WithCancel(ctx)
 	defer cancelAll()
 
 	type probeResult struct {
@@ -604,6 +609,10 @@ type refHop struct {
 // 各分组的路由状态按 group.ID 独立, 目标分组内部因此享有完整的三态熔断/冷却/半开语义。
 // clientFormat 透传给本层 pickGroupItem, 使引用目标分组同样获得同协议优先的候选排序。
 func pickRefChainHop(group model.Group, sessionKey string, exclude int, clientFormat ...llm.APIFormat) model.GroupItem {
+	return pickRefChainHopWithContext(context.Background(), group, sessionKey, exclude, clientFormat...)
+}
+
+func pickRefChainHopWithContext(ctx context.Context, group model.Group, sessionKey string, exclude int, clientFormat ...llm.APIFormat) model.GroupItem {
 	item := model.GroupItem{}
 	if sessionStickyEnabled(group, sessionKey) {
 		item = pickSessionSticky(group, sessionKey)
@@ -623,6 +632,10 @@ func pickRefChainHop(group model.Group, sessionKey string, exclude int, clientFo
 // 运行期以 visited 集合加深度上限双保险防环, 即使存量数据绕过了配置校验也不会死循环。
 // clientFormat 原样透传给沿途每一跳的 pickRefChainHop。
 func resolveGroupRefChain(top model.Group, first model.GroupItem, sessionKey string, exclude int, clientFormat ...llm.APIFormat) (hops []refHop, failedIdx int) {
+	return resolveGroupRefChainWithContext(context.Background(), top, first, sessionKey, exclude, clientFormat...)
+}
+
+func resolveGroupRefChainWithContext(ctx context.Context, top model.Group, first model.GroupItem, sessionKey string, exclude int, clientFormat ...llm.APIFormat) (hops []refHop, failedIdx int) {
 	hops = append(hops, refHop{group: top, item: first})
 	visited := map[int]bool{top.ID: true}
 	item := first
@@ -637,7 +650,7 @@ func resolveGroupRefChain(top model.Group, first model.GroupItem, sessionKey str
 			return hops, fail
 		}
 		visited[next.ID] = true
-		nextItem := pickRefChainHop(next, sessionKey, exclude, clientFormat...)
+		nextItem := pickRefChainHopWithContext(ctx, next, sessionKey, exclude, clientFormat...)
 		if nextItem.ID == 0 {
 			return hops, fail
 		}
@@ -860,6 +873,10 @@ func cloneRouteState(route *RouteState) RouteState {
 	message.Levels = maps.Clone(route.Levels)
 	message.HalfOpens = maps.Clone(route.HalfOpens)
 	message.PostCommitStrikes = maps.Clone(route.PostCommitStrikes)
+	// REL-07/R-I1: 紧急兜底的两个进程内 map 也必须深拷贝, 否则 SSE 快照与发布
+	// 共享同一条底层 map, 后续状态更新会原地修改已发布给订阅方的快照。
+	message.emergencyCounts = maps.Clone(route.emergencyCounts)
+	message.emergencyBlocks = maps.Clone(route.emergencyBlocks)
 	return message
 }
 

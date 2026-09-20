@@ -165,6 +165,7 @@ describe("<App /> 首登强制改密", () => {
     });
     await user.type(screen.getByPlaceholderText("当前密码"), "old-password");
     await user.type(screen.getByPlaceholderText("新密码（≥8 位）"), "new-password-123");
+    await user.type(screen.getByPlaceholderText("确认新密码"), "new-password-123");
     await user.click(screen.getByRole("button", { name: "更新密码" }));
     // ChangePasswordForm 成功后 refreshStatus() 拉回 must_change_password=false，
     // 改密门自动放行进入 Dashboard

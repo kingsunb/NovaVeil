@@ -61,7 +61,7 @@ set `NOVAVEIL_BIND_ADDRESS` explicitly and protect the port with HTTPS and a fir
 
 ### 📦 Download from Release
 
-> ⚠️ No GitHub Release has been published yet (the repository currently has no tags or releases). Build the single binary from source below, or have an operator manually trigger the `release` / `build` workflow to publish `ghcr.io/kingsunb/novaveil`.
+> ⚠️ No GitHub Release has been published yet (the repository currently has no tags or releases). Build the single binary from source below, or have an operator manually trigger the `build` workflow to run the full multi-arch archive/image audit. Pushes to `main` auto-publish `ghcr.io/kingsunb/novaveil` via the `docker-publish` workflow.
 
 ### 🛠️ Build from Source
 

@@ -11,6 +11,27 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/model"
 )
 
+func TestAPIKeyCreateRejectsShortCustomKey(t *testing.T) {
+	ctx := context.Background()
+	key := model.APIKey{Name: "short-create-key", APIKey: "short-key-123", Enabled: true}
+	if err := APIKeyCreate(&key, ctx); !errors.Is(err, ErrAPIKeyValidation) {
+		t.Fatalf("APIKeyCreate short key error = %v, want ErrAPIKeyValidation", err)
+	}
+}
+
+func TestAPIKeyUpdateRejectsShortCustomKey(t *testing.T) {
+	ctx := context.Background()
+	key := model.APIKey{Name: "short-update-key", APIKey: "sk-test-short-update-key-0001", Enabled: true}
+	if err := APIKeyCreate(&key, ctx); err != nil {
+		t.Fatalf("APIKeyCreate: %v", err)
+	}
+	t.Cleanup(func() { _ = APIKeyDelete(key.ID, ctx) })
+
+	update := model.APIKey{ID: key.ID, Name: key.Name, APIKey: "short-key-123", Enabled: true}
+	if err := APIKeyUpdate(&update, ctx); !errors.Is(err, ErrAPIKeyValidation) {
+		t.Fatalf("APIKeyUpdate short key error = %v, want ErrAPIKeyValidation", err)
+	}
+}
 func TestAPIKeyUpdateKeepsSecretWhenOmitted(t *testing.T) {
 	ctx := context.Background()
 	key := model.APIKey{

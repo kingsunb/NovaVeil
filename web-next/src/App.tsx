@@ -15,7 +15,7 @@ import {
   TableSkeleton,
 } from "@/components/ui/skeleton";
 import { ForceChangePassword } from "@/components/auth/ForceChangePassword";
-import { loadFlags, shouldUseNewWeb, type Flags } from "@/lib/flags";
+import { loadFlags, safeLegacyHref, shouldUseNewWeb, type Flags } from "@/lib/flags";
 import {
   loadChannelsPage,
   loadChatPage,
@@ -297,7 +297,7 @@ function RollbackNotice({ flags }: { flags: Flags }) {
           为保证灰度期间体验稳定，您被分到了旧版控制台。如需尝试新版，请使用邀请链接或联系管理员调整灰度比例。
         </p>
         <div className="mt-4 flex gap-2">
-          <a href={flags["legacy-path"]}>
+          <a href={safeLegacyHref(flags["legacy-path"])}>
             <Button variant="primary" size="sm">
               进入旧版控制台
             </Button>

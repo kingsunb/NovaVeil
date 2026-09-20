@@ -328,3 +328,80 @@ describe("<KeysPage /> 创建时间与最后使用时间", () => {
     expect(screen.getByText("从未使用")).toBeInTheDocument();
   });
 });
+
+
+describe("<KeysPage /> 密钥明文 reveal 不走 React Query", () => {
+  it("点眼睛直接 fetch 明文并展示，query cache 不落明文", async () => {
+    const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    let secretCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url.includes("/apikey/list")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                code: 200,
+                message: "success",
+                data: [
+                  {
+                    id: 7,
+                    name: "k7",
+                    api_key_masked: "sk-lo…7ABC",
+                    enabled: true,
+                    max_concurrent: 0,
+                    rate_limit_rpm: 0,
+                  },
+                ],
+              }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
+          );
+        }
+        if (url.includes("/apikey/secret/7")) {
+          secretCalls++;
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                code: 200,
+                message: "success",
+                data: { api_key: "sk-PLAIN-7ABC" },
+              }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
+          );
+        }
+        return mockFetchJson(null)();
+      }),
+    );
+
+    render(<KeysPage />, {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <QueryClientProvider client={qc}>
+          <MemoryRouter>{children}</MemoryRouter>
+        </QueryClientProvider>
+      ),
+    });
+
+    await screen.findByText("k7");
+    await user.click(screen.getByRole("button", { name: "编辑密钥 k7" }));
+    await user.click(screen.getByRole("button", { name: "显示密钥" }));
+
+    await waitFor(() => {
+      expect(secretCalls).toBe(1);
+      expect(screen.getByLabelText("API 密钥明文")).toHaveValue("sk-PLAIN-7ABC");
+    });
+    // 明文由组件 state 持有，不进入 React Query cache。
+    expect(qc.getQueryData(["apikeys", "secret", 7])).toBeUndefined();
+
+    // 隐藏后立即清空明文；关闭前都不缓存。
+    await user.click(screen.getByRole("button", { name: "隐藏密钥" }));
+    expect(screen.getByLabelText("API 密钥明文")).toHaveValue("••••••••••••••••");
+    expect(qc.getQueryData(["apikeys", "secret", 7])).toBeUndefined();
+
+    vi.unstubAllGlobals();
+  });
+});

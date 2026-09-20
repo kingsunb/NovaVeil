@@ -48,16 +48,20 @@ func Auth() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		c.Next()
+		// 管理 API 限速在鉴权成功后生效; 登录接口不经 Auth, 不受此限(审计 OLD-26)。
+		adminRateLimit(c)
 	}
 }
 
 // SetAuthCookie 设置认证 cookie, 统一 SameSite/HttpOnly/Secure 属性
 func SetAuthCookie(c *gin.Context, value string, maxAge int) {
 	c.SetSameSite(http.SameSiteLaxMode)
-	// 请求本身走 TLS 时强制 Secure=true: 客户端已具备 HTTPS 通道, 按配置漏开
-	// Secure 会导致凭据经明文链路回传; 反代/直连均以此兜底, 只可能更安全不会更弱。
-	secure := conf.AppConfig.Security.CookieSecure || c.Request.TLS != nil
+	// 请求本身走 TLS, 或可信反代已终止 TLS 并显式传入 X-Forwarded-Proto: https 时,
+	// Secure=true: 客户端与反代之间已是 HTTPS 通道, 漏开 Secure 会导致凭据经明文链路回传。
+	// 直连部署不配置反代时请求头可被客户端任意伪造, 但此处只可能把 cookie 设得更严格,
+	// 不会弱于现状; 真正信任 XFF/代理头仍以 conf.Server.TrustedProxies 为准。
+	secure := conf.AppConfig.Security.CookieSecure || c.Request.TLS != nil ||
+		strings.EqualFold(strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")), "https")
 	c.SetCookie(AuthCookieName, value, maxAge, AuthCookiePath, "", secure, true)
 }
 
@@ -73,7 +77,14 @@ func APIKeyAuth() gin.HandlerFunc {
 		if key := c.Request.Header.Get("x-api-key"); key != "" {
 			apiKey = key
 		} else if authorization := c.Request.Header.Get("Authorization"); authorization != "" {
-			apiKey = strings.TrimPrefix(authorization, "Bearer ")
+			// 只接受 Bearer scheme: 非 Bearer(如 Basic/自定义 scheme)按 401 拒绝,
+			// 而不是把 scheme 一起塞进 API Key 查询(审计 SEC-06)。
+			parts := strings.Fields(authorization)
+			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+				resp.RelayError(c, http.StatusUnauthorized, "不支持的 Authorization scheme，仅接受 Bearer <token>")
+				return
+			}
+			apiKey = parts[1]
 		}
 
 		if apiKey == "" {

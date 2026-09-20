@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
@@ -45,7 +46,7 @@ func init() {
 
 func login(c *gin.Context) {
 	ip := c.ClientIP()
-	if allowed, retryAfter := loginLimiter.check(ip); !allowed {
+	if allowed, retryAfter := loginLimiter.check(c.Request.Context(), ip); !allowed {
 		rejectRateLimited(c, retryAfter)
 		return
 	}
@@ -55,12 +56,17 @@ func login(c *gin.Context) {
 		return
 	}
 	if err := op.UserVerify(user.Username, user.Password); err != nil {
-		loginLimiter.recordFailure(ip)
+		loginLimiter.recordFailure(c.Request.Context(), ip)
 		resp.Error(c, http.StatusUnauthorized, resp.ErrUnauthorized)
 		return
 	}
-	loginLimiter.reset(ip)
-	token, maxAge, err := auth.GenerateJWTToken(user.Expire)
+	// SEC-08/S-L6: 首次登录成功即删除一次性初始密码文件; 删除失败(极少数权限/IO
+	// 错误)只记日志, 不阻断本轮登录——文件仍是 0600 且仅初始 admin 可读目录。
+	if err := op.UserConsumeInitialPasswordFile(); err != nil {
+		log.Warnf("login succeeded but failed to remove initial password file: %v", err)
+	}
+	loginLimiter.reset(c.Request.Context(), ip)
+	token, maxAge, err := auth.GenerateJWTToken()
 	if err != nil {
 		resp.Error(c, http.StatusInternalServerError, resp.ErrInternalServer)
 		return

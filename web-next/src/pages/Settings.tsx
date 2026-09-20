@@ -25,6 +25,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ConfirmButton } from "@/components/ui/confirm-button";
 import { Input, Textarea } from "@/components/ui/input";
 import { Pill } from "@/components/ui/pill";
 import { Select } from "@/components/ui/select";
@@ -1068,24 +1069,14 @@ function ConversationSection() {
           </Field>
         </div>
         <div className="flex items-center justify-end gap-2">
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={() => {
-              if (
-                confirm(
-                  `清空全部对话留存归档?${stats?.file_count ?? 0} 个文件将被立即删除,该操作不可恢复`,
-                )
-              ) {
-                clearMut.mutate();
-              }
-            }}
+          <ConfirmButton
+            tone="destructive"
+            label="清空归档"
+            loadingLabel="清空中…"
             loading={clearMut.isPending}
             disabled={!stats?.file_count}
-          >
-            <Trash2 className="h-3.5 w-3.5" aria-hidden />
-            清空归档
-          </Button>
+            onConfirm={() => clearMut.mutate()}
+          />
           <Button
             variant="primary"
             size="sm"
@@ -1794,12 +1785,21 @@ function BackupSection() {
       qc.invalidateQueries({ queryKey: ["channels"] });
       qc.invalidateQueries({ queryKey: ["groups"] });
       qc.invalidateQueries({ queryKey: ["keys"] });
+      qc.invalidateQueries({ queryKey: ["apikeys", "secret"] });
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["setting"] });
       qc.invalidateQueries({ queryKey: ["channel-last-sync-time"] });
       qc.invalidateQueries({ queryKey: ["conversation", "stats"] });
       qc.invalidateQueries({ queryKey: ["now-version"] });
       qc.invalidateQueries({ queryKey: ["client-stats"] });
+      qc.invalidateQueries({ queryKey: ["mask-config"] });
+      qc.invalidateQueries({ queryKey: ["mask-rules"] });
+      qc.invalidateQueries({ queryKey: ["usage-heatmap"] });
+      qc.invalidateQueries({ queryKey: ["token-trends"] });
+      qc.invalidateQueries({ queryKey: ["recent-errors"] });
+      qc.invalidateQueries({ queryKey: ["log-errors"] });
+      qc.invalidateQueries({ queryKey: ["log-stop-all-state"] });
+      qc.invalidateQueries({ queryKey: ["model-eval"] });
     },
     onError: (e: Error) => toast.error(e.message || "导入失败"),
   });

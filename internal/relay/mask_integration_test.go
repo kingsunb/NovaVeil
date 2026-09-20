@@ -6,6 +6,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/tidwall/gjson"
+
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/kingsunb/NovaVeil/internal/relay/mask"
@@ -142,6 +144,41 @@ func TestRestoreStreamEvent_NoContentField(t *testing.T) {
 	out := restoreStreamEvent(data, llm.APIFormatOpenAIChatCompletion, restorer)
 	if string(out) != string(data) {
 		t.Errorf("event without content field should be unchanged: %s", out)
+	}
+}
+
+// TestFlushStreamRestorerWrapsChannels 验证流终止时各通道残留按字段写回:
+// default → content, reasoning → reasoning_content, tool-N → tool_calls.N.function.arguments(审计 REL-04)。
+func TestFlushStreamRestorerWrapsChannels(t *testing.T) {
+	r := mask.NewStreamRestorer(nil)
+	_ = r.PushChannel(mask.DefaultChannel, []byte("text {{incomplete"))
+	_ = r.PushChannel(mask.ReasoningChannel, []byte("think {{x"))
+	_ = r.PushChannel(mask.ToolChannelPrefix+"0", []byte(`{"a":"{{y`))
+
+	frames := flushStreamRestorer(r, llm.APIFormatOpenAIChatCompletion)
+	if len(frames) != 3 {
+		t.Fatalf("frames = %d, want 3", len(frames))
+	}
+	if got := gjson.GetBytes(frames[0], "choices.0.delta.content").String(); got != "{{incomplete" {
+		t.Errorf("default channel not wrapped as content delta: %s", frames[0])
+	}
+	if got := gjson.GetBytes(frames[1], "choices.0.delta.reasoning_content").String(); got != "{{x" {
+		t.Errorf("reasoning channel not wrapped as reasoning_content delta: %s", frames[1])
+	}
+	if got := gjson.GetBytes(frames[2], "choices.0.delta.tool_calls.0.function.arguments").String(); got != "{{y" {
+		t.Errorf("tool channel not wrapped as tool_calls.0.function.arguments delta: %s", frames[2])
+	}
+
+	// Anthropic 只支持正文字段, 非默认通道残留不输出。
+	r2 := mask.NewStreamRestorer(nil)
+	_ = r2.PushChannel(mask.DefaultChannel, []byte("text {{incomplete"))
+	_ = r2.PushChannel(mask.ReasoningChannel, []byte("think {{x"))
+	frames2 := flushStreamRestorer(r2, llm.APIFormatAnthropicMessage)
+	if len(frames2) != 1 {
+		t.Fatalf("anthropic frames = %d, want 1", len(frames2))
+	}
+	if got := gjson.GetBytes(frames2[0], "delta.text").String(); got != "{{incomplete" {
+		t.Errorf("anthropic default channel not wrapped as delta.text: %s", frames2[0])
 	}
 }
 
@@ -321,7 +358,7 @@ func TestTruncateMaskMatches(t *testing.T) {
 	})
 
 	t.Run("field bytes truncated at UTF-8 boundary without broken rune", func(t *testing.T) {
-		longLabel := strings.Repeat("中", 20)       // 60 字节, 超 32 字节上限, 边界落在多字节字符内。
+		longLabel := strings.Repeat("中", 20)        // 60 字节, 超 32 字节上限, 边界落在多字节字符内。
 		longOriginal := strings.Repeat("o", 300)    // 超 256 字节上限。
 		longPlaceholder := strings.Repeat("p", 100) // 超 64 字节上限。
 		got, truncated := truncateMaskMatches([]mask.Match{{Label: longLabel, Original: longOriginal, Placeholder: longPlaceholder}})

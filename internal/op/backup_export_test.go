@@ -11,8 +11,8 @@ import (
 )
 
 // TestDBExportAllCredentialAudit 复核备份导出的凭据暴露面:
-// users 表(含 bcrypt 密码哈希)不得出现在导出中; 渠道 Key 与 API Key 明文属备份还原本意保留,
-// 但导出文件头部必须携带敏感信息提示。
+// users 表(含 bcrypt 密码哈希)不得出现在导出中; 渠道 Key、渠道代理与 API Key
+// 明文在导出时统一替换为 "****"(SEC-04), 但导出文件头部必须携带敏感信息提示。
 func TestDBExportAllCredentialAudit(t *testing.T) {
 	ctx := context.Background()
 
@@ -67,23 +67,29 @@ func TestDBExportAllCredentialAudit(t *testing.T) {
 	if strings.Contains(exported, bcryptHash) {
 		t.Fatal("export must not contain user bcrypt hash")
 	}
-	// 凭据属备份本意保留: 渠道 Key 与 API Key 明文必须在导出中可还原。
+	if strings.Contains(exported, markerKey) {
+		t.Fatal("export must not leak channel plaintext key")
+	}
+	if strings.Contains(exported, markerUser) {
+		t.Fatal("export must not leak API plaintext key")
+	}
+	// 凭据一律脱敏为 "****", 备份文件中不存在可用上游密钥(审计 SEC-04/S-M5/S-M6)。
 	foundChannelKey, foundAPIKey := false, false
 	for _, ch := range dump.Channels {
 		if ch.ID == channelID {
-			foundChannelKey = ch.Key == markerKey
+			foundChannelKey = ch.Key == "****"
 		}
 	}
 	for _, ak := range dump.APIKeys {
 		if ak.ID == apiKeyID {
-			foundAPIKey = ak.APIKey == markerUser
+			foundAPIKey = ak.APIKey == "****"
 		}
 	}
 	if !foundChannelKey {
-		t.Fatal("channel key must be preserved verbatim in export (backup intent)")
+		t.Fatal("channel key must be redacted to **** in export")
 	}
 	if !foundAPIKey {
-		t.Fatal("api key must be preserved verbatim in export (backup intent)")
+		t.Fatal("api key must be redacted to **** in export")
 	}
 
 	// 敏感信息提示必须写入导出文件头部 note 字段。

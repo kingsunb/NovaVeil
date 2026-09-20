@@ -11,36 +11,31 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/op"
 )
 
-func GenerateJWTToken(expiresSec int) (string, int, error) {
+// sessionMaxAge 是登录会话的固定有效期(秒)。
+// 历史上登录 expire 由客户端提交并钳到 24h(审计 L-8 修复); 现已移除客户端可配置,
+// 统一固定 24 小时: JWT exp 与 cookie MaxAge 均按此签发。
+const sessionMaxAge = 24 * 3600
+
+// GenerateJWTToken 签发一个固定 24 小时有效的 JWT, 返回 (token, maxAge秒)。
+// maxAge 供 SetAuthCookie 设置 cookie MaxAge; 有效期不再由调用方指定。
+func GenerateJWTToken() (string, int, error) {
 	secret, err := op.AuthJWTSecretGet()
 	if err != nil {
 		return "", 0, err
 	}
 	now := time.Now()
-	maxAge := int((15 * time.Minute).Seconds())
-	if expiresSec > 0 {
-		maxAge = expiresSec
-	} else if expiresSec == -1 {
-		maxAge = int((24 * time.Hour).Seconds())
-	}
-	// 有效期上限 24 小时: expires 由客户端提交, 不设上限等于可自签长期凭据,
-	// 被盗 cookie 的窗口与「记住我」对齐到一天。
-	const maxAgeCeiling = 24 * 3600
-	if maxAge > maxAgeCeiling {
-		maxAge = maxAgeCeiling
-	}
 	claims := &jwt.RegisteredClaims{
 		IssuedAt:  jwt.NewNumericDate(now),
 		NotBefore: jwt.NewNumericDate(now),
 		Issuer:    conf.APP_NAME,
 		Audience:  jwt.ClaimStrings{conf.APP_NAME},
-		ExpiresAt: jwt.NewNumericDate(now.Add(time.Duration(maxAge) * time.Second)),
+		ExpiresAt: jwt.NewNumericDate(now.Add(time.Duration(sessionMaxAge) * time.Second)),
 	}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
 	if err != nil {
 		return "", 0, err
 	}
-	return token, maxAge, nil
+	return token, sessionMaxAge, nil
 }
 
 func VerifyJWTToken(token string) bool {

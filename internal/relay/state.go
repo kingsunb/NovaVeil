@@ -88,23 +88,23 @@ type RequestState struct {
 
 	UsageEstimated bool `json:"usage_estimated,omitempty"` // 终态用量是否因上游上报可疑零输入而经本地估算修复, 面板据此区分真实上报与估算值。
 
-	Round         int             `json:"round"`                    // 最新一轮循环的递增序号, 人工中止按此匹配以免误杀下一轮。
-	TargetChannel string          `json:"target_channel"`           // 最新一轮选中的渠道名称。
-	TargetModel   string          `json:"target_model"`             // 最新一轮实际请求上游的模型名称。
-	KeyLabel      string          `json:"key_label,omitempty"`      // 最新一轮使用的渠道 Key 标签: "#序号(备注)", 多 Key 渠道用于定位具体凭据, 旧式单 Key 为空。
-	ThinkingLevel string          `json:"thinking_level,omitempty"` // 最新一轮实际注入上游的思考等级, 未配置为空。
-	ClientFormat  string          `json:"client_format"`            // 下游(客户端)请求协议。
-	UpstreamType  string          `json:"upstream_type"`            // 最新一轮上游渠道的协议类型。
-	RelayMode     string          `json:"relay_mode"`               // 最新一轮转发方式: passthrough 同协议透传, converted 跨协议转换。
-	ProxyAddr     string          `json:"proxy_addr,omitempty"`     // 最新一轮使用的渠道代理完整地址(密码打码, 含 {account} 解析出的别名); 未走渠道代理为空。
-	Masked        bool            `json:"masked,omitempty"`         // 本次请求是否执行了脱敏(请求体占位符替换), 面板据此展示脱敏标记。
-	MaskMatches   []MaskMatch     `json:"mask_matches,omitempty"`   // 脱敏命中明细, 仅在脱敏发生时有值; 旧版本/开关关闭/未命中时为空, 前端据此决定是否渲染命中区(文档 07 §3.1)。
+	Round         int         `json:"round"`                    // 最新一轮循环的递增序号, 人工中止按此匹配以免误杀下一轮。
+	TargetChannel string      `json:"target_channel"`           // 最新一轮选中的渠道名称。
+	TargetModel   string      `json:"target_model"`             // 最新一轮实际请求上游的模型名称。
+	KeyLabel      string      `json:"key_label,omitempty"`      // 最新一轮使用的渠道 Key 标签: "#序号(备注)", 多 Key 渠道用于定位具体凭据, 旧式单 Key 为空。
+	ThinkingLevel string      `json:"thinking_level,omitempty"` // 最新一轮实际注入上游的思考等级, 未配置为空。
+	ClientFormat  string      `json:"client_format"`            // 下游(客户端)请求协议。
+	UpstreamType  string      `json:"upstream_type"`            // 最新一轮上游渠道的协议类型。
+	RelayMode     string      `json:"relay_mode"`               // 最新一轮转发方式: passthrough 同协议透传, converted 跨协议转换。
+	ProxyAddr     string      `json:"proxy_addr,omitempty"`     // 最新一轮使用的渠道代理完整地址(密码打码, 含 {account} 解析出的别名); 未走渠道代理为空。
+	Masked        bool        `json:"masked,omitempty"`         // 本次请求是否执行了脱敏(请求体占位符替换), 面板据此展示脱敏标记。
+	MaskMatches   []MaskMatch `json:"mask_matches,omitempty"`   // 脱敏命中明细, 仅在脱敏发生时有值; 旧版本/开关关闭/未命中时为空, 前端据此决定是否渲染命中区(文档 07 §3.1)。
 	// MaskMatchesTruncated 命中明细是否因条数/字节上限被裁剪, true 表示当前为摘要而非全量(文档 07 §3.1 第 5 点、design §2.1.3)。
-	MaskMatchesTruncated bool      `json:"mask_matches_truncated,omitempty"`
-	Sending       bool            `json:"sending"`                  // 最新一轮是否仍在等待上游响应。
-	Error         string          `json:"error,omitempty"`          // 最新一轮的失败原因, 请求结束后即为最终错误。
-	Class         ErrClass        `json:"class,omitempty"`          // 终态错误分类, 请求结束后写入。
-	Attempts      []AttemptRecord `json:"attempts,omitempty"`       // 每轮尝试轨迹, 按轮次递增追加。
+	MaskMatchesTruncated bool            `json:"mask_matches_truncated,omitempty"`
+	Sending              bool            `json:"sending"`            // 最新一轮是否仍在等待上游响应。
+	Error                string          `json:"error,omitempty"`    // 最新一轮的失败原因, 请求结束后即为最终错误。
+	Class                ErrClass        `json:"class,omitempty"`    // 终态错误分类, 请求结束后写入。
+	Attempts             []AttemptRecord `json:"attempts,omitempty"` // 每轮尝试轨迹, 按轮次递增追加。
 
 	body           string             // 客户端原始请求体, 体积大故不进状态流, 由独立接口按需拉取。
 	responseBody   string             // 聚合后的完整最终响应体, 同样按需拉取。
@@ -116,18 +116,18 @@ type RequestState struct {
 
 // AttemptRecord 一轮上游尝试的轨迹记录, 面板据此渲染请求的时间线。
 type AttemptRecord struct {
-	Seq          int            `json:"seq"`                 // 轮次序号, 与 Round 一致。
-	ChannelID    int            `json:"channel_id"`          // 本轮选中的渠道 ID。
-	ChannelName  string         `json:"channel_name"`        // 本轮选中的渠道名称。
-	MemberID     int            `json:"member_id"`           // 本轮使用的分组成员 ID。
-	Model        string         `json:"model"`               // 本轮实际请求上游的模型名称。
-	KeyLabel     string         `json:"key_label,omitempty"` // 本轮使用的渠道 Key 标签: "#序号(别名)", 旧式单 Key 为空。
-	ProxyAddr    string         `json:"proxy_addr,omitempty"` // 本轮出口代理地址(密码打码); 空为直连。
+	Seq          int            `json:"seq"`                      // 轮次序号, 与 Round 一致。
+	ChannelID    int            `json:"channel_id"`               // 本轮选中的渠道 ID。
+	ChannelName  string         `json:"channel_name"`             // 本轮选中的渠道名称。
+	MemberID     int            `json:"member_id"`                // 本轮使用的分组成员 ID。
+	Model        string         `json:"model"`                    // 本轮实际请求上游的模型名称。
+	KeyLabel     string         `json:"key_label,omitempty"`      // 本轮使用的渠道 Key 标签: "#序号(别名)", 旧式单 Key 为空。
+	ProxyAddr    string         `json:"proxy_addr,omitempty"`     // 本轮出口代理地址(密码打码); 空为直连。
 	FirstTokenMS int64          `json:"first_token_ms,omitempty"` // 本轮首字耗时毫秒(TTFT), 首字未到为 0。
-	LatencyMS    int64          `json:"latency_ms"`          // 本轮从发起到结束的耗时毫秒。
-	Outcome      AttemptOutcome `json:"outcome"`             // 结束形态: 成功/失败/取消。
-	ErrClass     ErrClass       `json:"err_class,omitempty"` // 失败分类, 成功时为空。
-	ErrBrief     string         `json:"err_brief,omitempty"` // 失败摘要, 超长按字节截断。
+	LatencyMS    int64          `json:"latency_ms"`               // 本轮从发起到结束的耗时毫秒。
+	Outcome      AttemptOutcome `json:"outcome"`                  // 结束形态: 成功/失败/取消。
+	ErrClass     ErrClass       `json:"err_class,omitempty"`      // 失败分类, 成功时为空。
+	ErrBrief     string         `json:"err_brief,omitempty"`      // 失败摘要, 超长按字节截断。
 }
 
 const streamBuffer = 16 // 单个状态流连接的非阻塞消息缓冲容量。
@@ -145,10 +145,11 @@ var errAdminStopped = errors.New("管理端已停止请求")
 const maxBodyPreview = 64 * 1024
 
 var (
-	idSeq    atomic.Uint64                          // 进程内严格递增的请求 ID。
-	mu       sync.Mutex                             // 全部共享状态的互斥锁。
-	requests = make(map[uint64]*RequestState)       // 按请求 ID 保存的全部请求状态。
-	watchers = make(map[chan RequestState]struct{}) // 全部状态流 SSE 连接。
+	idSeq                atomic.Uint64 // 进程内严格递增的请求 ID。
+	mu                   sync.Mutex    // 全部共享状态的互斥锁。
+	requests             = make(map[uint64]*RequestState)
+	finishedRequestQueue = make([]uint64, 0, maxFinished)       // 按请求 ID 保存的全部请求状态。
+	watchers             = make(map[chan RequestState]struct{}) // 全部状态流 SSE 连接。
 
 	failureRing  = make([]FailureSummary, maxFailureRecords) // 失败摘要环形缓冲, 覆盖最旧记录。
 	failureCount int                                         // 环内有效记录数, 不超过 maxFailureRecords。
@@ -212,34 +213,34 @@ func maskAPIKey(raw string) string {
 // duration_ms（毫秒），并确保 API Key 已脱敏。前端优先读取 duration_ms。
 func (r RequestState) MarshalJSON() ([]byte, error) {
 	type requestStateJSON struct {
-		ID             uint64          `json:"id"`
-		Status         Status          `json:"status"`
-		StartedAt      time.Time       `json:"started_at"`
-		FirstTokenAt   time.Time       `json:"first_token_at,omitempty"`
-		Duration       int64           `json:"duration"` // legacy: nanoseconds
-		DurationMS     int64           `json:"duration_ms"`
-		Model          string          `json:"model"`
-		ClientIP       string          `json:"client_ip"`
-		APIKey         string          `json:"api_key,omitempty"`
-		KeyName        string          `json:"key_name,omitempty"`
-		Usage          llm.Usage       `json:"usage"`
-		UsageEstimated bool            `json:"usage_estimated,omitempty"`
-		Round          int             `json:"round"`
-		TargetChannel  string          `json:"target_channel"`
-		TargetModel    string          `json:"target_model"`
-		KeyLabel       string          `json:"key_label,omitempty"`
-		ThinkingLevel  string          `json:"thinking_level,omitempty"`
-		ClientFormat   string          `json:"client_format"`
-		UpstreamType   string          `json:"upstream_type"`
-		RelayMode      string          `json:"relay_mode"`
-		ProxyAddr      string          `json:"proxy_addr,omitempty"`
-		Masked         bool            `json:"masked,omitempty"`
-		MaskMatches    []MaskMatch     `json:"mask_matches,omitempty"`
-		MaskMatchesTruncated bool      `json:"mask_matches_truncated,omitempty"`
-		Sending        bool            `json:"sending"`
-		Error          string          `json:"error,omitempty"`
-		Class          ErrClass        `json:"class,omitempty"`
-		Attempts       []AttemptRecord `json:"attempts"`
+		ID                   uint64          `json:"id"`
+		Status               Status          `json:"status"`
+		StartedAt            time.Time       `json:"started_at"`
+		FirstTokenAt         time.Time       `json:"first_token_at,omitempty"`
+		Duration             int64           `json:"duration"` // legacy: nanoseconds
+		DurationMS           int64           `json:"duration_ms"`
+		Model                string          `json:"model"`
+		ClientIP             string          `json:"client_ip"`
+		APIKey               string          `json:"api_key,omitempty"`
+		KeyName              string          `json:"key_name,omitempty"`
+		Usage                llm.Usage       `json:"usage"`
+		UsageEstimated       bool            `json:"usage_estimated,omitempty"`
+		Round                int             `json:"round"`
+		TargetChannel        string          `json:"target_channel"`
+		TargetModel          string          `json:"target_model"`
+		KeyLabel             string          `json:"key_label,omitempty"`
+		ThinkingLevel        string          `json:"thinking_level,omitempty"`
+		ClientFormat         string          `json:"client_format"`
+		UpstreamType         string          `json:"upstream_type"`
+		RelayMode            string          `json:"relay_mode"`
+		ProxyAddr            string          `json:"proxy_addr,omitempty"`
+		Masked               bool            `json:"masked,omitempty"`
+		MaskMatches          []MaskMatch     `json:"mask_matches,omitempty"`
+		MaskMatchesTruncated bool            `json:"mask_matches_truncated,omitempty"`
+		Sending              bool            `json:"sending"`
+		Error                string          `json:"error,omitempty"`
+		Class                ErrClass        `json:"class,omitempty"`
+		Attempts             []AttemptRecord `json:"attempts"`
 	}
 	nanoseconds := int64(r.Duration)
 	milliseconds := r.Duration.Milliseconds()
@@ -622,24 +623,18 @@ func (r *RequestState) finish(body, responseBody string, status Status, class Er
 		})
 	}
 	publishRequestLocked(r)
+	// OLD-11: 终态队列按完成顺序记录请求 ID, 修剪只做队首出队, 不随 requests
+	// 总量线性增长; 队列容量与 maxFinished 对齐, map 大小恒有界。
+	finishedRequestQueue = append(finishedRequestQueue, r.ID)
 	trimFinishedRequestsLocked()
 }
 
-// trimFinishedRequestsLocked 裁剪进程内终态历史: 每登记一条新终态, 超出
-// maxFinished 即删除最旧一条, 保证常驻内存有界。须持有 mu。
+// trimFinishedRequestsLocked 裁剪进程内终态历史: 完成队列按序保存终态 ID,
+// 超出 maxFinished 即从队首删除最旧终态, 摊还 O(1), 避免每次定稿全表扫描。须持有 mu。
 func trimFinishedRequestsLocked() {
-	finished := 0
-	oldest := uint64(0)
-	for id, request := range requests {
-		if request.Status == StatusRunning || request.Status == StatusCommitted {
-			continue
-		}
-		finished++
-		if oldest == 0 || id < oldest {
-			oldest = id
-		}
-	}
-	if finished > maxFinished {
+	for len(finishedRequestQueue) > maxFinished {
+		oldest := finishedRequestQueue[0]
+		finishedRequestQueue = finishedRequestQueue[1:]
 		delete(requests, oldest)
 	}
 }
@@ -1034,6 +1029,7 @@ func Clear() {
 	}
 	failureCount = 0
 	failureNext = 0
+	finishedRequestQueue = finishedRequestQueue[:0]
 }
 
 // StopRequestByID 按 ID 终止指定请求, 返回是否存在该请求。
@@ -1056,7 +1052,7 @@ func StopRequestByID(id uint64) bool {
 // 不可控的内存增长点, 触顶即整体重置(展示口径牺牲准确性换取内存有界)。
 var (
 	clientIPsMu        sync.Mutex
-	clientIPSet        = make(map[string]struct{})
+	clientIPSet        = make(map[string]time.Time) // IP -> 最近访问时间
 	totalRequestsCount atomic.Uint64
 	totalErrorCount    atomic.Uint64
 )
@@ -1065,6 +1061,8 @@ var (
 const maxClientIPs = 4096
 
 // trackClientRequest 在新请求登记时记录来源 IP 并递增计数。
+// 触顶时淘汰半数最久未访问的 IP(审计 OLD-10), 而不是整体重置, 避免统计口径
+// 在达到 4096 个不同 IP 后骤降为 0 的展示跳变。
 func trackClientRequest(clientIP string) {
 	totalRequestsCount.Add(1)
 	if clientIP == "" {
@@ -1072,12 +1070,33 @@ func trackClientRequest(clientIP string) {
 	}
 	clientIPsMu.Lock()
 	defer clientIPsMu.Unlock()
-	if len(clientIPSet) >= maxClientIPs {
-		if _, exists := clientIPSet[clientIP]; !exists {
-			clientIPSet = make(map[string]struct{})
-		}
+	now := time.Now()
+	if _, exists := clientIPSet[clientIP]; !exists && len(clientIPSet) >= maxClientIPs {
+		evictOldestClientIPsLocked(len(clientIPSet) / 2)
 	}
-	clientIPSet[clientIP] = struct{}{}
+	clientIPSet[clientIP] = now
+}
+
+// evictOldestClientIPsLocked 按最近访问时间删除 n 个最久未见的 IP。须持有 clientIPsMu。
+func evictOldestClientIPsLocked(n int) {
+	if n <= 0 {
+		return
+	}
+	type ipSeen struct {
+		ip   string
+		seen time.Time
+	}
+	entries := make([]ipSeen, 0, len(clientIPSet))
+	for ip, seen := range clientIPSet {
+		entries = append(entries, ipSeen{ip: ip, seen: seen})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].seen.Before(entries[j].seen) })
+	if n > len(entries) {
+		n = len(entries)
+	}
+	for _, e := range entries[:n] {
+		delete(clientIPSet, e.ip)
+	}
 }
 
 // ClientIPCount 返回去重后的客户端 IP 数量。

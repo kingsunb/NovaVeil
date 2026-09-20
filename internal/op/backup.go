@@ -10,6 +10,7 @@ import (
 
 	"github.com/kingsunb/NovaVeil/internal/db"
 	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/seal"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -63,7 +64,33 @@ func DBExportAll(ctx context.Context) (*model.DBDump, error) {
 	}
 
 	d.Settings = filterSecretSettings(d.Settings)
+	redactCredentialsForExport(d)
 	return d, nil
+}
+
+// redactCredentialsForExport 把导出中的敏感凭据替换为 "****"(审计 SEC-04):
+// 备份文件不再包含 API Key / 渠道 Key / 代理凭据原文; 密钥本身的泄密风险降为零。
+// 渠道多 Key 与 API Key 都被置掩码, 导入方将获得掩码值而非可用的上游凭据。
+func redactCredentialsForExport(d *model.DBDump) {
+	for i := range d.Channels {
+		if d.Channels[i].Key != "" {
+			d.Channels[i].Key = "****"
+		}
+		if d.Channels[i].ChannelProxy != nil && !strings.Contains(*d.Channels[i].ChannelProxy, "****") {
+			redacted := "****"
+			d.Channels[i].ChannelProxy = &redacted
+		}
+		for j := range d.Channels[i].Keys {
+			if d.Channels[i].Keys[j].Key != "" {
+				d.Channels[i].Keys[j].Key = "****"
+			}
+		}
+	}
+	for i := range d.APIKeys {
+		if d.APIKeys[i].APIKey != "" {
+			d.APIKeys[i].APIKey = "****"
+		}
+	}
 }
 
 // DBImportValidationError 在导入预检发现校验问题时返回, 携带完整预检结果供 handler 展示。
@@ -150,7 +177,17 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 		normalizeImportGroups(dump)
 
 		// 3. 写入: 所有基础表 DO NOTHING, settings 按 key upsert。
-		if n, err := createDoNothing(tx, dump.Channels); err != nil {
+		// 敏感字段在落库前统一加密; 旧版未加密 dump 与已含掩码的 dump 同样经过该路径。
+		sealedChannels := make([]model.Channel, len(dump.Channels))
+		for i, ch := range dump.Channels {
+			sealedChannels[i] = ch
+			sealedChannel, sErr := sealChannelForDB(ch)
+			if sErr != nil {
+				return fmt.Errorf("导入渠道失败, 渠道 %d: %w", ch.ID, sErr)
+			}
+			sealedChannels[i] = sealedChannel
+		}
+		if n, err := createDoNothing(tx, sealedChannels); err != nil {
 			return fmt.Errorf("导入渠道失败: %w", err)
 		} else {
 			res.RowsAffected["channels"] = n
@@ -172,7 +209,16 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 		} else {
 			res.RowsAffected["group_items"] = n
 		}
-		if n, err := createDoNothing(tx, dump.APIKeys); err != nil {
+		sealedAPIKeys := make([]model.APIKey, len(dump.APIKeys))
+		for i, ak := range dump.APIKeys {
+			sealedAPIKeys[i] = ak
+			sealedValue, sErr := seal.Seal(ak.APIKey)
+			if sErr != nil {
+				return fmt.Errorf("导入 API key 失败, id=%d: %w", ak.ID, sErr)
+			}
+			sealedAPIKeys[i].APIKey = sealedValue
+		}
+		if n, err := createDoNothing(tx, sealedAPIKeys); err != nil {
 			return fmt.Errorf("导入 API key 失败: %w", err)
 		} else {
 			res.RowsAffected["api_keys"] = n
@@ -271,6 +317,21 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 		return nil, fmt.Errorf("读取现存用量汇总失败: %w", err)
 	}
 
+	// 现存库敏感字段以密文落库, 预检的命名/密钥唯一性比较基于明文;
+	// 游标读回全部渠道/API key 后统一解密到内存(审计 SEC-04 迁移兼容)。
+	for i := range existingChannels {
+		if err := openChannelForCache(&existingChannels[i]); err != nil {
+			return nil, err
+		}
+	}
+	for i := range existingAPIKeys {
+		plain, err := seal.Open(existingAPIKeys[i].APIKey)
+		if err != nil {
+			return nil, fmt.Errorf("读取现存 API key 失败: %w", err)
+		}
+		existingAPIKeys[i].APIKey = plain
+	}
+
 	// --- 构建现存库查找表 ---
 	existingChannelIDs := make(map[int]struct{}, len(existingChannels))
 	existingChannelNames := make(map[string]struct{}, len(existingChannels))
@@ -332,6 +393,21 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 					fmt.Sprintf("设置 %q 需为 1-%d 之间的整数(小时)", s.Key, maxSyncLLMIntervalHours))
 			}
 		}
+	}
+
+	// dump 内敏感字段同样可能是旧版明文或新版密文; 先解到明文再做密钥校验与冲突比较,
+	// 导入写入阶段会统一再加密。掩码值 "****" 解不开也无需解, 保持原样走后续流程。
+	for i := range dump.Channels {
+		if err := openChannelForCache(&dump.Channels[i]); err != nil {
+			return nil, fmt.Errorf("读取备份渠道 %d 密钥失败: %w", dump.Channels[i].ID, err)
+		}
+	}
+	for i := range dump.APIKeys {
+		plain, err := seal.Open(dump.APIKeys[i].APIKey)
+		if err != nil {
+			return nil, fmt.Errorf("读取备份 API key 失败: %w", err)
+		}
+		dump.APIKeys[i].APIKey = plain
 	}
 
 	// --- 渠道密钥校验 ---
@@ -684,7 +760,8 @@ func createUpsertSettings(tx *gorm.DB, rows []model.Setting) (int64, error) {
 func filterSecretSettings(rows []model.Setting) []model.Setting {
 	filtered := make([]model.Setting, 0, len(rows))
 	for _, row := range rows {
-		if row.Key == model.SettingKeyAuthJWTSecret {
+		switch row.Key {
+		case model.SettingKeyAuthJWTSecret, model.SettingKeyProxyURL, model.SettingKeyProxyPool:
 			continue
 		}
 		filtered = append(filtered, row)

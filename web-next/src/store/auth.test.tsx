@@ -150,7 +150,7 @@ describe("useAuth", () => {
     const { Wrapper } = wrapper();
     const { result } = renderHook(() => useAuth(), { wrapper: Wrapper });
     await act(async () => {
-      await result.current.login("admin", "secret", 0);
+      await result.current.login("admin", "secret");
     });
     expect(result.current.isAuthenticated).toBe(true);
     expect(result.current.username).toBe("admin");
@@ -295,7 +295,7 @@ describe("useAuth", () => {
     const { result } = renderHook(() => useAuth(), { wrapper: Wrapper });
     // login 成功（generation 递增到 1）。
     await act(async () => {
-      await result.current.login("admin", "secret", 0);
+      await result.current.login("admin", "secret");
     });
     expect(result.current.isAuthenticated).toBe(true);
     // 探活 401 迟到返回：generation 已过期，不应覆盖登录态。

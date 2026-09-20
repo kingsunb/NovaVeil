@@ -115,10 +115,6 @@ func cookieAttrs(t *testing.T, w *httptest.ResponseRecorder) map[string]string {
 	if sameSite, ok := attrs["SameSite"]; !ok || sameSite != "Lax" {
 		t.Fatalf("cookie SameSite = %q, want Lax", sameSite)
 	}
-	_, hasSecure := attrs["Secure"]
-	if conf.AppConfig.Security.CookieSecure != hasSecure {
-		t.Fatalf("cookie Secure presence = %v, want %v", hasSecure, conf.AppConfig.Security.CookieSecure)
-	}
 	return attrs
 }
 
@@ -149,6 +145,29 @@ func TestSetAuthCookieAttributes(t *testing.T) {
 	attrs = cookieAttrs(t, w2)
 	if _, ok := attrs["Secure"]; !ok {
 		t.Fatal("Secure must be present when security.cookie_secure = true")
+	}
+
+	// SEC-02: 直连 HTTP 但可信反代终止 TLS 并显式传入 X-Forwarded-Proto: https,
+	// 认证 cookie 必须携带 Secure, 避免凭据经明文链路回传。
+	conf.AppConfig.Security.CookieSecure = false
+	w3 := httptest.NewRecorder()
+	c3, _ := gin.CreateTestContext(w3)
+	c3.Request = httptest.NewRequest(http.MethodPost, "/api/v1/user/login", nil)
+	c3.Request.Header.Set("X-Forwarded-Proto", "https")
+	SetAuthCookie(c3, "token-value", 60)
+	attrs = cookieAttrs(t, w3)
+	if _, ok := attrs["Secure"]; !ok {
+		t.Fatal("Secure must be present when X-Forwarded-Proto is https")
+	}
+
+	// 普通 HTTP 无 X-Forwarded-Proto 时直接 HTTP 仍不带 Secure(保持部署兼容)。
+	w4 := httptest.NewRecorder()
+	c4, _ := gin.CreateTestContext(w4)
+	c4.Request = httptest.NewRequest(http.MethodPost, "/api/v1/user/login", nil)
+	SetAuthCookie(c4, "token-value", 60)
+	attrs = cookieAttrs(t, w4)
+	if _, hasSecure := attrs["Secure"]; hasSecure {
+		t.Fatal("Secure must remain absent for direct HTTP without X-Forwarded-Proto")
 	}
 }
 
@@ -195,7 +214,7 @@ func TestAuthRejectsMissingAndInvalidToken(t *testing.T) {
 
 func TestMustChangePasswordWhitelist(t *testing.T) {
 	seedUser(t, "password-2", true)
-	token, _, err := auth.GenerateJWTToken(3600)
+	token, _, err := auth.GenerateJWTToken()
 	if err != nil {
 		t.Fatalf("GenerateJWTToken: %v", err)
 	}
@@ -226,7 +245,7 @@ const respMessageMustChangePassword = "Password change required"
 
 func TestAfterPasswordChangeAllPathsAllowedOldTokensInvalid(t *testing.T) {
 	seedUser(t, "password-3", true)
-	oldToken, _, err := auth.GenerateJWTToken(3600)
+	oldToken, _, err := auth.GenerateJWTToken()
 	if err != nil {
 		t.Fatalf("GenerateJWTToken: %v", err)
 	}
@@ -234,7 +253,7 @@ func TestAfterPasswordChangeAllPathsAllowedOldTokensInvalid(t *testing.T) {
 		t.Fatalf("UserChangePassword: %v", err)
 	}
 
-	newToken, _, err := auth.GenerateJWTToken(3600)
+	newToken, _, err := auth.GenerateJWTToken()
 	if err != nil {
 		t.Fatalf("GenerateJWTToken: %v", err)
 	}

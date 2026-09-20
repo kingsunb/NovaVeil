@@ -179,3 +179,58 @@ func TestStream_AdjacentPlaceholders(t *testing.T) {
 	out := r.Push([]byte(body))
 	assert.Equal(t, "1380013800013900139000", string(out))
 }
+
+func TestStream_PushChannelIsolation(t *testing.T) {
+	// 各通道 pending 独立: reasoning/tool 通道的占位符前缀不能污染正文, 反之亦然(审计 REL-04)。
+	m := newMapping()
+	ph := m.Recall("13800138000", "PHONE")
+	ph2 := m.Recall("13900139000", "PHONE")
+	r := NewStreamRestorer(m)
+
+	n := len(ph)
+	outDefault := r.PushChannel(DefaultChannel, []byte("call "+ph[:n/3]))
+	outReason := r.PushChannel(ReasoningChannel, []byte("think "+ph2[:n/3]))
+	outDefault2 := r.PushChannel(DefaultChannel, []byte(ph[n/3:2*n/3]))
+	outReason2 := r.PushChannel(ReasoningChannel, []byte(ph2[n/3:2*n/3]))
+	outDefault3 := r.PushChannel(DefaultChannel, []byte(ph[2*n/3:]))
+	outReason3 := r.PushChannel(ReasoningChannel, []byte(ph2[2*n/3:]))
+
+	assert.Equal(t, "call 13800138000", string(cat(outDefault, outDefault2, outDefault3)))
+	assert.Equal(t, "think 13900139000", string(cat(outReason, outReason2, outReason3)))
+}
+
+func TestStream_ToolChannelPrefixIndexing(t *testing.T) {
+	m := newMapping()
+	ph := m.Recall("13800138000", "PHONE")
+	r := NewStreamRestorer(m)
+
+	n := len(ph)
+	out0 := r.PushChannel(ToolChannelPrefix+"0", []byte(ph[:n/2]))
+	out1 := r.PushChannel(ToolChannelPrefix+"1", []byte("x"))
+	out0b := r.PushChannel(ToolChannelPrefix+"0", []byte(ph[n/2:]))
+
+	assert.Equal(t, "13800138000", string(cat(out0, out0b)))
+	assert.Equal(t, "x", string(out1))
+
+	remain := r.FlushChannels()
+	assert.Empty(t, remain)
+}
+
+func TestStream_FlushChannelsReturnsOnlyPending(t *testing.T) {
+	m := newMapping()
+	r := NewStreamRestorer(m)
+	_ = r.PushChannel(DefaultChannel, []byte("text {{incomplete"))
+	_ = r.PushChannel(ReasoningChannel, []byte("think {{x"))
+	toolCh := ToolChannelPrefix + "0"
+	_ = r.PushChannel(toolCh, []byte(`{"a":"{{y`))
+
+	rem := r.FlushChannels()
+	if len(rem) != 3 {
+		t.Fatalf("FlushChannels len = %d, want 3", len(rem))
+	}
+	assert.Equal(t, "{{incomplete", string(rem[DefaultChannel]), "default residual mismatch")
+	assert.Equal(t, "{{x", string(rem[ReasoningChannel]), "reasoning residual mismatch")
+	assert.Equal(t, "{{y", string(rem[toolCh]), "tool residual mismatch")
+	// FlushChannels 后 pending 清空。
+	assert.Empty(t, r.FlushChannels())
+}

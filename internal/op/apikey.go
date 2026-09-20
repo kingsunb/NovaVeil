@@ -7,17 +7,31 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
+	"unicode/utf8"
 
 	"github.com/kingsunb/NovaVeil/internal/db"
 	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/seal"
 )
 
 // apiKey 操作的 sentinel 错误: handler 用 errors.Is 区分 4xx/5xx 与 i18n 文案。
 var (
 	ErrAPIKeyValueExists = errors.New("API key value already exists")
 	ErrAPIKeyNotFound    = errors.New("API key not found")
+	// ErrAPIKeyValidation 表示自定义 API Key 未通过最小长度校验, handler 据此返回 400。
+	ErrAPIKeyValidation = errors.New("API key validation failed")
 )
+
+// apiKeyMinLen 是用户自定义 API Key 的最小字符数(审计 SEC-05/S-L1)。
+// 服务端生成的 sk-<app>-... 密钥恒大于该值。
+const apiKeyMinLen = 16
+
+func validateAPIKeyCustom(value string) error {
+	if utf8.RuneCountInString(value) < apiKeyMinLen {
+		return fmt.Errorf("%w: API key 长度至少为 %d 个字符", ErrAPIKeyValidation, apiKeyMinLen)
+	}
+	return nil
+}
 
 // apiKeySnapshot 是 API key 缓存的不可变代际快照: 某一时刻全量密钥的成对视图。
 //
@@ -82,6 +96,14 @@ func apiKeyValueTakenSnap(s *apiKeySnapshot, value string, excludeID int) bool {
 }
 
 func APIKeyCreate(key *model.APIKey, ctx context.Context) error {
+	if key == nil {
+		return fmt.Errorf("%w: 缺少 API key 数据", ErrAPIKeyValidation)
+	}
+	key.APIKey = strings.TrimSpace(key.APIKey)
+	if err := validateAPIKeyCustom(key.APIKey); err != nil {
+		return err
+	}
+
 	apiKeyCacheMu.Lock()
 	defer apiKeyCacheMu.Unlock()
 
@@ -89,7 +111,13 @@ func APIKeyCreate(key *model.APIKey, ctx context.Context) error {
 	if apiKeyValueTakenSnap(cur, key.APIKey, 0) {
 		return ErrAPIKeyValueExists
 	}
-	if err := db.GetDB().WithContext(ctx).Create(key).Error; err != nil {
+	sealed, sealErr := seal.Seal(key.APIKey)
+	if sealErr != nil {
+		return fmt.Errorf("failed to encrypt API key: %w", sealErr)
+	}
+	dbKey := *key
+	dbKey.APIKey = sealed
+	if err := db.GetDB().WithContext(ctx).Create(&dbKey).Error; err != nil {
 		// apikeys.api_key 的 UNIQUE 索引(迁移 013)兜底两个并发请求都过掉本地
 		// 去重的情况: 后写者命中索引, 这里把 driver 错误翻译成 sentinel,
 		// 让 handler 统一返 409 Conflict。
@@ -98,6 +126,8 @@ func APIKeyCreate(key *model.APIKey, ctx context.Context) error {
 		}
 		return fmt.Errorf("failed to create API key: %w", err)
 	}
+	key.ID = dbKey.ID
+	key.CreatedAt = dbKey.CreatedAt
 	next := cloneAPIKeySnap(cur)
 	next.byID[key.ID] = *key
 	next.byKey[key.APIKey] = key.ID
@@ -109,6 +139,12 @@ func APIKeyUpdate(key *model.APIKey, ctx context.Context) error {
 	apiKeyCacheMu.Lock()
 	defer apiKeyCacheMu.Unlock()
 
+	key.APIKey = strings.TrimSpace(key.APIKey)
+	if key.APIKey != "" {
+		if err := validateAPIKeyCustom(key.APIKey); err != nil {
+			return err
+		}
+	}
 	cur := loadAPIKeySnap()
 	existing, ok := cur.byID[key.ID]
 	if !ok {
@@ -125,7 +161,13 @@ func APIKeyUpdate(key *model.APIKey, ctx context.Context) error {
 	// fires on INSERT) and LastUsedAt (updated by auth middleware) would be zeroed.
 	key.CreatedAt = existing.CreatedAt
 	key.LastUsedAt = existing.LastUsedAt
-	if err := db.GetDB().WithContext(ctx).Save(key).Error; err != nil {
+	sealed, sealErr := seal.Seal(key.APIKey)
+	if sealErr != nil {
+		return fmt.Errorf("failed to encrypt API key: %w", sealErr)
+	}
+	dbKey := *key
+	dbKey.APIKey = sealed
+	if err := db.GetDB().WithContext(ctx).Save(&dbKey).Error; err != nil {
 		if isUniqueConstraintError(err) {
 			return ErrAPIKeyValueExists
 		}
@@ -173,15 +215,6 @@ func APIKeyList(ctx context.Context) ([]model.APIKey, error) {
 		}
 	}
 	return keys, nil
-}
-
-// APIKeyTouchLastUsed 异步更新密钥的最后使用时间。鉴权中间件在通过校验后调用,
-// 不阻塞请求、不回写缓存(last_used_at 仅供管理端展示, 不影响鉴权决策)。
-func APIKeyTouchLastUsed(id int) {
-	go func() {
-		_ = db.GetDB().Model(&model.APIKey{}).Where("id = ?", id).
-			Update("last_used_at", time.Now().Unix()).Error
-	}()
 }
 
 func APIKeyGet(id int, ctx context.Context) (model.APIKey, error) {
@@ -243,6 +276,13 @@ func apiKeyRefreshCache(ctx context.Context) error {
 	apiKeys := []model.APIKey{}
 	if err := db.GetDB().WithContext(ctx).Find(&apiKeys).Error; err != nil {
 		return err
+	}
+	for i := range apiKeys {
+		plain, decErr := seal.Open(apiKeys[i].APIKey)
+		if decErr != nil {
+			return decErr
+		}
+		apiKeys[i].APIKey = plain
 	}
 	if apiKeyRefreshTestHook != nil {
 		// 钩子在锁内、Find 与发布之间, 仅供 STA-05 测试注入 barrier 验证持锁不变量。
