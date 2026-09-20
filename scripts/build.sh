@@ -3,7 +3,8 @@ set -euo pipefail
 
 readonly APP_NAME="novaveil" # 发布产物和容器内的可执行文件名。
 readonly OUTPUT_DIR="build" # 所有构建、归档、许可证和容器输入的根目录。
-readonly DEFAULT_TARGET="linux/amd64" # 本地默认只构建 Docker/服务器最常用架构。
+readonly DEFAULT_TARGET="linux/amd64" # 发布/CI 默认构建 Docker 与服务器最常用架构。
+readonly NATIVE_TARGET="$(go env GOOS 2>/dev/null || echo linux)/$(go env GOARCH 2>/dev/null || echo amd64)" # 本地冒烟默认当前架构。
 readonly DEFAULT_VERSION="$(git describe --tags --abbrev=0 2>/dev/null || echo 'dev')"
 readonly VERSION="${VERSION:-${DEFAULT_VERSION}}" # CI 可传入已验证版本, 避免提前推送 tag。
 readonly COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')" # 当前提交短哈希。
@@ -14,11 +15,12 @@ readonly LDFLAGS="-X 'github.com/kingsunb/NovaVeil/internal/conf.Version=${VERSI
                   -X 'github.com/kingsunb/NovaVeil/internal/conf.Commit=${COMMIT}' \
                   -s -w" # 注入版本信息并缩小发布二进制。
 
-TARGETS="${DEFAULT_TARGET}"
+TARGETS=""
 FRONTEND=1
 ANDROID=0
 ARCHIVE=1
 LICENSES=1
+LOCAL=0
 
 usage() {
     cat <<'USAGE'
@@ -26,7 +28,8 @@ Usage: scripts/build.sh [options]
 
 Options:
   --targets LIST       Comma-separated GOOS/GOARCH list, e.g. linux/amd64,darwin/arm64.
-                       Use "all" for the non-Android release matrix. Default: linux/amd64.
+                       Use "all" for the non-Android release matrix.
+                       Default: current machine target; linux/amd64 in CI/release mode.
   --include-android    Add all four Android release targets. Requires ANDROID_NDK_HOME;
                        the official release workflow always enables this flag.
   --local              Local test build: skip licenses and zip archives.
@@ -62,6 +65,7 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         --local)
+            LOCAL=1
             LICENSES=0
             ARCHIVE=0
             shift
@@ -105,6 +109,13 @@ readonly -a ANDROID_TARGETS=(
     "android/arm:armv7a-linux-androideabi21-clang"
     "android/386:i686-linux-android21-clang"
 ) # Android API 21 的固定 ABI 与 NDK clang 映射。
+
+# --local 未显式指定 --targets 时构建当前机器架构, 保证 scripts/run-local.sh
+# 能直接执行; 纯 --skip-licenses --no-archive 仍按发布模式默认 linux/amd64。
+if [ -z "${TARGETS}" ] && [ "${LOCAL}" -eq 1 ]; then
+    TARGETS="${NATIVE_TARGET}"
+fi
+TARGETS="${TARGETS:-${DEFAULT_TARGET}}"
 
 declare -a RESOLVED_TARGETS=()
 if [ "${TARGETS}" = "all" ]; then

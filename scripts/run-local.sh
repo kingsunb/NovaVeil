@@ -9,7 +9,10 @@ cd "${ROOT}"
 PORT="${NOVAVEIL_SERVER_PORT:-8080}"
 HOST="${NOVAVEIL_SERVER_HOST:-0.0.0.0}"
 BIN=""
+LOCAL_OS="$(go env GOOS 2>/dev/null || echo linux)"
+LOCAL_ARCH="$(go env GOARCH 2>/dev/null || echo amd64)"
 for candidate in \
+    "${ROOT}/build/bin/novaveil-${LOCAL_OS}-${LOCAL_ARCH}" \
     "${ROOT}/build/bin/novaveil-linux-amd64" \
     "${ROOT}/build/bin/novaveil-linux-arm64" \
     "${ROOT}/novaveil"; do
