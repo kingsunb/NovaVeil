@@ -13,7 +13,7 @@
 
 ## 0. 执行摘要
 
-**没有新的 Critical。** 上次的 High 项大部分已修复：H-01（模型同步清库）在 fetch 层与 sync 层双防御；H-02（Chat localStorage）已在 login/logout 双侧清理；H-03（fresh clone 编译失败）已由 `static/out/.gitkeep` 修复；H-04（Dockerfile tailwind COPY）已修复；H-06（版本号不一致）已修复（`main.go` 与 `web-next/package.json` 均为 0.2.0，release workflow 已删除）。**H-05 部分保留**：`docker-publish` 仍在不跑测试/漏洞门禁的情况下推 `:latest`，且 `docker/build-push-action@v6` 未 pin SHA。
+**没有新的 Critical。** 上次的 High 项大部分已修复：H-01（模型同步清库）在 fetch 层与 sync 层双防御；H-02（Chat localStorage）已在 login/logout 双侧清理；H-03（fresh clone 编译失败）已由 `static/out/.gitkeep` 修复；H-04（Dockerfile tailwind COPY）已修复；H-06（版本号不一致）已修复（`main.go` 与 `web-next/package.json` 均为 0.2.0，release workflow 已删除）。**H-05 部分保留（DevOps 复核记为 high，见 DEV-01）**：`docker-publish` 仍在不跑测试/漏洞门禁的情况下推 `:latest`，且 `docker/build-push-action@v6` 未 pin SHA；DEV-06 发现 PR 模板检查与 PR 模板不一致，按模板填写的合法 PR 会被自动关闭。
 
 本次最值得关注的新发现：
 
@@ -33,7 +33,7 @@
 | H-02/F-H1 | **已修复** | `web-next/src/store/auth.tsx:39-50` `clearChatLocalStorage()` 删除所有 `novaveil:chat:*`；`login`（111-114）与 `logout`（143）均调用。 |
 | H-03 | **已修复** | `static/out/.gitkeep` 已被跟踪（`git ls-files static` 可见），`static/static.go:8` 的 `//go:embed all:out` 有目录可嵌。 |
 | H-04 | **已修复** | `web-next/Dockerfile:30` 的 COPY 行不再含 `tailwind.config.ts`。 |
-| H-05 | **部分保留** | `docker-publish.yaml:82-89` 仍只构建即 `push: true`，无 `go test`/`pnpm test`/漏洞门禁；`:83` 仍用 `docker/build-push-action@v6` 未 pin。镜像名已统一为 `ghcr.io/kingsunb/novaveil`。 |
+| H-05 | **部分保留（复核 high）** | `docker-publish.yaml:82-89` 仍只构建即 `push: true`，无 `go test`/`pnpm test`/漏洞门禁；`:83` 仍用 `docker/build-push-action@v6` 未 pin。镜像名已统一为 `ghcr.io/kingsunb/novaveil`。 |
 | H-06 | **已修复** | `main.go:5` 与 `web-next/package.json` 均为 `0.2.0`；`6d61562` 已删除 release/deploy workflow，版本错位风险面收缩。 |
 | 脱敏三层开关默认关 | **未退化** | `model/DefaultMaskConfig()` `Enabled:false`；组级 `MaskEnabled` 默认 false；`applyRequestMask` 任一关即短路。 |
 | Bad mask JSON fail-closed | **已修复** | `internal/op/mask.go` 解析失败返回默认关闭配置，不拒绝中转。 |
@@ -112,12 +112,18 @@
 
 ## 7. DevOps / CI / 版本
 
-- **DEV-01 = H-05（medium）**：main push 即推 `:latest`，无测试/漏洞门禁；`build-push-action@v6` 未 pin。
-- **DEV-02 = D-M1（medium）**：自动 CI 无 `pnpm audit`/`govulncheck`/SAST；Trivy 只在手动 `build.yaml`。
-- **DEV-03 = D-M4（medium）**：`go.mod` 两个 replace 指向个人 fork 伪版本（`looplj/axonhub/llm` 等）。
-- **DEV-04（low）**：`web-next/Dockerfile` 基础镜像 `node:22-alpine`、`nginx:1.27-alpine` 未 pin digest。
-- **DEV-05（low）**：`web-router` profile 的硬化项与主服务不一致（沿用历史核对项，未在本次重新逐行验证）。
-- **正向确认**：`test.yaml` 在 PR/push 上跑 Go 测试且 SHA pin checkout；`docker-publish` 名字正确、checkout 等多数 action 已 pin。
+DevOps 域完整子代理复核已补录。DEV-01 与上期 H-05 同源、按 high 跟进；其余为交付链/供应链硬化。
+
+- **DEV-01 = H-05（high）**：`docker-publish.yaml` main push 即构建并推 `:latest`/`:sha-*`，`push:true` 前无 `go test`/`pnpm test`/漏洞扫描门禁；`:83` 的 `docker/build-push-action@v6` 为 mutable tag 未 pin SHA。
+- **DEV-02（medium）**：自动 CI 无 `pnpm audit`/`govulncheck`/SAST；Trivy/SBOM 仅手动 `build.yaml`（`workflow_dispatch`）。
+- **DEV-03（medium）**：`web-next/Dockerfile:20,39` 基础镜像 `node:22-alpine`、`nginx:1.27-alpine` 未 pin digest。
+- **DEV-04（medium）**：`go.mod:16` 直接依赖 `github.com/looplj/axonhub/llm` 伪版本；`:128`、`:130` 两个 `replace` 指向个人 fork 伪版本。
+- **DEV-05（low～medium）**：可选 `web-router` profile（`docker-compose.yml:125-139`）缺少主服务的 `read_only`/`cap_drop`/`security_opt`/healthcheck，并以 `nginx:1.27-alpine` 作反代。
+- **DEV-06（medium，新）**：`template-check.yaml:113-124` 的 requiredLines 含 `- [x] 本次 PR 不包含测试文件`，但 `.github/pull_request_template.md` 第 2 项是“契约/行为修复包含对应测试；纯文档或纯文案 PR 才可以不带测试文件”。按模板填写的合法 PR 会被 `pull_request_target` 检查误判为不合规并自动关闭。已核实现存代码。
+- **DEV-07（low）**：`verify-notes.yml:17,22` 用 `actions/checkout@v4`/`actions/setup-node@v4` 未 pin SHA；`:32-34` 每次 `npx tsx` 现拉依赖、无 frozen lock，门禁结果可随网络/上游漂移。
+- **DEV-08（low）**：`.gitignore` 未覆盖 `.env` / `*.pem` / `*.key`（`.dockerignore` 只挡镜像构建路径）；当前仓库未发现已跟踪密钥，建议补充。
+- **文档漂移（low）**：`6d61562` 删除 release/deploy workflow 后，`README.md:64` 仍称可手动触发 `release` / `build` workflow，`docs/SECURE_DEPLOYMENT.md:40-43` 也仍引用不存在的 `release` workflow。
+- **正向确认**：`test.yaml` 在 PR/push 跑 Go 测试并 pin checkout（SHA）；`docker-publish` 镜像名正确为 `ghcr.io/kingsunb/novaveil`；checkout 等多数 action 已 pin。
 
 ---
 
@@ -161,7 +167,7 @@
 
 ## 10. 审计局限
 
-- 历史清单 61 条逐条核对子代理未在首版截稿前返回；REL-02 独立对抗复核已在本修订版补充（见 2.1）。
+- DevOps 完整子代理复核与 REL-02 独立对抗复核已在本修订版补充（见 2.1 与第 7 节）；历史清单 61 条逐条核对子代理仍未返回。
 - 未跑 docker 基线的镜像构建/冒烟；静态结论仍可能受环境差异影响。
 - 后端全量文件并非逐行审阅，深度覆盖核心链路与全库反模式 grep。
 - 所有“存续”结论基于当前代码片段与行号，未做动态攻击复现（SSRF、DNS rebinding、Set-Cookie 注入等）。
