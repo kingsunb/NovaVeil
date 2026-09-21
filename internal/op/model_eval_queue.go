@@ -22,9 +22,13 @@ var (
 )
 
 // evalQueueRunningLease 是 running 任务的存活租约：worker 评估最长 10 分钟 +
-// 10 秒保存余量，这里给 15 分钟。只有在租约过期后，ResetRunning 才会把遗留
-// running 重置回 queued，避免多实例部署时新实例启动（或周期清扫）把另一个
-// 仍在健康执行中的实例的任务抢走重复评估。
+// 10 秒保存余量，这里给 15 分钟。多实例的周期清扫（以及 MySQL/Postgres 启动）
+// 只在租约过期后把遗留 running 重置回 queued，避免新实例把另一个仍在健康执行
+// 中的实例的任务抢走重复评估。
+//
+// SQLite 默认单实例：进程启动时库里的 running 只能是本进程上次崩溃或被 SIGKILL
+// 留下的，ModelEvalQueueResetRunningOnStart 会立即全部退回 queued，不等这 15 分钟。
+// 那条路径不获取下面的 GET_LOCK / advisory lock；这两把锁只串行化多实例入队。
 const evalQueueRunningLease = 15 * time.Minute
 
 // evalQueueEnqueueMu 串行化本进程内的 Enqueue。多实例(MySQL/Postgres)下还由
@@ -36,6 +40,18 @@ const (
 	evalQueueEnqueueLockName = "novaveil:model_eval_queue:enqueue"
 	evalQueueEnqueueLockKey  = int64(0x4e_56_45_51_45) // "NVEQE" 的稳定算术 key。
 )
+
+// evalQueueMultiInstance 为真时数据库可被多个进程共享。
+// SQLite（以及其它非 MySQL/Postgres 方言）视为单实例：只靠进程内互斥，
+// 不依赖 GET_LOCK / pg_advisory_lock 才能回收本进程留下的 running。
+func evalQueueMultiInstance() bool {
+	switch db.GetDB().Dialector.Name() {
+	case "mysql", "postgres":
+		return true
+	default:
+		return false
+	}
+}
 
 // withEvalQueueEnqueueLock 在 enqueue 业务前取得跨实例串行锁：
 //   - SQLite 单实例只需进程内互斥；SQLite 本身单写者，其它实例无法共享同一文件。
@@ -189,7 +205,8 @@ func ModelEvalQueueList(ctx context.Context) ([]model.ModelEvalQueueTask, error)
 //
 // 多实例并发下，条件 UPDATE 的 RowsAffected 可能小于候选数：部分候选被其它实例
 // 抢走。若像批处理那样遇到 partial 就整批返回空，会连本实例已成功置 running 的
-// 行一起丢弃，这些任务状态已变但无人执行，只能等下次启动 ResetRunning 兜底。
+// 行一起丢弃，这些任务状态已变但无人执行，只能等下次启动
+// ModelEvalQueueResetRunningOnStart（单实例立即回收，多实例等租约）兜底。
 // 因此这里逐条条件更新，只把 RowsAffected == 1 的行算作本实例成功派发的任务。
 func ModelEvalQueuePopNext(ctx context.Context, limit int) ([]model.ModelEvalQueueTask, error) {
 	if limit <= 0 {
@@ -233,18 +250,52 @@ func ModelEvalQueuePopNext(ctx context.Context, limit int) ([]model.ModelEvalQue
 	return tasks, nil
 }
 
-// ModelEvalQueueResetRunning 把遗留 running 重置回 queued（进程崩溃/重启恢复）。
+// ModelEvalQueueResetRunning 按租约回收遗留 running：StartedAt 为零（旧版本升级
+// 或租约概念引入前的行）以及超过 evalQueueRunningLease 的 running 退回 queued。
+// 租约未过期的 running 视为仍有实例在执行，不重置。
 //
-// 跨实例安全：只重置「没有租约信息」的历史 running（StartedAt 为零，旧版本升级
-// 或租约概念引入前的行）以及租约已过期的 running。仍处于 evalQueueRunningLease
-// 内的 running 视为其它实例（或本实例崩溃后很快重启）正在执行的任务，不重置，
-// 否则多实例部署下新实例启动会把健康实例正在跑的评估重新入队导致重复执行。
-// 过期任务由 Scheduler 每次回收周期调用本函数逐批清理。
+// 这是多实例安全的周期清扫，也是 MySQL/Postgres 的启动回收。不要把它当成
+// SQLite 单实例的进程重启入口——那种场景用 ModelEvalQueueResetRunningOnStart，
+// 否则崩溃或 SIGKILL 后任务会卡在 running，直到 15 分钟后再入队打一次上游。
 func ModelEvalQueueResetRunning(ctx context.Context) error {
 	cutoff := time.Now().Add(-evalQueueRunningLease)
 	return db.GetDB().WithContext(ctx).Model(&model.ModelEvalQueueTask{}).
 		Where("status = ? AND (started_at = ? OR started_at < ?)", model.QueueTaskRunning, time.Time{}, cutoff).
 		Updates(map[string]interface{}{"status": model.QueueTaskQueued}).Error
+}
+
+// ModelEvalQueueResetRunningOnStart 在调度器进程启动时回收遗留 running。
+//
+// SQLite 单实例：本进程刚刚启动，还没有任何 worker，库里的 running 只能是
+// 上次进程崩溃或被 SIGKILL 留下的，立即全部退回 queued，不等 15 分钟租约。
+// MySQL/Postgres：只做租约回收，避免抢走其它实例仍在执行的任务。
+// 两条路径都不获取入队用的 GET_LOCK / advisory lock。
+// 已 done/stopped 的行不在 WHERE 里，不会被重新入队再打上游。
+func ModelEvalQueueResetRunningOnStart(ctx context.Context) error {
+	if evalQueueMultiInstance() {
+		return ModelEvalQueueResetRunning(ctx)
+	}
+	return db.GetDB().WithContext(ctx).Model(&model.ModelEvalQueueTask{}).
+		Where("status = ?", model.QueueTaskRunning).
+		Updates(map[string]interface{}{
+			"status":     model.QueueTaskQueued,
+			"started_at": time.Time{},
+		}).Error
+}
+
+// ModelEvalQueueRequeueRunning 把指定的、仍为 running 的任务退回 queued。
+// 调度器停机时只传入本进程派发过的 id。已 MarkDone / stopped 的行 Rows 不匹配，
+// 保持原状，避免把已经完成的评估再送一次上游。ids 为空时不碰表。
+func ModelEvalQueueRequeueRunning(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return db.GetDB().WithContext(ctx).Model(&model.ModelEvalQueueTask{}).
+		Where("id IN ? AND status = ?", ids, model.QueueTaskRunning).
+		Updates(map[string]interface{}{
+			"status":     model.QueueTaskQueued,
+			"started_at": time.Time{},
+		}).Error
 }
 
 // ModelEvalQueueMoveUp 仅 queued 且非队首任务与前一 queued 任务交换 position；

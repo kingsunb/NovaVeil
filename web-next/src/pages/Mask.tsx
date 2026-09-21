@@ -26,6 +26,7 @@ import { Pill } from "@/components/ui/pill";
 import { Switch } from "@/components/ui/switch";
 import { TableSkeleton } from "@/components/ui/skeleton";
 import { QueryErrorBanner } from "@/components/ui/query-error";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   Dialog,
   DialogBody,
@@ -132,9 +133,11 @@ export default function MaskPage() {
                   <QueryErrorBanner onRetry={() => rulesQ.refetch()} />
                 </div>
               ) : rules.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-10 text-center">
-                  <p className="text-sm text-ink-muted">暂无内置规则</p>
-                </div>
+                <EmptyState
+                  className="py-10"
+                  icon={<ShieldCheck className="h-5 w-5" />}
+                  title="暂无内置规则"
+                />
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">

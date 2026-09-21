@@ -184,19 +184,24 @@ export default function LogsPage() {
     refetchInterval: 5000,
   });
 
+  const stopStateKey = ["log-stop-all-state"] as const;
   const stopAllMut = useMutation({
     mutationFn: () => api.stopAll(),
-    onSuccess: (result) => {
+    onMutate: () => qc.cancelQueries({ queryKey: stopStateKey }),
+    onSuccess: async (result) => {
       toast.success(`已请求停止 ${result.stopped} 个运行中请求`);
-      qc.setQueryData(["log-stop-all-state"], { is_stopped: true });
+      await qc.cancelQueries({ queryKey: stopStateKey });
+      qc.setQueryData(stopStateKey, { is_stopped: true });
     },
     onError: (e: Error) => toast.error(e.message || "停止请求失败"),
   });
   const resumeAllMut = useMutation({
     mutationFn: () => api.resumeAll(),
-    onSuccess: () => {
+    onMutate: () => qc.cancelQueries({ queryKey: stopStateKey }),
+    onSuccess: async () => {
       toast.success("已恢复接收新请求");
-      qc.setQueryData(["log-stop-all-state"], { is_stopped: false });
+      await qc.cancelQueries({ queryKey: stopStateKey });
+      qc.setQueryData(stopStateKey, { is_stopped: false });
     },
     onError: (e: Error) => toast.error(e.message || "恢复请求失败"),
   });

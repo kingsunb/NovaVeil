@@ -63,8 +63,10 @@ func (r *upstreamResponse) Close() {
 }
 
 // sendPassthrough 以同协议透传方式请求上游, 取得的响应无需转换即可回给客户端。
-// randomValue 为请求级一次性解析的随机头值, 同一请求的所有头与所有重试复用此值。
-func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool, randomValue string) (*upstreamResponse, error) {
+// randomValue 为请求级一次性解析的随机头值, 同一请求的普通动态头与所有重试复用此值。
+// opencodeSession 可选, 是同一请求已经解析好的 x-opencode-session; 未传时不覆盖该头。
+// 透传不改写请求体, prompt_cache_key 随正文原样上送。
+func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool, randomValue string, opencodeSession ...string) (*upstreamResponse, error) {
 	// 渠道整体并发上限: 发起上游前领取槽位并把释放函数交给调用方持有整个生命周期
 	// (含流式窗口预读与剩余事件流的逐帧消费); 满载等待期间上下文结束立即以 ctx 错误返回,
 	// 不发起任何上游请求。释放语义由 Close 统一收口, 不再依赖 defer, 避免流式分支在
@@ -74,7 +76,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		return nil, err
 	}
 
-	request, err := buildPassthroughRequest(format, raw, channel, randomValue)
+	request, err := buildPassthroughRequest(format, raw, channel, randomValue, opencodeSession...)
 	if err != nil {
 		releaseConcurrency()
 		return nil, err
@@ -191,7 +193,9 @@ type conversionMiddleware struct {
 	pipeline.DummyMiddleware               // 提供本次无需处理的其余 pipeline 中间件方法。
 	channel                  model.Channel // 本轮上游请求使用的渠道配置。
 	format                   llm.APIFormat // 上游渠道协议, 用于校验统一响应终态。
-	randomValue              string        // 请求级一次性解析的随机头值, 同一请求的所有头与所有重试复用此值。
+	randomValue              string        // 请求级一次性解析的随机头值, 同一请求的普通动态头与所有重试复用此值。
+	opencodeSession          string        // 请求级 x-opencode-session; 空串表示不覆盖 injectRandomHeaders 的占位。
+	promptCacheKey           string        // 脱敏后客户端 prompt_cache_key; 空串表示不回写。不写入日志。
 	rawBody                  string        // 上游非流式响应或错误的诊断片段(已截断), 转换/校验失败时嵌入错误。
 	usage                    *llm.Usage    // 非流式统一响应中确认的用量。
 	terminal                 string        // 非流式统一响应的终止原因, 供空输出保险丝区分合法空终态。
@@ -237,7 +241,13 @@ func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *
 	if m.format == llm.APIFormatOpenAIChatCompletion {
 		request.Body = normalizeChatRoles(request.Body)
 	}
-	return request, applyChannelConfig(m.channel, request, m.randomValue)
+	if err := applyChannelConfig(m.channel, request, m.randomValue, m.opencodeSession); err != nil {
+		return nil, err
+	}
+	// 角色归一与渠道参数覆盖之后再回写。Chat 归一会剥掉白名单外的顶层字段,
+	// 必须在那之后补回, 且只补出站 JSON 里还没有的字段。不回写 JSONBody, 避免该值进日志副本。
+	request.Body = restorePromptCacheKey(request.Body, m.promptCacheKey, m.format)
+	return request, nil
 }
 
 // StripNonFunctionTools 移除 tools 中类型不是 "function" 的条目(server 内建工具如
@@ -454,8 +464,10 @@ func (m *conversionMiddleware) OnOutboundLlmResponse(_ context.Context, response
 }
 
 // sendConverted 经 axonhub pipeline 把客户端请求转换成渠道协议后请求上游, 响应再转换回客户端协议。
-// randomValue 为请求级一次性解析的随机头值, 同一请求的所有头与所有重试复用此值。
-func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool, randomValue string) (*upstreamResponse, error) {
+// randomValue 为请求级一次性解析的随机头值, 同一请求的普通动态头与所有重试复用此值。
+// opencodeSession 可选, 是同一请求已经解析好的 x-opencode-session; 未传时不覆盖该头。
+// prompt_cache_key 从当前 raw.Body 读取。调用方必须传入脱敏之后的正文, 不得回写脱敏前原文。
+func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool, randomValue string, opencodeSession ...string) (*upstreamResponse, error) {
 	// 协议转换追踪: 关闭时仅一次缓存查询即短路, 不创建 ConvTrace, 不捕获转换体, 零开销。
 	traceOn := convTraceOn()
 	var ct *ConvTrace
@@ -486,7 +498,18 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		releaseConcurrency()
 		return nil, err
 	}
-	middleware := &conversionMiddleware{channel: channel, format: outbound.APIFormat(), randomValue: randomValue, traceEnabled: traceOn}
+	session := ""
+	if len(opencodeSession) > 0 {
+		session = opencodeSession[0]
+	}
+	middleware := &conversionMiddleware{
+		channel:         channel,
+		format:          outbound.APIFormat(),
+		randomValue:     randomValue,
+		opencodeSession: session,
+		promptCacheKey:  promptCacheKeyFromClient(raw.Body),
+		traceEnabled:    traceOn,
+	}
 	processor := pipeline.NewFactory(httpclient.NewHttpClientWithClient(client)).Pipeline(
 		inbound,
 		outbound,

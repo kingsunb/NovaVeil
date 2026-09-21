@@ -31,7 +31,7 @@ func probeChannel(ctx context.Context, channel model.Channel, modelName string) 
 	if err != nil {
 		return err
 	}
-	outbound, passthrough, err := buildOutbound(channel, llm.APIFormatOpenAIChatCompletion)
+	outbound, passthrough, err := buildOutbound(channel, nil, llm.APIFormatOpenAIChatCompletion)
 	if err != nil {
 		return err
 	}

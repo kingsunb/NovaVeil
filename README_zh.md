@@ -141,7 +141,7 @@ http://localhost:5174
 
 > **说明**：直接运行的二进制默认监听 `127.0.0.1:8080`。这不是容器里的监听地址。加固 Compose 在容器内设置 `NOVAVEIL_SERVER_HOST=0.0.0.0`，并在宿主发布为 `127.0.0.1:8888`。`scripts/run-local.sh` 默认 `0.0.0.0`，方便局域网访问。需要时显式设置 `server.host`。
 
-> **代理与 Cookie**：`server.trusted_proxies` 为空时忽略 `X-Forwarded-For`，登录限速看到的是直连对端。放在反向代理后面时，把这项设成代理的 CIDR 或 IP，不要改应用代码。`security.cookie_secure` 默认 false；请求本身是 TLS 时 Cookie 也会带 `Secure`。反代终止 TLS 后，进程看到的是明文 HTTP，这时要把它设为 true。直接走 HTTP 时保持 false，否则浏览器不会带回 Cookie。
+> **代理与 Cookie**：`server.trusted_proxies` 为空时忽略 `X-Forwarded-For`，登录限速看到的是直连对端。放在反向代理后面时，把这项设成代理的 CIDR 或 IP，不要改应用代码。`security.cookie_secure` 默认 false；请求本身是 TLS，或入站 `X-Forwarded-Proto` 为 `https` 时，Cookie 也会带 `Secure`。这个头只会把 Cookie 设得更严，不会因此采信 `X-Forwarded-For`。反代终止 TLS 后，进程看到的是明文 HTTP，这时要把它设为 true。直接走 HTTP 时保持 false，否则浏览器不会带回 Cookie。
 
 **数据库配置：**
 
@@ -322,7 +322,7 @@ experimental_bearer_token = "sk-NovaVeil-..."
 - 容器内默认监听 `0.0.0.0`，docker-compose 在宿主默认绑定 `127.0.0.1:8888`；如需公网访问请置于反向代理之后并启用 HTTPS
 - 反代终止 TLS 时保留原始 `Host` 请求头，并设置 `security.cookie_secure` 为 true（`NOVAVEIL_SECURITY_COOKIE_SECURE=true`）。直接 HTTP 保持 false
 - 登录接口内置限速：15 分钟内失败 5 次将临时拒绝；失败计数持久化在数据库中，多副本部署共享同一份计数
-- 备份导出（`/api/v1/setting/export`）包含渠道 Key 与 API Key **明文**（用于完整还原，导出文件头部 `note` 字段亦有提示）；用户密码不在导出范围内。请将备份文件视同生产凭据妥善保管
+- 备份导出（`/api/v1/setting/export`）里的渠道 Key、多 Key 和 API Key 是**明文**，导入后可以直接还原调用。库内这些 Key 仍是 `nv1:` 密文。代理地址、自定义头值和头模板值打成 `****`。用户密码不在导出范围内。请把备份文件视同生产凭据妥善保管
 - 默认直连部署不信任任何代理头（`X-Forwarded-For` 不可伪造绕过限速）。置于反向代理之后时，设置 `server.trusted_proxies`（或逗号分隔的 `NOVAVEIL_SERVER_TRUSTED_PROXIES`）为代理的 CIDR 或 IP。不要为此修改应用代码
 - Docker 升级必须通过 `NOVAVEIL_IMAGE` 使用经过审查的版本或 digest；只读 rootfs 会有意阻止容器内替换二进制
 - 镜像固定、HTTPS、目录权限、资源限制与更新校验见 [安全部署](docs/SECURE_DEPLOYMENT.md)

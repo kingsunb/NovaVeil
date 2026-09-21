@@ -337,7 +337,7 @@ func sendKeyTestRequest(ctx context.Context, effective model.Channel, modelName 
 	defer cancel()
 
 	format := testProbeClientFormat
-	outbound, passthrough, err := buildOutbound(effective, format)
+	outbound, passthrough, err := buildOutbound(effective, nil, format)
 	if err != nil {
 		return err
 	}
@@ -469,7 +469,7 @@ func newTestChatRequest(modelName string, message string) (*httpclient.Request, 
 // 无论成败, 都把这次探针作为终态请求写入日志流(keyLabel 标识所用密钥)。
 func sendChannelTestRequest(ctx context.Context, channel model.Channel, modelName string, message string, keyLabel string, maxTokens int) (*ChannelTestResult, error) {
 	format := testProbeClientFormat
-	outbound, passthrough, err := buildOutbound(channel, format)
+	outbound, passthrough, err := buildOutbound(channel, nil, format)
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +498,7 @@ func sendChannelTestRequest(ctx context.Context, channel model.Channel, modelNam
 	})
 	elapsed := time.Since(startedAt)
 	clientFormat := clientFormatLabel(format)
-	upstreamType := upstreamTypeLabel(channel.Type)
+	upstreamType := upstreamTypeLabel(channel, nil)
 	if err != nil {
 		recordTestRequest(channel, keyLabel, modelName, modelName, raw.Body, "", elapsed, nil, err, relayMode, clientFormat, upstreamType)
 		return nil, err
@@ -685,7 +685,7 @@ func testGroupMember(ctx context.Context, channelModelID int, groupName, message
 	effective.MaxConcurrent = 0
 
 	format := channelNativeFormat(effective.Type)
-	outbound, passthrough, err := buildOutbound(effective, format)
+	outbound, passthrough, err := buildOutbound(effective, nil, format)
 	if err != nil {
 		return GroupTestResult{ChannelName: channel.Name, Model: cm.Name, Status: "fail", Error: err.Error()}
 	}
@@ -711,7 +711,7 @@ func testGroupMember(ctx context.Context, channelModelID int, groupName, message
 	})
 	elapsed := time.Since(startedAt)
 	clientFormat := clientFormatLabel(format)
-	upstreamType := upstreamTypeLabel(effective.Type)
+	upstreamType := upstreamTypeLabel(effective, nil)
 	if err != nil {
 		recordTestRequest(effective, "", groupName, cm.Name, raw.Body, "", elapsed, nil, err, relayMode, clientFormat, upstreamType)
 		return GroupTestResult{ChannelName: channel.Name, Model: cm.Name, Status: "fail", Error: err.Error(), LatencyMS: elapsed.Milliseconds(), RelayMode: relayMode}

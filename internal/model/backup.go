@@ -3,16 +3,17 @@ package model
 import "time"
 
 // DBDumpSensitiveNote 写入导出文件头部的敏感信息提示:
-// 自 SEC-04 修复后, 导出中的渠道 Key / API Key / 代理凭据已统一脱敏为 "****",
-// 不再包含任何上游凭据明文; 用户表(含 bcrypt 密码哈希)本来就不参与导出。
-const DBDumpSensitiveNote = "SENSITIVE-FIELDS REDACTED: channel keys, API keys and proxy credentials in this backup are redacted to \"****\". To restore live credentials, re-enter them after import. 注意: 此备份中的敏感字段(渠道 Key / API Key / 代理凭据)均已脱敏, 导入后需重新填写真实凭据才能恢复调用; 用户密码不在导出范围内。"
+// 渠道 Key 与 API Key 是明文，导入后可直接还原调用。代理地址、自定义头值和请求头模板值仍是 "****"。
+// auth_jwt_secret、proxy_url、proxy_pool 整行不出现。用户表(含 bcrypt 密码哈希)本来就不参与导出。
+const DBDumpSensitiveNote = "PLAINTEXT KEYS: channel keys and API keys in this backup are plaintext and restore upstream calls. Proxy URLs, custom header values and header template values are redacted to \"****\". JWT secret, proxy_url and proxy_pool are omitted. The user table is not included. 注意: 此备份含渠道 Key 与 API Key 明文，可直接还原调用；代理地址、自定义头值和请求头模板值已脱敏为 ****；用户表不在导出范围内。请把文件当作生产凭据保管。"
 
 // DBDump is a full-database JSON export format for NovaVeil.
 // Import uses incremental semantics (insert new rows, and upsert on tables with natural keys).
 //
-// 敏感性: Channels.Key/Keys、Channel.ChannelProxy 与 APIKeys.APIKey 在导出时
-// 已脱敏为 "****"(见 Note 字段), 不含可用的上游凭据; 这些掩码在导入预检中会被
-// 拒绝或按空凭据处理, 避免把掩码当成真实密钥落库。users 表不导出, 不含用户密码哈希。
+// 敏感性: Channels.Key/Keys 与 APIKeys.APIKey 在导出时是明文(库内 nv1: 已解开)。
+// ChannelProxy、自定义头值和请求头模板值仍脱敏为 "****"。这些精确 "****" 在导入预检中会被拒绝,
+// 避免把掩码加密后当成真实凭据落库。auth_jwt_secret、proxy_url、proxy_pool 不出现在备份中。
+// users 表不导出, 不含用户密码哈希。
 // 实时请求日志(ErrorLog)不导出; 但用量汇总(UsageBuckets)与客户端调用统计
 // (ClientStats)作为跨重启的持久数据参与导出, 换平台后趋势图与防滥用审计不丢。
 type DBDump struct {

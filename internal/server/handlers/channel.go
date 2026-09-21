@@ -74,6 +74,10 @@ func init() {
 				Handle(getChannelKeys),
 		).
 		AddRoute(
+			router.NewRoute("/proxy/:id", http.MethodPost).
+				Handle(getChannelProxy),
+		).
+		AddRoute(
 			router.NewRoute("/last-sync-time", http.MethodGet).
 				Handle(getLastSyncTime),
 		)
@@ -104,7 +108,19 @@ func channelAdminSummary(channel model.Channel) model.Channel {
 			summary.Keys[i] = key
 		}
 	}
+	// 列表与创建/更新响应都不回代理明文(含 userinfo)。非空代理一律换成精确 "****",
+	// 明文只走 POST /channel/proxy/:id。更新时回传该哨兵表示保留已存代理。
+	summary.ChannelProxy = maskChannelProxyForList(channel.ChannelProxy)
 	return summary
+}
+
+// maskChannelProxyForList 把非空渠道代理换成列表掩码。空值保持原指针语义(nil 仍为 nil)。
+func maskChannelProxyForList(proxy *string) *string {
+	if proxy == nil || strings.TrimSpace(*proxy) == "" {
+		return proxy
+	}
+	masked := "****"
+	return &masked
 }
 
 func listChannel(c *gin.Context) {
@@ -210,6 +226,16 @@ func fetchModel(c *gin.Context) {
 		return
 	}
 	request.Key = request.PrimaryKey() // 前端只提交 keys 数组时回退取第一把, 兼容旧客户端直接传 key 字段。
+	// 列表把已存代理显示为 "****"。编辑态未重填代理时回传该哨兵, 探测应使用库内地址,
+	// 而不是把掩码当成代理 URL。
+	if request.ID != 0 && request.ChannelProxy != nil && *request.ChannelProxy == "****" {
+		stored, err := op.ChannelGetCore(request.ID)
+		if err != nil {
+			resp.Error(c, http.StatusBadRequest, err.Error())
+			return
+		}
+		request.ChannelProxy = stored.ChannelProxy
+	}
 	if request.Key == "" && request.ID != 0 {
 		// 编辑已有渠道时管理端默认不回传密钥明文, 允许仅带渠道 ID 拉取模型:
 		// 回退使用已存渠道的凭据, 避免"不改密钥就必须先点眼睛拿明文"的死锁。
@@ -340,6 +366,33 @@ func getChannelKeys(c *gin.Context) {
 	resp.Success(c, channelKeySecrets(channel))
 }
 
+// channelProxyView 是渠道代理明文查看接口的返回。
+type channelProxyView struct {
+	ChannelProxy string `json:"channel_proxy"`
+}
+
+// getChannelProxy 返回指定渠道的代理地址明文, 与密钥揭示同级, 仅限管理员会话访问。
+// 列表接口只回 "****", 本接口供按需查看; 响应不缓存。
+func getChannelProxy(c *gin.Context) {
+	resp.NoStore(c)
+	log.Warnf("channel proxy reveal id=%s ip=%s", c.Param("id"), c.ClientIP())
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
+		return
+	}
+	channel, err := op.ChannelGet(id)
+	if err != nil {
+		resp.Error(c, http.StatusNotFound, err.Error())
+		return
+	}
+	proxy := ""
+	if channel.ChannelProxy != nil {
+		proxy = *channel.ChannelProxy
+	}
+	resp.Success(c, channelProxyView{ChannelProxy: proxy})
+}
+
 // channelImportResult 渠道导入结果: 成功/失败计数与逐条失败原因。
 type channelImportResult struct {
 	Success int      `json:"success"`
@@ -361,33 +414,37 @@ func importChannel(c *gin.Context) {
 	resp.Success(c, channelImportResult{Success: success, Failed: failed, Errors: errors})
 }
 
-// exportChannel 以纯文本导出全部渠道的地址与全部密钥掩码:
-// 每个渠道一段(首行 # 渠道名, 其次地址, 之后每行一把密钥掩码), 渠道间空行分隔。
-// 明文上游密钥不再随导出返回(审计 SEC-03): 掩码形如 **** 末四位, 用于跨实例迁移时
-// 核对渠道数量与密钥尾号, 新实例上由管理员重新录入明文。内容仅限管理员会话访问。
+// exportChannel 以纯文本导出缓存中的全部渠道, 含内置渠道和没有 Key 的渠道。
+// 每个渠道一段: 首行 "# 渠道名", 其次明文上游地址, 之后每行一把明文密钥, 渠道间空行分隔。
+// 没有 Key 时只有名称和地址。列表接口仍然只返回掩码。内容仅限管理员会话访问, 响应不缓存。
 func exportChannel(c *gin.Context) {
 	resp.NoStore(c)
 	log.Warnf("channel export ip=%s", c.ClientIP())
-	channels := op.ChannelList()
+	filename := "channels-" + time.Now().Format("20060102-150405") + ".txt"
+	c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(formatChannelExport(op.ChannelList())))
+}
+
+// formatChannelExport 把传入的每一个渠道写成一段, 不按内置、启用或有没有 Key 过滤。
+// Key 与 BaseURL 保持明文。多 Key 逐行写出, 没有多 Key 时回退旧式单 Key。
+// 没有 Key 的渠道仍写出名称和地址, 后面不跟密钥行。空的密钥槽本身不写。
+func formatChannelExport(channels []model.Channel) string {
 	var b strings.Builder
 	for _, ch := range channels {
-		keys := make([]string, 0, len(ch.Keys)+1)
-		for _, k := range ch.Keys {
-			if k.Key != "" {
-				keys = append(keys, channelKeyMasked(k.Key))
-			}
-		}
-		if len(keys) == 0 && ch.Key != "" {
-			keys = append(keys, channelKeyMasked(ch.Key))
-		}
 		b.WriteString("# " + ch.Name + "\n")
 		b.WriteString(ch.BaseURL + "\n")
-		for _, key := range keys {
-			b.WriteString(key + "\n")
+		wroteKey := false
+		for _, k := range ch.Keys {
+			if strings.TrimSpace(k.Key) == "" {
+				continue
+			}
+			b.WriteString(k.Key + "\n")
+			wroteKey = true
+		}
+		if !wroteKey && strings.TrimSpace(ch.Key) != "" {
+			b.WriteString(ch.Key + "\n")
 		}
 		b.WriteString("\n")
 	}
-	filename := "channels-" + time.Now().Format("20060102-150405") + ".txt"
-	c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
-	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(b.String()))
+	return b.String()
 }

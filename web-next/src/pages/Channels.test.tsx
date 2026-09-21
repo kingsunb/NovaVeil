@@ -55,8 +55,21 @@ function mockFetch(opts: {
   }>;
   deleteOk?: boolean;
   importResult?: { success: number; failed: number; errors: string[] };
+  proxySecret?: string;
 } = {}) {
   const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
+    if (url.includes("/channel/proxy/")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            code: 200,
+            message: "success",
+            data: { channel_proxy: opts.proxySecret ?? "" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    }
     if (url.includes("/channel/import")) {
       return Promise.resolve(
         new Response(
@@ -118,6 +131,14 @@ function mockFetch(opts: {
             status: opts.deleteOk === false ? 500 : 200,
             headers: { "content-type": "application/json" },
           },
+        ),
+      );
+    }
+    if (url.includes("/setting/list")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ code: 200, message: "success", data: [] }),
+          { status: 200, headers: { "content-type": "application/json" } },
         ),
       );
     }
@@ -482,6 +503,101 @@ describe("<ChannelsPage />", () => {
     });
   });
 
+  it("渠道代理列表掩码可按眼睛揭示，未修改的 **** 不作为新代理提交", async () => {
+    const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const secret = "http://user:proxy-secret@10.1.2.3:7890";
+    const fetchMock = mockFetch({
+      list: [{ ...sampleChannel, channel_proxy: "****", proxy: true }],
+      proxySecret: secret,
+    });
+    render(<ChannelsPage />, {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <QueryClientProvider client={qc}>
+          <MemoryRouter>{children}</MemoryRouter>
+        </QueryClientProvider>
+      ),
+    });
+    await waitFor(() => screen.getByText("openai-prod"));
+    expect(screen.getByText("****")).toBeInTheDocument();
+    await user.click(screen.getByText("openai-prod"));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "高级" }));
+    const proxyInput = within(dialog).getByLabelText("渠道代理") as HTMLInputElement;
+    expect(proxyInput.value).toBe("****");
+
+    await user.click(within(dialog).getByRole("button", { name: "显示代理" }));
+    await waitFor(() => expect(proxyInput.value).toBe(secret));
+    const held = qc.getQueryCache().getAll().some((query) =>
+      JSON.stringify(query.state.data ?? "").includes(secret),
+    );
+    expect(held).toBe(false);
+    expect(
+      qc.getMutationCache().getAll().some((mutation) =>
+        JSON.stringify(mutation.state.data ?? "").includes(secret),
+      ),
+    ).toBe(false);
+
+    await user.click(within(dialog).getByRole("button", { name: "隐藏代理" }));
+    expect(proxyInput.value).toBe("****");
+    await user.click(within(dialog).getByRole("button", { name: /^保存$/ }));
+    await waitFor(() => {
+      const updateCalls = fetchMock.mock.calls.filter(([url]) =>
+        String(url).includes("/channel/update"),
+      );
+      expect(updateCalls.length).toBeGreaterThanOrEqual(1);
+      const body = JSON.parse(String(updateCalls.at(-1)?.[1]?.body)) as Record<string, unknown>;
+      expect(body).not.toHaveProperty("channel_proxy");
+      expect(JSON.stringify(body)).not.toContain(secret);
+    });
+  });
+
+  it("保存后渠道密钥明文不留在 React Query 缓存（登出前也读不回）", async () => {
+    const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const secret = "sk-CACHE-PROBE-7788";
+    const fetchMock = mockFetch({ list: [sampleChannel] });
+    render(<ChannelsPage />, {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <QueryClientProvider client={qc}>
+          <MemoryRouter>{children}</MemoryRouter>
+        </QueryClientProvider>
+      ),
+    });
+    await waitFor(() => screen.getByText("openai-prod"));
+    await user.click(screen.getByText("openai-prod"));
+    await screen.findByRole("dialog");
+    await user.click(screen.getByRole("button", { name: "批量添加" }));
+    await user.type(await screen.findByLabelText("批量密钥文本"), secret);
+    await user.click(screen.getByRole("button", { name: /^添加 \(1\)$/ }));
+    await user.click(screen.getByRole("button", { name: /^保存$/ }));
+    await waitFor(() => {
+      const updateCalls = fetchMock.mock.calls.filter(([url]) =>
+        String(url).includes("/channel/update"),
+      );
+      expect(updateCalls.length).toBeGreaterThanOrEqual(1);
+      expect(String(updateCalls.at(-1)?.[1]?.body)).toContain(secret);
+    });
+    const held = [...qc.getQueryCache().getAll(), ...qc.getMutationCache().getAll()].some(
+      (entry) => {
+        const state = "state" in entry ? entry.state : null;
+        const blob = JSON.stringify({
+          data: state && "data" in state ? state.data : undefined,
+          variables:
+            state && "variables" in state
+              ? (state as { variables?: unknown }).variables
+              : undefined,
+        });
+        return blob.includes(secret);
+      },
+    );
+    expect(held).toBe(false);
+  });
+
   it("批量添加密钥：空行与重复行自动跳过", async () => {
     const user = userEvent.setup();
     mockFetch({ list: [sampleChannel] });
@@ -756,5 +872,109 @@ describe("<ChannelsPage /> 渠道优先级行内编辑", () => {
       String(url).includes("/channel/import"),
     );
     expect(importCalls).toHaveLength(0);
+  });
+
+  it("非 OpenCode 渠道的模型行不展示上游协议", async () => {
+    const user = userEvent.setup();
+    mockList([sampleChannel]);
+    render(<ChannelsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("openai-prod"));
+    await user.click(screen.getByText("openai-prod"));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: /模型 \(/ }));
+
+    expect(within(dialog).getByText("gpt-4o")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/上游协议/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("按渠道")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("不支持")).not.toBeInTheDocument();
+  });
+
+  it("OpenCode 渠道模型行只读展示协议，空值显示按渠道，保存不改写字段", async () => {
+    const user = userEvent.setup();
+    const opencode = {
+      ...sampleChannel,
+      id: 7,
+      name: "opencode-zen",
+      opencode_compat: true,
+      models: [
+        {
+          id: 701,
+          channel_id: 7,
+          name: "zen-chat",
+          source: "auto" as const,
+          upstream_protocol: "chat" as const,
+        },
+        {
+          id: 702,
+          channel_id: 7,
+          name: "zen-responses",
+          source: "auto" as const,
+          upstream_protocol: "responses" as const,
+        },
+        {
+          id: 703,
+          channel_id: 7,
+          name: "zen-anthropic",
+          source: "manual" as const,
+          upstream_protocol: "anthropic" as const,
+        },
+        {
+          id: 704,
+          channel_id: 7,
+          name: "zen-blank",
+          source: "manual" as const,
+        },
+        {
+          id: 705,
+          channel_id: 7,
+          name: "zen-empty",
+          source: "auto" as const,
+          upstream_protocol: "" as const,
+        },
+      ],
+    };
+    const fetchMock = mockFetch({ list: [opencode] });
+    render(<ChannelsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("opencode-zen"));
+    await user.click(screen.getByText("opencode-zen"));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: /模型 \(/ }));
+
+    expect(within(dialog).getByLabelText("上游协议 Chat")).toHaveTextContent(
+      "Chat",
+    );
+    expect(
+      within(dialog).getByLabelText("上游协议 Responses"),
+    ).toHaveTextContent("Responses");
+    expect(
+      within(dialog).getByLabelText("上游协议 Anthropic"),
+    ).toHaveTextContent("Anthropic");
+    expect(within(dialog).getAllByLabelText("上游协议 按渠道")).toHaveLength(2);
+    expect(within(dialog).queryByText("不支持")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("0")).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("combobox", { name: /协议/ })).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: /^保存$/ }));
+    await waitFor(() => {
+      const updateCalls = fetchMock.mock.calls.filter(([url]) =>
+        String(url).includes("/channel/update"),
+      );
+      expect(updateCalls.length).toBeGreaterThanOrEqual(1);
+      const body = JSON.parse(
+        updateCalls[updateCalls.length - 1][1]?.body as string,
+      ) as {
+        models: Array<{ name: string; upstream_protocol?: string }>;
+      };
+      const byName = Object.fromEntries(body.models.map((m) => [m.name, m]));
+      expect(byName["zen-chat"].upstream_protocol).toBe("chat");
+      expect(byName["zen-responses"].upstream_protocol).toBe("responses");
+      expect(byName["zen-anthropic"].upstream_protocol).toBe("anthropic");
+      expect(byName["zen-blank"].upstream_protocol).toBeUndefined();
+      expect(byName["zen-empty"].upstream_protocol).toBe("");
+    });
+    const secretCalls = fetchMock.mock.calls.filter(([url]) =>
+      /\/channel\/keys\/|secret|upstream_protocol/.test(String(url)),
+    );
+    expect(secretCalls).toHaveLength(0);
   });
 });

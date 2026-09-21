@@ -7,8 +7,44 @@ import (
 
 	"github.com/kingsunb/NovaVeil/internal/db"
 	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/seal"
 	"github.com/kingsunb/NovaVeil/internal/utils/cache"
 )
+
+// settingAtRest 报告该设置项的值是否以 nv1: 密文落库。
+// 缓存与对外读取仍是明文; 无前缀的存量行按明文兼容读取。
+func settingAtRest(key model.SettingKey) bool {
+	switch key {
+	case model.SettingKeyAuthJWTSecret, model.SettingKeyHeaderTemplates, model.SettingKeyProxyURL, model.SettingKeyProxyPool:
+		return true
+	default:
+		return false
+	}
+}
+
+// sealSettingValue 在写入前加密敏感设置。空串保持空串, 非敏感项原样返回。
+func sealSettingValue(key model.SettingKey, plain string) (string, error) {
+	if !settingAtRest(key) || plain == "" {
+		return plain, nil
+	}
+	sealed, err := seal.Seal(plain)
+	if err != nil {
+		return "", fmt.Errorf("加密设置 %s 失败: %w", key, err)
+	}
+	return sealed, nil
+}
+
+// openSettingValue 在进入缓存前解密敏感设置。无 nv1: 前缀时按存量明文返回。
+func openSettingValue(key model.SettingKey, stored string) (string, error) {
+	if !settingAtRest(key) || stored == "" {
+		return stored, nil
+	}
+	plain, err := seal.Open(stored)
+	if err != nil {
+		return "", fmt.Errorf("解密设置 %s 失败: %w", key, err)
+	}
+	return plain, nil
+}
 
 var settingCache = cache.New[model.SettingKey, string](16)
 
@@ -71,7 +107,11 @@ func loadSettingFromDB(key model.SettingKey) (string, error) {
 		}
 		return "", fmt.Errorf("failed to read setting %q: %w", key, err)
 	}
-	return row.Value, nil
+	plain, err := openSettingValue(key, row.Value)
+	if err != nil {
+		return "", err
+	}
+	return plain, nil
 }
 
 func SettingSetString(key model.SettingKey, value string) error {
@@ -82,7 +122,11 @@ func SettingSetString(key model.SettingKey, value string) error {
 	if valueCache == value {
 		return nil
 	}
-	result := db.GetDB().Model(&model.Setting{Key: key}).Update("Value", value)
+	stored, err := sealSettingValue(key, value)
+	if err != nil {
+		return err
+	}
+	result := db.GetDB().Model(&model.Setting{Key: key}).Update("Value", stored)
 	if result.Error != nil {
 		return fmt.Errorf("保存设置失败: %w", result.Error)
 	}
@@ -164,13 +208,27 @@ func settingRefreshCache(ctx context.Context) error {
 	}
 
 	if len(missingSettings) > 0 {
-		if err := db.CreateInBatches(missingSettings, len(missingSettings)).Error; err != nil {
+		stored := make([]model.Setting, len(missingSettings))
+		for i, setting := range missingSettings {
+			stored[i] = setting
+			sealed, err := sealSettingValue(setting.Key, setting.Value)
+			if err != nil {
+				return err
+			}
+			stored[i].Value = sealed
+		}
+		if err := db.CreateInBatches(stored, len(stored)).Error; err != nil {
 			return fmt.Errorf("补建缺失设置失败: %w", err)
 		}
+		// 缓存使用明文默认值; 库内副本已是密文。
 		settings = append(settings, missingSettings...)
 	}
 	for _, setting := range settings {
-		settingCache.Set(setting.Key, setting.Value)
+		plain, err := openSettingValue(setting.Key, setting.Value)
+		if err != nil {
+			return err
+		}
+		settingCache.Set(setting.Key, plain)
 	}
 	// 初始化随机头规则解析缓存: 从当前设置值解析, 避免热路径首次请求冷加载。
 	if raw, ok := settingCache.Get(model.SettingKeyChannelRandomHeaders); ok {

@@ -3,7 +3,7 @@ package relay
 // 异常终止原因防护测试: 上游在普通数据帧中下发白名单之外的 finish_reason/stop_reason
 // (如 "network_error")时, 三条拦截路径必须保证该取值不出现在下游可见字节流中:
 //  1. 窗口期: readStreamWindow 逐事件检查, 整轮按失败返回并换目标重试;
-//  2. 转发期: 已提交后抑制污染块, 合成干净协议终止帧收尾, 本轮记失败并计入成员失败;
+//  2. 转发期: 已提交后抑制污染块, 静默截断(不补成功 stop/[DONE]), 本轮记失败并计入成员失败;
 //  3. 非流式: validateResponse 统一白名单校验, 异常响应整轮判无效。
 
 import (
@@ -242,8 +242,8 @@ func TestReadStreamWindowClosesAtContentBeforeAbnormalChunk(t *testing.T) {
 
 // TestForwardingSuppressesAbnormalFinishChunkOpenAI 验证转发期拦截(OpenAI Chat):
 // 已提交后上游下发 finish_reason=network_error 的块, 该块与其后所有帧都被抑制,
-// 客户端字节流不含该值并以合成 finish chunk + [DONE] 规范收尾; 成员计一次失败进入冷却,
-// 且已提交的轮次不再触发故障转移。
+// 客户端字节流不含该值, 也不再补成功的 stop/[DONE]; 服务端按失败定稿。
+// 成员计一次失败进入冷却, 且已提交的轮次不再触发故障转移。
 func TestForwardingSuppressesAbnormalFinishChunkOpenAI(t *testing.T) {
 	setupFailoverTest(t)
 
@@ -297,22 +297,16 @@ func TestForwardingSuppressesAbnormalFinishChunkOpenAI(t *testing.T) {
 		t.Fatalf("污染前的已转发内容应保留, 实际: %s", responseBody)
 	}
 	frames := parseSSEFrames(t, recorder.Body.Bytes())
-	if len(frames) < 3 {
-		t.Fatalf("客户端应收到的帧数不足, 实际 %d 帧: %+v", len(frames), frames)
+	if len(frames) < 2 {
+		t.Fatalf("客户端应收到污染前的帧, 实际 %d 帧: %+v", len(frames), frames)
 	}
-	if frames[len(frames)-1].data != "[DONE]" {
-		t.Fatalf("流应以 [DONE] 规范收尾, 实际末帧: %+v", frames[len(frames)-1])
+	for _, frame := range frames {
+		if frame.data == "[DONE]" || strings.Contains(frame.data, `"finish_reason":"stop"`) || strings.Contains(frame.data, "novaveil-recovery") {
+			t.Fatalf("污染流不得补成功 stop/[DONE], 实际: %s", frame.data)
+		}
 	}
-	var finish struct {
-		Choices []struct {
-			FinishReason string `json:"finish_reason"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal([]byte(frames[len(frames)-2].data), &finish); err != nil {
-		t.Fatalf("解析倒数第二帧失败: %v (data: %s)", err, frames[len(frames)-2].data)
-	}
-	if len(finish.Choices) == 0 || finish.Choices[0].FinishReason != "stop" {
-		t.Fatalf("合成收尾应以 stop 终止, 实际: %s", frames[len(frames)-2].data)
+	if !strings.Contains(frames[len(frames)-1].data, "partial-answer") {
+		t.Fatalf("静默截断应停在最后一条已交付内容, 实际末帧: %s", frames[len(frames)-1].data)
 	}
 
 	if got := badHits.Load(); got != 1 {
@@ -332,7 +326,7 @@ func TestForwardingSuppressesAbnormalFinishChunkOpenAI(t *testing.T) {
 
 // TestForwardingSuppressesAbnormalStopReasonAnthropic 验证转发期拦截(Anthropic):
 // message_delta 携带异常 stop_reason 时该帧与 message_stop 被抑制,
-// 客户端收到合成 message_delta(end_turn) + message_stop 干净收尾。
+// 不再补 end_turn / message_stop, 服务端按失败定稿。
 func TestForwardingSuppressesAbnormalStopReasonAnthropic(t *testing.T) {
 	setupFailoverTest(t)
 
@@ -360,6 +354,7 @@ func TestForwardingSuppressesAbnormalStopReasonAnthropic(t *testing.T) {
 
 	engine, path := newIntegrationEngine(llm.APIFormatAnthropicMessage)
 	body := fmt.Sprintf(`{"model":%q,"max_tokens":32,"messages":[{"role":"user","content":"hi"}],"stream":true}`, group.Name)
+	expectedID := nextRequestID()
 	recorder := postRelayJSON(t, engine, path, body, "", nil)
 
 	if recorder.Code != http.StatusOK {
@@ -370,25 +365,23 @@ func TestForwardingSuppressesAbnormalStopReasonAnthropic(t *testing.T) {
 		t.Fatalf("异常 stop_reason 不得出现在下游字节流中, 实际: %s", responseBody)
 	}
 	frames := parseSSEFrames(t, recorder.Body.Bytes())
-	wantTypes := []string{"message_start", "content_block_delta", "message_delta", "message_stop"}
+	wantTypes := []string{"message_start", "content_block_delta"}
 	if len(frames) != len(wantTypes) {
-		t.Fatalf("污染帧被抑制后应恰好收到 %d 帧, 实际 %d 帧: %+v", len(wantTypes), len(frames), frames)
+		t.Fatalf("污染帧被抑制后应静默截断为 %d 帧, 实际 %d 帧: %+v", len(wantTypes), len(frames), frames)
 	}
 	for i, want := range wantTypes {
 		if got := frames[i].frameType(); got != want {
 			t.Fatalf("第 %d 帧类型 = %q, 期望 %q (data: %s)", i+1, got, want, frames[i].data)
 		}
 	}
-	var delta struct {
-		Delta struct {
-			StopReason string `json:"stop_reason"`
-		} `json:"delta"`
+	for _, frame := range frames {
+		if frame.frameType() == "message_delta" || frame.frameType() == "message_stop" || strings.Contains(frame.data, "end_turn") {
+			t.Fatalf("污染流不得补成功终止帧, 实际: %+v", frame)
+		}
 	}
-	if err := json.Unmarshal([]byte(frames[len(frames)-2].data), &delta); err != nil {
-		t.Fatalf("解析合成 message_delta 失败: %v", err)
-	}
-	if delta.Delta.StopReason != "end_turn" {
-		t.Fatalf("合成 message_delta stop_reason 应为 end_turn, 实际 %q", delta.Delta.StopReason)
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusFailed {
+		t.Fatalf("污染轮次应以失败终态定稿, 实际 %s(%s)", state.Status, state.Error)
 	}
 }
 
@@ -517,7 +510,8 @@ func TestWindowAbnormalFinishFailsOverBeforeCommit(t *testing.T) {
 }
 
 // TestResponsesCompletedWithBadStatusSuppressedInForwarding 验证 Responses 转发期兜底:
-// 已提交后收到 status 非 completed 的 response.completed 事件时抑制并合成干净 completed 收尾。
+// 已提交后收到 status 非 completed 的 response.completed 事件时抑制该帧, 静默截断,
+// 不再合成 status=completed 的成功收尾; 服务端按失败定稿。
 func TestResponsesCompletedWithBadStatusSuppressedInForwarding(t *testing.T) {
 	setupFailoverTest(t)
 
@@ -546,6 +540,7 @@ func TestResponsesCompletedWithBadStatusSuppressedInForwarding(t *testing.T) {
 	engine := gin.New()
 	engine.POST("/v1/responses", Forward(llm.APIFormatOpenAIResponse))
 	body := fmt.Sprintf(`{"model":%q,"input":"hi","stream":true}`, group.Name)
+	expectedID := nextRequestID()
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -560,18 +555,14 @@ func TestResponsesCompletedWithBadStatusSuppressedInForwarding(t *testing.T) {
 	}
 	frames := parseSSEFrames(t, recorder.Body.Bytes())
 	last := frames[len(frames)-1]
-	if last.frameType() != "response.completed" {
-		t.Fatalf("流应以合成的 response.completed 收尾, 实际末帧: %+v", last)
+	if last.frameType() == "response.completed" || strings.Contains(last.data, `"status":"completed"`) || strings.Contains(last.data, "resp_novaveil_recovery") {
+		t.Fatalf("污染流不得补成功 response.completed, 实际末帧: %+v", last)
 	}
-	var completed struct {
-		Response struct {
-			Status string `json:"status"`
-		} `json:"response"`
+	if !strings.Contains(last.data, "partial") {
+		t.Fatalf("静默截断应停在已交付增量, 实际末帧: %+v", last)
 	}
-	if err := json.Unmarshal([]byte(last.data), &completed); err != nil {
-		t.Fatalf("解析合成 response.completed 失败: %v", err)
-	}
-	if completed.Response.Status != "completed" {
-		t.Fatalf("合成 response.completed status 应为 completed, 实际 %q", completed.Response.Status)
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusFailed {
+		t.Fatalf("污染轮次应以失败终态定稿, 实际 %s(%s)", state.Status, state.Error)
 	}
 }

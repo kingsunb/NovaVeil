@@ -65,7 +65,6 @@ jobs:
       - name: Validate scripts and Compose
         env:
           NOVAVEIL_IMAGE: ghcr.io/kingsunb/novaveil:0.0.0-ci
-          NOVAVEIL_WEB_NEXT_IMAGE: ghcr.io/kingsunb/novaveil-web-next:0.0.0-ci
         run: |
           bash -n \
             scripts/build.sh \

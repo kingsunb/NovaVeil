@@ -114,7 +114,7 @@ func TestIsTerminalStreamEvent(t *testing.T) {
 }
 
 func TestTerminalStreamFrames(t *testing.T) {
-	// 正常兜底(nil failure, 如污染流/缺 [DONE] 哨兵的完整流): 规范的 finish chunk + [DONE]。
+	// 缺 [DONE] 哨兵的完整流仍合成 finish chunk + [DONE]。污染流不再走这条收尾。
 	openaiOk := terminalStreamFrames(llm.APIFormatOpenAIChatCompletion)
 	if len(openaiOk) != 2 || gjson.GetBytes(openaiOk[0].Data, "choices.0.finish_reason").String() != "stop" {
 		t.Fatalf("chat 正常收尾应为 stop finish chunk + [DONE], 得到 %d 帧", len(openaiOk))

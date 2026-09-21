@@ -33,6 +33,12 @@ export type ChannelProvider =
 
 export type ChannelModelSource = "auto" | "manual";
 
+/**
+ * OpenCode 渠道模型行的上游原生协议。
+ * 空字符串或字段缺失表示按渠道类型转发，不是错误。
+ */
+export type ChannelUpstreamProtocol = "" | "chat" | "responses" | "anthropic";
+
 export interface ChannelKey {
   id: string;
   /** 仅前端编辑草稿保存原服务端 ID；不会提交给后端。 */
@@ -50,6 +56,11 @@ export interface ChannelModel {
   channel_id: number;
   name: string;
   source: ChannelModelSource;
+  /**
+   * 仅 OpenCode 渠道（opencode_compat）使用。
+   * 空或缺失表示按渠道类型转发；不要把缺省显示成错误。
+   */
+  upstream_protocol?: ChannelUpstreamProtocol;
 }
 
 export interface ChannelModelLimit {

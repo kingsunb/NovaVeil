@@ -264,7 +264,7 @@ func stickyTargetOf(t *testing.T, groupID int, session string) (int, bool) {
 	t.Helper()
 	routeMu.Lock()
 	defer routeMu.Unlock()
-	entry, ok := sessionStickies[groupID][session]
+	entry, ok := sessionStickies[groupID][sessionScopeKey(0, session)]
 	if !ok {
 		return 0, false
 	}

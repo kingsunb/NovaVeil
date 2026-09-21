@@ -169,7 +169,7 @@ func TestBuildOutboundPassthroughConsistency(t *testing.T) {
 				BaseURL: "http://localhost:12345",
 				Key:     "test-key",
 			}
-			_, passthrough, err := buildOutbound(channel, testProbeClientFormat)
+			_, passthrough, err := buildOutbound(channel, nil, testProbeClientFormat)
 			if err != nil {
 				t.Fatalf("buildOutbound 失败: %v", err)
 			}
@@ -187,7 +187,7 @@ func TestBuildOutboundPassthroughConsistency(t *testing.T) {
 			Key:                    "test-key",
 			PassThroughBodyEnabled: true,
 		}
-		_, passthrough, err := buildOutbound(channel, testProbeClientFormat)
+		_, passthrough, err := buildOutbound(channel, nil, testProbeClientFormat)
 		if err != nil {
 			t.Fatalf("buildOutbound 失败: %v", err)
 		}

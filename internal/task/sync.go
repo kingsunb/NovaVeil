@@ -13,6 +13,12 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/op"
 )
 
+// 模型列表与 OpenCode 目录的拉取点，测试替换它们以避免真实网络请求。
+var (
+	fetchChannelModels     = helper.FetchModels
+	fetchOpencodeProtocols = helper.FetchOpencodeProtocols
+)
+
 var (
 	syncModelsMu         sync.Mutex   // 保证同一时间只有一个模型同步任务运行。
 	lastSyncModelsTimeMu sync.RWMutex // 最近同步时间的读写锁。
@@ -47,7 +53,7 @@ func SyncModelsTask() error {
 		// 单渠道级超时: 全部渠道共享总预算时, 一个挂死渠道会耗尽 30 分钟预算,
 		// 其余渠道全部被饿死; 单渠道 3 分钟足够完成分页模型列表。
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, 3*time.Minute)
-		fetchModels, err := helper.FetchModels(fetchCtx, channel)
+		fetchModels, err := fetchChannelModels(fetchCtx, channel)
 		if err != nil {
 			log.Warnf("failed to sync models for channel %s: %v", channel.Name, err)
 			if syncErr == nil {
@@ -76,8 +82,22 @@ func SyncModelsTask() error {
 			}
 		}
 
+		// 目录失败只跳过协议填充。/v1/models 的失败与空列表保护已经在上面返回。
+		var protocols map[string]string
+		protocolsOK := false
+		if channel.OpencodeCompat {
+			fetched, catalogErr := fetchOpencodeProtocols(fetchCtx, channel)
+			if catalogErr != nil {
+				log.Warnf("skip opencode protocol fill for channel %s: %v", channel.Name, catalogErr)
+			} else {
+				protocols = fetched
+				protocolsOK = true
+			}
+		}
+
 		manualNames := make(map[string]struct{})
 		oldAutoNames := make(map[string]struct{})
+		oldAutoProtocols := make(map[string]string)
 		models := make([]model.ChannelModel, 0, len(channel.Models)+len(fetchModels))
 		for _, channelModel := range channel.Models {
 			switch channelModel.Source {
@@ -86,9 +106,12 @@ func SyncModelsTask() error {
 				models = append(models, channelModel)
 			case model.ChannelModelSourceAuto:
 				oldAutoNames[channelModel.Name] = struct{}{}
+				oldAutoProtocols[channelModel.Name] = channelModel.UpstreamProtocol
 			}
 		}
 		// 外部返回的模型名只在进入内部流程时清洗一次，并由手动模型优先占用重复名称。
+		// 重建 auto 模型时必须带上协议：目录识别到的值优先，否则抄回上一轮的非空协议。
+		// 只写名字和 Source 会在 ChannelUpdate 时把协议抹掉。
 		seen := make(map[string]struct{}, len(fetchModels))
 		autoModels := make([]model.ChannelModel, 0, len(fetchModels))
 		for _, modelName := range fetchModels {
@@ -103,7 +126,17 @@ func SyncModelsTask() error {
 				continue
 			}
 			seen[modelName] = struct{}{}
-			autoModels = append(autoModels, model.ChannelModel{Name: modelName, Source: model.ChannelModelSourceAuto})
+			protocol := oldAutoProtocols[modelName]
+			if protocolsOK {
+				if updated := protocols[modelName]; updated != "" {
+					protocol = updated
+				}
+			}
+			autoModels = append(autoModels, model.ChannelModel{
+				Name:             modelName,
+				Source:           model.ChannelModelSourceAuto,
+				UpstreamProtocol: protocol,
+			})
 		}
 		addedModels := make([]string, 0)
 		newAutoNames := make(map[string]struct{}, len(autoModels))
@@ -119,7 +152,14 @@ func SyncModelsTask() error {
 				deletedModels = append(deletedModels, name)
 			}
 		}
-		if len(deletedModels) == 0 && len(addedModels) == 0 {
+		protocolDirty := false
+		for _, channelModel := range autoModels {
+			if prev, existed := oldAutoProtocols[channelModel.Name]; existed && prev != channelModel.UpstreamProtocol {
+				protocolDirty = true
+				break
+			}
+		}
+		if len(deletedModels) == 0 && len(addedModels) == 0 && !protocolDirty {
 			// 无增删的渠道同样要释放本轮 fetchCtx, 否则其定时器会挂到超时为止。
 			fetchCancel()
 			continue

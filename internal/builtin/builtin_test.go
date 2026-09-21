@@ -8,6 +8,7 @@ import (
 
 	"github.com/kingsunb/NovaVeil/internal/db"
 	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/seal"
 	"github.com/kingsunb/NovaVeil/internal/testutil"
 )
 
@@ -410,6 +411,172 @@ func TestBuiltinOfficialChannelsDefinitions(t *testing.T) {
 	}
 }
 
+func TestOpenCodeFreeSeedProtocolsAreVerified(t *testing.T) {
+	var free *model.Channel
+	for i := range BuiltinFreeChannels {
+		if BuiltinFreeChannels[i].Name == "OpenCode Free" {
+			free = &BuiltinFreeChannels[i]
+			break
+		}
+	}
+	if free == nil {
+		t.Fatal("BuiltinFreeChannels should contain OpenCode Free")
+	}
+	seen := make(map[string]bool, len(free.Models))
+	for _, channelModel := range free.Models {
+		seen[channelModel.Name] = true
+		want, ok := model.OpencodeZenSeedProtocols[channelModel.Name]
+		if !ok {
+			if channelModel.UpstreamProtocol != "" {
+				t.Fatalf("unverified model %s has protocol %q", channelModel.Name, channelModel.UpstreamProtocol)
+			}
+			continue
+		}
+		if channelModel.UpstreamProtocol != want {
+			t.Fatalf("model %s protocol = %q, want %q", channelModel.Name, channelModel.UpstreamProtocol, want)
+		}
+	}
+	for name := range model.OpencodeZenSeedProtocols {
+		if !seen[name] {
+			t.Fatalf("verified model %s missing from OpenCode Free seed", name)
+		}
+	}
+	for _, official := range BuiltinOfficialChannels {
+		if official.Name == "OpenCode" && len(official.Models) != 0 {
+			t.Fatal("official OpenCode channel should not ship a model list")
+		}
+	}
+}
+
+func TestFreeChannelFromDefinitionKeepsUpstreamProtocol(t *testing.T) {
+	got := freeChannelFromDefinition(model.Channel{
+		Name:    "protocol-copy",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://opencode.ai/zen",
+		Models: []model.ChannelModel{{
+			Name:             "deepseek-v4-flash-free",
+			UpstreamProtocol: model.UpstreamProtocolChat,
+		}},
+	})
+	if len(got.Models) != 1 {
+		t.Fatalf("models = %d", len(got.Models))
+	}
+	if got.Models[0].UpstreamProtocol != model.UpstreamProtocolChat {
+		t.Fatalf("protocol = %q", got.Models[0].UpstreamProtocol)
+	}
+	if got.Models[0].Source != model.ChannelModelSourceManual {
+		t.Fatalf("source = %q", got.Models[0].Source)
+	}
+}
+
+func TestBackfillOpencodeUpstreamProtocolsDoesNotOverwrite(t *testing.T) {
+	suffix := time.Now().UnixNano()
+	zen := model.Channel{
+		Name:           fmt.Sprintf("backfill-zen-%d", suffix),
+		Type:           model.ChannelProviderOpenAI,
+		Enabled:        true,
+		Builtin:        true,
+		OpencodeCompat: true,
+		BaseURL:        "https://opencode.ai/zen",
+		Key:            "public-key",
+		Models: []model.ChannelModel{
+			{Name: "deepseek-v4-flash-free", Source: model.ChannelModelSourceManual},
+			{Name: "hy3-free", Source: model.ChannelModelSourceManual, UpstreamProtocol: model.UpstreamProtocolAnthropic},
+			{Name: "not-in-catalog", Source: model.ChannelModelSourceManual},
+		},
+	}
+	goChannel := model.Channel{
+		Name:           fmt.Sprintf("backfill-go-%d", suffix),
+		Type:           model.ChannelProviderOpenAI,
+		Enabled:        false,
+		Builtin:        true,
+		OpencodeCompat: true,
+		BaseURL:        "https://opencode.ai/zen/go",
+		Key:            "go-key",
+		Models: []model.ChannelModel{
+			{Name: "deepseek-v4-flash-free", Source: model.ChannelModelSourceAuto},
+		},
+	}
+	custom := model.Channel{
+		Name:           fmt.Sprintf("backfill-custom-%d", suffix),
+		Type:           model.ChannelProviderAnthropic,
+		Enabled:        true,
+		Builtin:        false,
+		OpencodeCompat: true,
+		BaseURL:        "https://opencode.ai/zen",
+		Key:            "custom-key",
+		Models: []model.ChannelModel{
+			{Name: "deepseek-v4-flash-free", Source: model.ChannelModelSourceManual},
+		},
+	}
+	for _, channel := range []*model.Channel{&zen, &goChannel, &custom} {
+		if err := db.GetDB().Create(channel).Error; err != nil {
+			t.Fatalf("create %s: %v", channel.Name, err)
+		}
+	}
+
+	if err := BackfillOpencodeUpstreamProtocols(db.GetDB()); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+
+	zenModels := protocolsByName(t, zen.ID)
+	if zenModels["deepseek-v4-flash-free"] != model.UpstreamProtocolChat {
+		t.Fatalf("empty zen protocol = %q, want chat", zenModels["deepseek-v4-flash-free"])
+	}
+	if zenModels["hy3-free"] != model.UpstreamProtocolAnthropic {
+		t.Fatalf("non-empty protocol overwritten: %q", zenModels["hy3-free"])
+	}
+	if zenModels["not-in-catalog"] != "" {
+		t.Fatalf("unverified model filled: %q", zenModels["not-in-catalog"])
+	}
+	if protocolsByName(t, goChannel.ID)["deepseek-v4-flash-free"] != "" {
+		t.Fatal("go tier must not receive the zen seed protocol")
+	}
+	if protocolsByName(t, custom.ID)["deepseek-v4-flash-free"] != "" {
+		t.Fatal("non-builtin channel must not be backfilled")
+	}
+
+	var stored model.Channel
+	if err := db.GetDB().First(&stored, zen.ID).Error; err != nil {
+		t.Fatalf("reload zen: %v", err)
+	}
+	if stored.Type != model.ChannelProviderOpenAI || stored.Key != "public-key" || !stored.Enabled {
+		t.Fatalf("backfill changed channel identity: type=%s key=%q enabled=%v", stored.Type, stored.Key, stored.Enabled)
+	}
+	var count int64
+	if err := db.GetDB().Model(&model.ChannelModel{}).Where("channel_id = ?", zen.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count models: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("model count = %d, want 3", count)
+	}
+
+	if err := db.GetDB().Model(&model.ChannelModel{}).
+		Where("channel_id = ? AND name = ?", zen.ID, "deepseek-v4-flash-free").
+		Update("upstream_protocol", model.UpstreamProtocolResponses).Error; err != nil {
+		t.Fatalf("set admin protocol: %v", err)
+	}
+	if err := BackfillOpencodeUpstreamProtocols(db.GetDB()); err != nil {
+		t.Fatalf("second backfill: %v", err)
+	}
+	if protocolsByName(t, zen.ID)["deepseek-v4-flash-free"] != model.UpstreamProtocolResponses {
+		t.Fatal("second backfill overwrote a non-empty protocol")
+	}
+}
+
+func protocolsByName(t *testing.T, channelID int) map[string]string {
+	t.Helper()
+	var rows []model.ChannelModel
+	if err := db.GetDB().Where("channel_id = ?", channelID).Find(&rows).Error; err != nil {
+		t.Fatalf("load models: %v", err)
+	}
+	got := make(map[string]string, len(rows))
+	for _, row := range rows {
+		got[row.Name] = row.UpstreamProtocol
+	}
+	return got
+}
+
 func TestBuiltinOfficialOpenCodeHasOpencodeCompat(t *testing.T) {
 	// OpenCode 官方渠道与免费版一样需要 OpencodeCompat 和 x-opencode-client /
 	// User-Agent 请求头，确保上游 opencode.ai/zen/go 不因缺少会话头拒绝请求。
@@ -468,6 +635,13 @@ func TestEnsureOfficialBuiltinChannelsPreservesOpencodeCompat(t *testing.T) {
 	}
 	if len(stored.CustomHeader) != 1 || stored.CustomHeader[0].HeaderKey != "x-opencode-client" {
 		t.Fatalf("official channel should preserve custom headers, got %+v", stored.CustomHeader)
+	}
+	if !seal.IsSealed(stored.CustomHeader[0].HeaderValue) {
+		t.Fatalf("builtin header value must be sealed, got %q", stored.CustomHeader[0].HeaderValue)
+	}
+	opened, err := seal.Open(stored.CustomHeader[0].HeaderValue)
+	if err != nil || opened != "desktop" {
+		t.Fatalf("opened builtin header = %q, %v", opened, err)
 	}
 }
 

@@ -19,7 +19,7 @@ Status: implemented
 - **SEC-01 建两级校验**：`internal/op/channel.go` 拆出 `ValidateChannelEgressBaseURL`（严格：URL 语法 + 主机/DNS 上级命名 + 禁止 loopback/private/link-local/unspecified/multicast/0.0.0.0 + DNS 重绑定时序）和 `validateChannelBaseURL`（内部，Go test 二进制内只做语法校验以保持既有 `httptest` 测试语义）。`ChannelCreate` 与 fetch-model（admin 拉取模型列表）都走严格校验。
 - **REL-03**：`resolveGroupRefChain(groupID, format)` 递归带 `format` 并传给 `cloneGroupState`，新增 `TestResolveGroupRefChain_PassesFormat`。
 - **REL-04**：`StreamRestorer` 的 pending 改为 `map[string][]byte` 并按通道隔离，`Push`/`Flush` 委托给 `PushChannel(DefaultChannel, …)`/`FlushChannel(DefaultChannel)`；新增 `ReasoningChannel`、`ToolChannelPrefix`（`tool-<index>`）、`FlushChannels`。`flushStreamRestorer` 在流终止时按 `default → reasoning → tool-N` 排序通道并分别包装对应 SSE 字段，非默认通道残留只在 OpenAI Chat 分支包装；其它协议下非默认通道残留按协议不支持处理，绝不混入 content。
-- **REL-05**：`maskSessionKey` 增加 `api_key_id` 整数前缀（消费端示例：`api_key_id==0` 的公用用户态会话保持旧数据兼容），并按 `apiKeyToken` 属性导出公开规则。
+- **REL-05**：`maskSessionKey` 在 `api_key_id>0` 时增加整数前缀。`api_key_id==0` 后来不再保持裸键，控制台使用稳定 `console:` 前缀，粘合和上游会话号共用这把键。见 [请求体预算、会话隔离与污染流截断](./2026-09-22-relay-body-budget-sticky-mask-stream.md)。
 - **REL-06**：`newTestRequest` 增加 `maxTokens` 参数，导出 `testMaxTokens = 100000`（评估）与 `testPanelMaxTokens = 4096`（面板/分组诊断），测试请求显式注入 `max_tokens`（Anthropic 侧）或 `max_tokens`/`max_output_tokens`（OpenAI 侧）。传 0 时回退 4096，等旧兼容体入口 `newTestChatRequest` 收编到 4096。
 
 ## 备选方案

@@ -450,4 +450,18 @@ describe("safeLegacyHref", () => {
     expect(safeLegacyHref("data:text/html,hi")).toBe("/legacy");
     expect(safeLegacyHref("")).toBe("/legacy");
   });
+
+  it("用 URL 解析拒绝反斜杠、空白和会被改写成跨源的路径", () => {
+    expect(safeLegacyHref("/\\evil.com")).toBe("/legacy");
+    expect(safeLegacyHref("/\\\\evil.com")).toBe("/legacy");
+    expect(safeLegacyHref("///evil.com")).toBe("/legacy");
+    expect(safeLegacyHref("https://ok.example/a\\b")).toBe("/legacy");
+    expect(safeLegacyHref(" https://old.example.com")).toBe("/legacy");
+    expect(safeLegacyHref("https://old.example.com/a b")).toBe("/legacy");
+    expect(safeLegacyHref("http:/evil.com")).toBe("/legacy");
+    expect(safeLegacyHref("/legacy?next=1")).toBe("/legacy?next=1");
+    expect(safeLegacyHref("HTTPS://old.example.com/legacy")).toBe(
+      "HTTPS://old.example.com/legacy",
+    );
+  });
 });

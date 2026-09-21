@@ -509,6 +509,23 @@ func (r *RequestState) markSucceeded(responseBody string, usage *llm.Usage) {
 	r.finish(body, responseBody, status, class, errText, usage)
 }
 
+// abandonUnfinishedRequest 在 panic 等绕过正常 return 的路径上定稿请求。
+// 已经是终态时不再改写, 避免把成功覆盖成失败; 仍在运行或已提交时走 markFailed,
+// 从而截断常驻全文。调用方不得在持有 mu 时进入。
+func abandonUnfinishedRequest(request *RequestState, err error) {
+	if request == nil || err == nil {
+		return
+	}
+	mu.Lock()
+	switch request.Status {
+	case StatusSuccess, StatusFailed, StatusCanceled:
+		mu.Unlock()
+		return
+	}
+	mu.Unlock()
+	request.markFailed(err, "", nil)
+}
+
 // markFailed 以失败终态定稿请求, 最终错误取自本次失败原因, 并按哨兵错误与 HTTP 状态码归类。
 func (r *RequestState) markFailed(err error, responseBody string, usage *llm.Usage) {
 	mu.Lock()

@@ -42,17 +42,52 @@ const DEFAULT_FLAGS: Flags = {
   "legacy-path": "/legacy",
 };
 
+const LEGACY_FALLBACK = "/legacy";
+// 只用来判断路径是否留在同一源，不依赖运行时 location（测试与 SSR 都稳定）。
+const LEGACY_PATH_BASE = "http://localhost";
+
 /**
- * legacy-path 会直接放进 <a href>。只允许 http/https/mailto 或相对路径
- * （/、./、../；显式拒绝 // 协议相对地址），其余回退到默认旧版入口 /legacy
- * （审计 FE-06 / F-L5）。
+ * legacy-path 会直接放进 <a href>。用 URL 解析，只允许：
+ *  - http / https 绝对地址
+ *  - mailto:
+ *  - 同源路径（/、./、../，解析后仍落在基准源）
+ * 反斜杠会被浏览器当成斜杠（/\evil.com → //evil.com），空白可拆开协议，
+ * 两者一律拒绝。其余回退到默认旧版入口 /legacy（审计 FE-06 / F-L5）。
  */
 export function safeLegacyHref(value: string): string {
-  const v = value.trim();
-  if (/^(?:https?:\/\/|mailto:)/i.test(v)) return v;
-  if (v.startsWith("./") || v.startsWith("../")) return v;
-  if (v.startsWith("/") && !v.startsWith("//")) return v;
-  return "/legacy";
+  if (typeof value !== "string" || value.length === 0) return LEGACY_FALLBACK;
+  if (/[\s\\]/.test(value)) return LEGACY_FALLBACK;
+
+  let url: URL;
+  try {
+    url = new URL(value, LEGACY_PATH_BASE);
+  } catch {
+    return LEGACY_FALLBACK;
+  }
+
+  if (/^https?:\/\//i.test(value)) {
+    if (url.protocol === "http:" || url.protocol === "https:") return value;
+    return LEGACY_FALLBACK;
+  }
+
+  if (/^mailto:/i.test(value)) {
+    if (url.protocol === "mailto:") return value;
+    return LEGACY_FALLBACK;
+  }
+
+  // 协议相对 //、///host 以及被 URL 解析器改写到别的源的路径都不是同源路径。
+  if (
+    value.startsWith("/") ||
+    value.startsWith("./") ||
+    value.startsWith("../")
+  ) {
+    const base = new URL(LEGACY_PATH_BASE);
+    if (url.origin === base.origin && (url.protocol === "http:" || url.protocol === "https:")) {
+      return value;
+    }
+  }
+
+  return LEGACY_FALLBACK;
 }
 
 let cache: { value: Flags; at: number } | null = null;

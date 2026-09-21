@@ -30,6 +30,16 @@ type MigrationRecord struct {
 var beforeAutoMigrations = make([]Migration, 0)
 var afterAutoMigrations = make([]Migration, 0)
 
+// opencodeProtocolBackfill 由 builtin 在 init 时注册。
+// 迁移包不能反向导入 builtin（builtin 依赖 db，db 依赖本包）。
+var opencodeProtocolBackfill func(db *gorm.DB) error
+
+// SetOpencodeProtocolBackfill 注册一次性的 OpenCode 空协议回填。
+// 必须在 InitDB 之前调用；未注册时迁移仍只保证列存在。
+func SetOpencodeProtocolBackfill(fn func(db *gorm.DB) error) {
+	opencodeProtocolBackfill = fn
+}
+
 func RegisterBeforeAutoMigration(m Migration) {
 	beforeAutoMigrations = append(beforeAutoMigrations, m)
 }

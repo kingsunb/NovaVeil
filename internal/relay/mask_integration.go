@@ -20,6 +20,10 @@ var maskEngine = mask.NewEngine(mask.NewSessionStore())
 // maskSessionStore 引擎内置会话映射表, 供请求结束后回收映射防止内存泄漏。
 var maskSessionStore = maskEngine.SessionStore()
 
+// requestMask 是转发路径的脱敏入口。生产实现是 applyRequestMask;
+// 测试可替换, 用来覆盖脱敏失败与 panic 时的定稿和预算释放。
+var requestMask = applyRequestMask
+
 // applyRequestMask 对请求体执行脱敏, 返回脱敏后字节、映射表与命中明细。
 // 全局开关或分组开关任一关闭时直接原样返回, 映射表为 nil, 命中明细为 nil; 关闭路径仍先读取/解析配置, 仅省去正则与还原开销(文档 01 §二、脱敏 README §八.4)。
 // 开关均开但未命中任何敏感信息时同样返回 nil 映射与 nil 明细: 占位符未插入, 响应不会含占位符,

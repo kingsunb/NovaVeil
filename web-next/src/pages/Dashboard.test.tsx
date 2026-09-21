@@ -215,5 +215,34 @@ describe("<DashboardPage /> Token 趋势", () => {
     await waitFor(() => {
       expect(screen.getByText("暂无用量数据")).toBeInTheDocument();
     });
+    expect(screen.getByText("暂无模型用量")).toBeInTheDocument();
+  });
+
+  it("总览统计失败时模型 Top 显示加载失败，而不是暂无模型用量", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("/stats/now-version")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ code: 500, message: "boom", data: null }), {
+              status: 500,
+              headers: { "content-type": "application/json" },
+            }),
+          );
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ code: 200, message: "success", data: {} }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+    const Wrapper = makeWrapper();
+    render(<DashboardPage />, { wrapper: Wrapper });
+    await waitFor(() => {
+      expect(screen.getAllByText("加载失败，请检查网络后重试").length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText("暂无模型用量")).not.toBeInTheDocument();
   });
 });

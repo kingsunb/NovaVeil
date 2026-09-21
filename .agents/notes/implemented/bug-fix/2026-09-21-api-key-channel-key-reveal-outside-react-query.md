@@ -28,7 +28,7 @@ Status: implemented
 
 ## 后果
 
-- **收益**：明文不再落 React Query cache；编辑器关闭后 draft 与眼睛状态立即清零，安全边界可读、可测。
+- **收益**：眼睛揭示的明文不落 query cache；编辑器关闭后 draft 与眼睛状态立即清零。渠道保存草稿与创建 API Key 的返回值也不留在 mutation state，见 [web mutation 缓存与导航防护](./2026-09-22-web-mutation-cache-and-nav-guards.md)。
 - **代价与已知上限**：每次首次点眼睛都需重新请求明文（复用此前行为被牺牲）；若 product 需要长会话内记忆
   明文，必须重访本决定并补用户交互（例如指纹/为什么）。
 

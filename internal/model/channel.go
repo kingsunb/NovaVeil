@@ -76,10 +76,11 @@ type ChannelModelLimit struct {
 
 // 渠道提供的单个上游模型。
 type ChannelModel struct {
-	ID        int                `json:"id" gorm:"primaryKey"`                                           // 渠道模型主键。
-	ChannelID int                `json:"channel_id" gorm:"not null;index:idx_channel_model_name,unique"` // 所属渠道 ID。
-	Name      string             `json:"name" gorm:"not null;index:idx_channel_model_name,unique"`       // 上游模型名称。
-	Source    ChannelModelSource `json:"source" gorm:"not null;default:auto"`                            // 模型来源。
+	ID               int                `json:"id" gorm:"primaryKey"`                                           // 渠道模型主键。
+	ChannelID        int                `json:"channel_id" gorm:"not null;index:idx_channel_model_name,unique"` // 所属渠道 ID。
+	Name             string             `json:"name" gorm:"not null;index:idx_channel_model_name,unique"`       // 上游模型名称。
+	Source           ChannelModelSource `json:"source" gorm:"not null;default:auto"`                            // 模型来源。
+	UpstreamProtocol string             `json:"upstream_protocol" gorm:"not null;default:''"`                   // 上游原生协议: chat/responses/anthropic; 空表示按渠道类型。
 }
 
 // 追加到上游请求的单个 Header。

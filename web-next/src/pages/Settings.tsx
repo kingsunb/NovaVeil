@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Field } from "@/components/ui/field";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -1759,6 +1759,9 @@ function BackupSection() {
   const qc = useQueryClient();
   const [importSummary, setImportSummary] =
     useState<Record<string, number> | null>(null);
+  const [pendingImport, setPendingImport] = useState<File | null>(null);
+  // 备份文件含渠道密钥与 API Key 明文，不放进 mutation variables。
+  const importFileRef = useRef<File | null>(null);
 
   const mut = useMutation({
     mutationFn: () => api.exportSettings(),
@@ -1771,13 +1774,17 @@ function BackupSection() {
   });
 
   const importMut = useMutation({
-    mutationFn: async (file: File) => {
+    mutationFn: async () => {
+      const file = importFileRef.current;
+      importFileRef.current = null;
+      if (!file) throw new Error("未选择导入文件");
       const text = await file.text();
       const data = validateDBDumpImport(text, file.size);
       return api.importSettings(data);
     },
     onSuccess: (result: DBImportResult | undefined) => {
       toast.success("已导入");
+      setPendingImport(null);
       setImportSummary(result?.rows_affected ?? null);
       // 导入会整体覆盖渠道 / 分组 / 密钥 / 设置等全部业务数据，
       // 必须失效所有受影响的查询缓存，否则各分区继续显示导入前旧值，
@@ -1862,7 +1869,7 @@ function BackupSection() {
           <div>
             <p className="text-sm font-medium text-ink">导入 JSON</p>
             <p className="text-xs text-ink-muted">
-              覆盖同 key 的设置；新 key 自动添加（最大 1 MB）
+              选择文件后需再次确认。导入会覆盖渠道、分组、密钥和设置（最大 1 MB）
             </p>
           </div>
           <input
@@ -1870,15 +1877,42 @@ function BackupSection() {
             accept="application/json,.json"
             aria-label="选择要导入的 JSON 文件"
             onChange={(e) => {
-              const f = e.target.files?.[0];
+              const f = e.target.files?.[0] ?? null;
               setImportSummary(null);
-              if (f) importMut.mutate(f);
+              setPendingImport(f);
               // 清空 input value，允许用户重复选同一文件。
               e.target.value = "";
             }}
             className="text-xs"
           />
         </div>
+        {pendingImport && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+            <span>
+              即将导入 {pendingImport.name}，会覆盖现有渠道、分组、密钥和设置。此操作不可撤销。
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={importMut.isPending}
+                onClick={() => setPendingImport(null)}
+              >
+                取消
+              </Button>
+              <ConfirmButton
+                tone="destructive"
+                label="确认导入"
+                loadingLabel="导入中…"
+                loading={importMut.isPending}
+                onConfirm={() => {
+                  importFileRef.current = pendingImport;
+                  importMut.mutate();
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* 导入影响摘要 */}
         {importMut.isSuccess && importSummary && (

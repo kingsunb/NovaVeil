@@ -27,7 +27,7 @@ Status: implemented
 
 - **收益**：所有 public 路径都携带一致的严格安全头，内联脚本被 CSP 拒绝。
 - **代价与已知上限**：五条头在 nginx.conf 内重复多份，后续改安全头需同步改 5 处；如容器镜像允许引入
-  片段文件可再收敛。
+  片段文件可再收敛。`router.nginx.conf` 的 `/healthz`、`/legacy`、`/assets/`、`/__flags/` 同样重复这五条头，见 [web mutation 缓存与导航防护](./2026-09-22-web-mutation-cache-and-nav-guards.md)。
 
 ## 验证
 

@@ -67,6 +67,7 @@ func (e *Engine) Apply(body string, sessionKey string, enabledRules map[string]b
 	}()
 
 	mapping := e.store.GetOrCreate(sessionKey)
+	defer e.store.End(sessionKey)
 	result.Mapping = mapping
 	if body == "" {
 		return result, nil

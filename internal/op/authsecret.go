@@ -64,10 +64,14 @@ func authJWTSecretSave(secret string) error {
 // authJWTSecretSaveTx 仅将新密钥写入 settings 表, 不触碰缓存, 供事务内调用: 由调用方
 // 在事务提交成功后再发布缓存, 保证缓存不领先于 DB, 事务回滚时也不留下脏缓存。
 func authJWTSecretSaveTx(tx *gorm.DB, secret string) error {
+	stored, err := sealSettingValue(model.SettingKeyAuthJWTSecret, secret)
+	if err != nil {
+		return err
+	}
 	result := tx.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "key"}},
 		DoUpdates: clause.AssignmentColumns([]string{"value"}),
-	}).Create(&model.Setting{Key: model.SettingKeyAuthJWTSecret, Value: secret})
+	}).Create(&model.Setting{Key: model.SettingKeyAuthJWTSecret, Value: stored})
 	if result.Error != nil {
 		return fmt.Errorf("保存 JWT 密钥失败: %w", result.Error)
 	}

@@ -27,6 +27,36 @@ beforeEach(() => {
   );
 });
 
+/** 登出前：明文不得从 query / mutation state 读回（组件 state 除外）。 */
+function clientHoldsSecret(qc: QueryClient, secret: string): boolean {
+  const seen = new Set<unknown>();
+  const walk = (value: unknown): boolean => {
+    if (typeof value === "string") return value.includes(secret);
+    if (!value || typeof value !== "object") return false;
+    if (seen.has(value)) return false;
+    seen.add(value);
+    if (Array.isArray(value)) return value.some(walk);
+    for (const v of Object.values(value as Record<string, unknown>)) {
+      if (walk(v)) return true;
+    }
+    return false;
+  };
+  for (const query of qc.getQueryCache().getAll()) {
+    if (walk(query.state.data)) return true;
+  }
+  for (const mutation of qc.getMutationCache().getAll()) {
+    if (
+      walk(mutation.state.data) ||
+      walk(mutation.state.variables) ||
+      walk(mutation.state.context) ||
+      walk(mutation.state.error)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function mockFetchJson(data: unknown, status = 200) {
   return vi.fn(() =>
     Promise.resolve(
@@ -39,14 +69,25 @@ function mockFetchJson(data: unknown, status = 200) {
 }
 
 describe("<KeysPage /> 创建密钥后展示「仅此一次」", () => {
-  it("创建成功弹出含明文 api_key 的对话框", async () => {
+  it("创建成功弹出含明文 api_key 的对话框，登出前缓存读不回明文", async () => {
     const user = userEvent.setup();
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    function LocalWrapper({ children }: { children: React.ReactNode }) {
+      return (
+        <QueryClientProvider client={qc}>
+          <MemoryRouter>{children}</MemoryRouter>
+        </QueryClientProvider>
+      );
+    }
 
     // 第一次 list 返空
     let callCount = 0;
+    let createBody: Record<string, unknown> | null = null;
     vi.stubGlobal(
       "fetch",
-      vi.fn((url: string) => {
+      vi.fn((url: string, init?: RequestInit) => {
         if (url.includes("/apikey/list")) {
           callCount++;
           return Promise.resolve(
@@ -57,6 +98,7 @@ describe("<KeysPage /> 创建密钥后展示「仅此一次」", () => {
           );
         }
         if (url.includes("/apikey/create")) {
+          createBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
           return Promise.resolve(
             new Response(
               JSON.stringify({
@@ -80,19 +122,23 @@ describe("<KeysPage /> 创建密钥后展示「仅此一次」", () => {
       }),
     );
 
-    render(<KeysPage />, { wrapper: Wrapper });
+    render(<KeysPage />, { wrapper: LocalWrapper });
     await user.click(screen.getByRole("button", { name: /创建密钥/ }));
 
-    // 填名字提交
+    // 填名字提交；自定义密钥值也不能留在 mutation variables。
     const nameInput = screen.getByPlaceholderText(/ci-runner/);
     await user.type(nameInput, "k1");
+    await user.type(screen.getByLabelText("自定义密钥值"), "sk-USER-TYPED-SECRET");
     await user.click(screen.getByRole("button", { name: /^创建$/ }));
 
-    // 「仅此一次」对话框出现并含明文
+    // 「仅此一次」对话框出现并含明文（只在组件 state）
     await waitFor(() => {
       expect(screen.getByTestId("created-key")).toHaveTextContent("sk-NEW-1234-ABCD");
     });
     expect(screen.getByText(/出于安全考虑/)).toBeInTheDocument();
+    expect(createBody?.["api_key"]).toBe("sk-USER-TYPED-SECRET");
+    expect(clientHoldsSecret(qc, "sk-NEW-1234-ABCD")).toBe(false);
+    expect(clientHoldsSecret(qc, "sk-USER-TYPED-SECRET")).toBe(false);
 
     // 关闭后明文消失
     await user.click(screen.getByRole("button", { name: /我已保存/ }));

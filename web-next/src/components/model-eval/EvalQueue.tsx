@@ -35,14 +35,23 @@ export function EvalQueue({ busy }: { busy: boolean }) {
     return () => handle.close();
   }, [qc]);
 
+  const queueKey = ["model-eval", "queue", "list"] as const;
   const moveUpMut = useMutation({
     mutationFn: (id: number) => api.moveUpEvalQueue(id),
-    onSuccess: (data) => qc.setQueryData(["model-eval", "queue", "list"], data),
+    onMutate: () => qc.cancelQueries({ queryKey: queueKey }),
+    onSuccess: async (data) => {
+      await qc.cancelQueries({ queryKey: queueKey });
+      qc.setQueryData(queueKey, data);
+    },
     onError: (e: Error) => toast.error(e.message || "调整失败"),
   });
   const stopMut = useMutation({
     mutationFn: (id: number) => api.stopEvalQueue(id),
-    onSuccess: (data) => qc.setQueryData(["model-eval", "queue", "list"], data),
+    onMutate: () => qc.cancelQueries({ queryKey: queueKey }),
+    onSuccess: async (data) => {
+      await qc.cancelQueries({ queryKey: queueKey });
+      qc.setQueryData(queueKey, data);
+    },
     onError: (e: Error) => toast.error(e.message || "停止失败"),
   });
   const clearMut = useMutation({

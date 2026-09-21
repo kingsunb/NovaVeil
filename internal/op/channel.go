@@ -65,6 +65,11 @@ func ChannelCreate(channel *model.Channel, ctx context.Context) error {
 		if channel.Models[i].Source == "" {
 			channel.Models[i].Source = model.ChannelModelSourceManual
 		}
+		protocol, protocolErr := model.CanonicalUpstreamProtocol(channel.Models[i].UpstreamProtocol)
+		if protocolErr != nil {
+			return protocolErr
+		}
+		channel.Models[i].UpstreamProtocol = protocol
 		if channel.Models[i].Name == "" {
 			return fmt.Errorf("渠道模型名称不能为空")
 		}
@@ -217,6 +222,9 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		updates.BaseURL = *req.BaseURL
 	}
 	if req.Key != nil {
+		if err := rejectRedactedCredential("渠道密钥", *req.Key); err != nil {
+			return nil, err
+		}
 		selectFields = append(selectFields, "key")
 		updates.Key = *req.Key
 	}
@@ -236,6 +244,9 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		restored := make([]model.ChannelKey, 0, len(*req.Keys))
 		for _, key := range *req.Keys {
 			key.Key = strings.TrimSpace(key.Key)
+			if err := rejectRedactedCredential("渠道密钥", key.Key); err != nil {
+				return nil, err
+			}
 			if key.Key == "" && key.ID != "" {
 				key.Key = oldByID[key.ID]
 			}
@@ -267,7 +278,9 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		selectFields = append(selectFields, "custom_header")
 		updates.CustomHeader = *req.CustomHeader
 	}
-	if req.ChannelProxy != nil {
+	// 列表接口回传的精确 "****" 是展示掩码, 不是新代理地址。跳过该字段以保留已存代理,
+	// 避免把哨兵加密后写成真实凭据。空串仍表示清除代理。
+	if req.ChannelProxy != nil && *req.ChannelProxy != redactedSecret {
 		selectFields = append(selectFields, "channel_proxy")
 		updates.ChannelProxy = req.ChannelProxy
 	}
@@ -343,6 +356,13 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		}
 		updates.ChannelProxy = &sealedProxy
 	}
+	if req.CustomHeader != nil {
+		sealedHeaders, sealErr := sealCustomHeaders(updates.CustomHeader)
+		if sealErr != nil {
+			return nil, sealErr
+		}
+		updates.CustomHeader = sealedHeaders
+	}
 
 	// 请求未携带任何可更新字段时显式报错而非静默成功: 该形态历史上会直接返回
 	// 200 且不写任何列, 前端 toast「已保存」但读回旧值, 排查成本极高。当前前端
@@ -407,6 +427,7 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 				continue
 			}
 			cachedModel.Source = currentModel.Source
+			cachedModel.UpstreamProtocol = currentModel.UpstreamProtocol
 			channelModelCache.Set(cachedModel.ID, cachedModel)
 			delete(currentModelsByID, cachedModel.ID)
 		}
@@ -685,9 +706,10 @@ func ValidateChannelEgressBaseURL(raw string) error {
 	return validateChannelEgressBaseURL(raw)
 }
 
-// validateChannelEgressBaseURL 对渠道地址做完整出口校验:
+// validateChannelEgressBaseURL 对渠道上游 BaseURL 做完整出口校验:
 // 必须是 http/https 且不含 userinfo, 并且域名解析后的所有 IP 都不是内网/环回/
 // 链路本地/metadata 等禁止直连地址。
+// channel_proxy 不走这套校验: 它是出站代理地址, 指向 127.0.0.1 或私网代理是合法部署。
 func validateChannelEgressBaseURL(raw string) error {
 	if err := validateChannelBaseURLSyntax(raw); err != nil {
 		return err
@@ -847,16 +869,27 @@ func syncChannelModels(tx *gorm.DB, channelID int, requested []model.ChannelMode
 		if source == "" {
 			source = model.ChannelModelSourceManual
 		}
+		protocol, err := model.CanonicalUpstreamProtocol(requestedModel.UpstreamProtocol)
+		if err != nil {
+			return err
+		}
 		if current, ok := existingByName[name]; ok {
+			updates := map[string]any{}
 			if current.Source != source {
-				if err := tx.Model(&model.ChannelModel{}).Where("id = ?", current.ID).Update("source", source).Error; err != nil {
+				updates["source"] = source
+			}
+			if current.UpstreamProtocol != protocol {
+				updates["upstream_protocol"] = protocol
+			}
+			if len(updates) > 0 {
+				if err := tx.Model(&model.ChannelModel{}).Where("id = ?", current.ID).Updates(updates).Error; err != nil {
 					return fmt.Errorf("更新渠道模型失败: %w", err)
 				}
 			}
 			delete(existingByName, name)
 			continue
 		}
-		if err := tx.Create(&model.ChannelModel{ChannelID: channelID, Name: name, Source: source}).Error; err != nil {
+		if err := tx.Create(&model.ChannelModel{ChannelID: channelID, Name: name, Source: source, UpstreamProtocol: protocol}).Error; err != nil {
 			return fmt.Errorf("创建渠道模型失败: %w", err)
 		}
 	}

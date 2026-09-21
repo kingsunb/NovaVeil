@@ -18,10 +18,17 @@ import (
 	"fmt"
 
 	"github.com/kingsunb/NovaVeil/internal/db"
+	"github.com/kingsunb/NovaVeil/internal/db/migrate"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/seal"
 	"gorm.io/gorm"
 )
+
+func init() {
+	// InitDB 跑迁移 017 时回填已存在的空协议。EnsureBuiltinChannels 不覆盖已有渠道，
+	// 所以回填不能塞进补建循环。
+	migrate.SetOpencodeProtocolBackfill(BackfillOpencodeUpstreamProtocols)
+}
 
 // ---------------------------------------------------------------------------
 // 免费渠道
@@ -75,12 +82,14 @@ var BuiltinFreeChannels = []model.Channel{
 			{HeaderKey: "User-Agent", HeaderValue: "opencode/1.18.31"},
 		},
 		Models: []model.ChannelModel{
-			{Name: "deepseek-v4-flash-free"},
-			{Name: "mimo-v2.5-free"},
-			{Name: "hy3-free"},
-			{Name: "nemotron-3-ultra-free"},
-			{Name: "nemotron-3.5-lightning-free"},
-			{Name: "laguna-s-2.1-free"},
+			// 协议来自 models.opencode.ai 的 opencode 提供方：这六个模型没有单独的
+			// provider.npm，继承 @ai-sdk/openai-compatible，对应 chat。核实不了的不写。
+			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
 		},
 	},
 	{
@@ -225,6 +234,48 @@ var BuiltinOfficialChannels = []model.Channel{
 // ---------------------------------------------------------------------------
 // 补建入口
 // ---------------------------------------------------------------------------
+
+// BackfillOpencodeUpstreamProtocols 只给两条内置 OpenCode 渠道上仍为空的模型补协议。
+// 范围是 Builtin 且 OpencodeCompat 的渠道；管理员已经写过的非空协议不覆盖。
+// 只更新 upstream_protocol 列，不改渠道类型、Key、启停、请求头或模型名单。
+// Zen 使用已核实的出厂表；Go 档没有核实过的出厂条目，因此不会写入。
+func BackfillOpencodeUpstreamProtocols(gormDB *gorm.DB) error {
+	if gormDB == nil {
+		return fmt.Errorf("db is nil")
+	}
+	if !gormDB.Migrator().HasTable("channels") || !gormDB.Migrator().HasTable("channel_models") {
+		return nil
+	}
+	if !gormDB.Migrator().HasColumn(&model.ChannelModel{}, "UpstreamProtocol") {
+		return nil
+	}
+
+	type channelRow struct {
+		ID      int
+		BaseURL string
+	}
+	var channels []channelRow
+	if err := gormDB.Model(&model.Channel{}).
+		Select("id", "base_url").
+		Where("builtin = ? AND opencode_compat = ?", true, true).
+		Find(&channels).Error; err != nil {
+		return fmt.Errorf("查询内置 OpenCode 渠道失败: %w", err)
+	}
+	for _, channel := range channels {
+		protocols := model.OpencodeSeedProtocols(channel.BaseURL)
+		for name, protocol := range protocols {
+			if protocol == "" {
+				continue
+			}
+			if err := gormDB.Model(&model.ChannelModel{}).
+				Where("channel_id = ? AND name = ? AND (upstream_protocol = '' OR upstream_protocol IS NULL)", channel.ID, name).
+				Update("upstream_protocol", protocol).Error; err != nil {
+				return fmt.Errorf("回填渠道 %d 模型 %s 的协议失败: %w", channel.ID, name, err)
+			}
+		}
+	}
+	return nil
+}
 
 // EnsureBuiltinChannels 在启动时补建所有缺失的内置渠道（免费 + 官方）。
 //
@@ -375,6 +426,20 @@ func sealBuiltinChannelForDB(channel model.Channel) (model.Channel, error) {
 			}
 			dbChannel.Keys[i].Key = sealed
 		}
+	}
+	if len(channel.CustomHeader) > 0 {
+		headers := append([]model.CustomHeader(nil), channel.CustomHeader...)
+		for i := range headers {
+			if headers[i].HeaderValue == "" {
+				continue
+			}
+			sealed, err := seal.Seal(headers[i].HeaderValue)
+			if err != nil {
+				return model.Channel{}, fmt.Errorf("加密自定义请求头失败: %w", err)
+			}
+			headers[i].HeaderValue = sealed
+		}
+		dbChannel.CustomHeader = headers
 	}
 	return dbChannel, nil
 }

@@ -142,7 +142,7 @@ The configuration file is located at `data/config.json` by default and is automa
 
 > **Note:** a direct binary listens on `127.0.0.1:8080`. That is not the container listen address. The hardened Compose template sets `NOVAVEIL_SERVER_HOST=0.0.0.0` inside the container and publishes it as `127.0.0.1:8888` on the host. `scripts/run-local.sh` also defaults to `0.0.0.0` for LAN access. Set `server.host` explicitly to change it.
 
-> **Proxies and cookies:** an empty `server.trusted_proxies` ignores `X-Forwarded-For`, so login rate limits see the immediate peer. Behind a reverse proxy, set that list to the proxy CIDR or IP — do not patch application code. `security.cookie_secure` defaults to false. The cookie is also marked `Secure` when the request itself is TLS. A proxy that terminates TLS presents plain HTTP to NovaVeil, so set `security.cookie_secure` to true there; leave it false for direct HTTP or the browser will not send the cookie.
+> **Proxies and cookies:** an empty `server.trusted_proxies` ignores `X-Forwarded-For`, so login rate limits see the immediate peer. Behind a reverse proxy, set that list to the proxy CIDR or IP — do not patch application code. `security.cookie_secure` defaults to false. The cookie is also marked `Secure` when the request itself is TLS, or when `X-Forwarded-Proto` is `https`. That header only makes the cookie stricter; it does not make `X-Forwarded-For` trusted. A proxy that terminates TLS presents plain HTTP to NovaVeil, so set `security.cookie_secure` to true there; leave it false for direct HTTP or the browser will not send the cookie.
 
 **Databases:**
 
@@ -322,7 +322,7 @@ Edit `~/.codex/auth.json`
 - The server listens on `0.0.0.0` inside the container; docker-compose binds it to `127.0.0.1:8888` on the host by default. Put the service behind a reverse proxy with HTTPS for public access
 - When terminating TLS at the proxy, preserve the original `Host` header and set `security.cookie_secure` to true (`NOVAVEIL_SECURITY_COOKIE_SECURE=true`). Direct HTTP should leave it false
 - Login has built-in rate limiting: 5 failures within 15 minutes triggers a temporary block; counters are persisted in the database and shared across replicas
-- Backup export (`/api/v1/setting/export`) contains channel keys and API keys in **plaintext** (the exported file's `note` field warns about this); user passwords are not exported. Treat backup files as production credentials
+- Backup export (`/api/v1/setting/export`) contains channel keys and API keys in **plaintext** so a restore can call upstreams again. The live database still stores those keys as `nv1:` ciphertext. Proxy URLs, custom header values, and header template values are replaced with `****`. User passwords are not exported. Treat the file as production credentials
 - Direct deployments trust no proxy headers (`X-Forwarded-For` cannot be spoofed to bypass rate limiting). Behind a reverse proxy, set `server.trusted_proxies` (or `NOVAVEIL_SERVER_TRUSTED_PROXIES`, comma-separated) to the proxy CIDR or IP. Do not edit application code for this
 - Docker upgrades must use a reviewed version/digest through `NOVAVEIL_IMAGE`; the read-only root filesystem intentionally prevents in-container binary replacement
 - See [Secure deployment](docs/SECURE_DEPLOYMENT.md) for image pinning, HTTPS, permissions, resource limits, and update verification

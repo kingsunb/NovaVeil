@@ -3,8 +3,10 @@
 #
 # 推荐部署方式: 单容器 novaveil（Go 内嵌前端，无需额外 nginx / web-next）。
 #   `docker compose pull && docker compose up -d` 即可，控制台由后端直接提供。
+#   这条默认路径不读取 NOVAVEIL_WEB_NEXT_IMAGE。
 # 可选: 独立前端灰度部署 `docker compose --profile web-next up -d`（需额外构建
-#   NOVAVEIL_WEB_NEXT_IMAGE 镜像，见 web-next/Dockerfile）。
+#   并设置 NOVAVEIL_WEB_NEXT_IMAGE，见 web-next/Dockerfile）。未设置时该服务没有
+#   image；profile 未启用则不会进入一致性检查，启用后 Compose 拒绝空镜像。
 #
 # 用法:
 #   1) 选定要部署的镜像 (例如 pin 到 digest):
@@ -24,18 +26,15 @@
 x-image: &image
   image: ${NOVAVEIL_IMAGE:?NOVAVEIL_IMAGE is required (e.g. ghcr.io/kingsunb/novaveil@sha256:<digest>)}
 
-# 独立前端镜像（可选）：仅在 --profile web-next 时使用。
-# 默认部署方式是 Go 内嵌前端（novaveil 服务已包含控制台），无需此镜像。
-x-web-next-image: &web-next-image
-  image: ${NOVAVEIL_WEB_NEXT_IMAGE:?NOVAVEIL_WEB_NEXT_IMAGE is required for the web-next profile (e.g. ghcr.io/kingsunb/novaveil-web-next:0.2.0@sha256:<digest>)}
-
 services:
   novaveil:
     <<: *image
     container_name: novaveil
     restart: unless-stopped
-    # Shutdown hooks execute sequentially (HTTP drain, tasks, conversations, stats, logs, DB).
-    # Allow their bounded worst case to complete before Docker sends SIGKILL.
+    # 停机时评估调度器取消在途请求，并把本进程仍为 running 的任务退回 queued
+    # （已 MarkDone 的不退回）。因此不必把宽限拉到 cmd/start.go 里评估钩子的
+    # 5 分钟上界——那是 worker 不返回时的保险丝。90s 覆盖 HTTP drain 与其余短钩子。
+    # 若进程在退回 queued 之前被 SIGKILL，单实例 SQLite 下次启动会立刻回收遗留 running。
     stop_grace_period: 90s
 
     # 容器内始终以同一非 root 身份运行。
@@ -92,7 +91,11 @@ services:
   # 仅在需要独立前端灰度 / A-B 路由时用 `docker compose --profile web-next up`。
   # 由 web-next/Dockerfile 构建（nginx + web dist）；通过 web-router 统一对外暴露 8889。
   web-next:
-    <<: *web-next-image
+    # 不用 ${VAR:?}。Compose 先对整个文件插值，再按 profile 过滤；写在顶层锚点或
+    # 本服务里的 :? 都会让未启用 web-next 的 `docker compose config` 失败。
+    # 未设置时镜像名为空：profile 关闭则该服务被禁用，不参加「必须有 image」的检查；
+    # `docker compose --profile web-next` 且变量为空时，Compose 拒绝这个服务。
+    image: "${NOVAVEIL_WEB_NEXT_IMAGE:-}"
     container_name: novaveil-web-next
     restart: unless-stopped
     stop_grace_period: 30s

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,4 +196,76 @@ func TestSessionSticky(t *testing.T) {
 			t.Fatal("已有会话粘合不应被满拒绝")
 		}
 	})
+}
+
+func TestSessionScopeKeyIsolatesAPIKeyAndConsole(t *testing.T) {
+	if sessionScopeKey(1, "room") == sessionScopeKey(2, "room") {
+		t.Fatal("不同 API Key 的同名会话不得共用隔离键")
+	}
+	if got, want := sessionScopeKey(7, "room"), "7:room"; got != want {
+		t.Fatalf("apiKeyID>0 的键 = %q, 期望 %q", got, want)
+	}
+	console := sessionScopeKey(0, "room")
+	if console != "console:room" {
+		t.Fatalf("控制台键 = %q, 期望 console:room", console)
+	}
+	if console == sessionScopeKey(7, "room") || console == "room" {
+		t.Fatal("控制台前缀不得退回裸会话键, 也不得撞上数字前缀")
+	}
+	// 管理员会话名恰好等于别的 Key 的隔离键时, 仍不得共用脱敏/粘合表。
+	if sessionScopeKey(0, "7:room") == sessionScopeKey(7, "room") {
+		t.Fatal("控制台同名会话不得与 API Key 隔离键重合")
+	}
+	if sessionScopeKey(3, "") != "" {
+		t.Fatal("空会话不得加前缀")
+	}
+	longKey := strings.Repeat("k", maxSessionKeyBytes+1)
+	if sessionScopeKey(3, longKey) != "" {
+		t.Fatal("超长会话键应视为无会话, 而不是截断后入表")
+	}
+}
+
+func TestSessionStickyScopedKeysDoNotShareMember(t *testing.T) {
+	resetStickyState()
+	group := stickyTestGroup(300, stickyTestItem(11), stickyTestItem(12))
+	bindSessionSticky(group, sessionScopeKey(1, "room"), 11)
+	bindSessionSticky(group, sessionScopeKey(2, "room"), 12)
+	if item := pickSessionSticky(group, sessionScopeKey(1, "room")); item.ID != 11 {
+		t.Fatalf("key 1 粘合成员 = %d, 期望 11", item.ID)
+	}
+	if item := pickSessionSticky(group, sessionScopeKey(2, "room")); item.ID != 12 {
+		t.Fatalf("key 2 粘合成员 = %d, 期望 12", item.ID)
+	}
+	if item := pickSessionSticky(group, "room"); item.ID != 0 {
+		t.Fatal("裸会话键不得命中已隔离的粘合")
+	}
+}
+
+func TestSessionStickyRejectsOverlongKeyAndTotalCap(t *testing.T) {
+	resetStickyState()
+	group := stickyTestGroup(300, stickyTestItem(11))
+	bindSessionSticky(group, strings.Repeat("s", maxStickyKeyBytes+1), 11)
+	routeMu.Lock()
+	_, exists := sessionStickies[1]
+	routeMu.Unlock()
+	if exists {
+		t.Fatal("超长粘合键不应入表")
+	}
+
+	prev := maxSessionStickiesTotal
+	maxSessionStickiesTotal = 2
+	t.Cleanup(func() { maxSessionStickiesTotal = prev })
+	resetStickyState()
+	other := stickyTestGroup(300, stickyTestItem(11))
+	other.ID = 2
+	bindSessionSticky(group, "a", 11)
+	bindSessionSticky(other, "b", 11)
+	bindSessionSticky(group, "c", 11)
+	if _, ok := stickyEntryOf(t, 1, "c"); ok {
+		t.Fatal("跨组条数已满时新会话不应建立粘合")
+	}
+	bindSessionSticky(group, "a", 11)
+	if _, ok := stickyEntryOf(t, 1, "a"); !ok {
+		t.Fatal("已有会话续期不应受跨组上限影响")
+	}
 }

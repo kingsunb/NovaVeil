@@ -877,6 +877,15 @@ export const api = {
     });
     return normalizeFetchedModels(raw);
   },
+  /** 渠道代理明文：列表只回 ****，这里按需取回（仅管理员会话，不进查询缓存）。 */
+  getChannelProxy: async (id: number) => {
+    const raw = await http<unknown>(`/channel/proxy/${id}`, {
+      method: "POST",
+      body: "{}",
+    });
+    const v = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+    return typeof v.channel_proxy === "string" ? v.channel_proxy : "";
+  },
   /** 渠道密钥明文：管理列表只回掩码，这里按需取回全部明文（仅管理员会话）。 */
   getChannelKeys: async (id: number) => {
     const raw = await http<unknown>(`/channel/keys/${id}`, {

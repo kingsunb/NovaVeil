@@ -10,9 +10,9 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/model"
 )
 
-// TestDBExportAllCredentialAudit 复核备份导出的凭据暴露面:
-// users 表(含 bcrypt 密码哈希)不得出现在导出中; 渠道 Key、渠道代理与 API Key
-// 明文在导出时统一替换为 "****"(SEC-04), 但导出文件头部必须携带敏感信息提示。
+// TestDBExportAllCredentialAudit 复核备份导出的凭据面:
+// users 表(含 bcrypt 密码哈希)不得出现; 渠道 Key 与 API Key 以明文导出, 便于还原。
+// 导出文件头部必须写明含有明文 Key。
 func TestDBExportAllCredentialAudit(t *testing.T) {
 	ctx := context.Background()
 
@@ -67,37 +67,30 @@ func TestDBExportAllCredentialAudit(t *testing.T) {
 	if strings.Contains(exported, bcryptHash) {
 		t.Fatal("export must not contain user bcrypt hash")
 	}
-	if strings.Contains(exported, markerKey) {
-		t.Fatal("export must not leak channel plaintext key")
-	}
-	if strings.Contains(exported, markerUser) {
-		t.Fatal("export must not leak API plaintext key")
-	}
-	// 凭据一律脱敏为 "****", 备份文件中不存在可用上游密钥(审计 SEC-04/S-M5/S-M6)。
 	foundChannelKey, foundAPIKey := false, false
 	for _, ch := range dump.Channels {
 		if ch.ID == channelID {
-			foundChannelKey = ch.Key == "****"
+			foundChannelKey = ch.Key == markerKey
 		}
 	}
 	for _, ak := range dump.APIKeys {
 		if ak.ID == apiKeyID {
-			foundAPIKey = ak.APIKey == "****"
+			foundAPIKey = ak.APIKey == markerUser
 		}
 	}
 	if !foundChannelKey {
-		t.Fatal("channel key must be redacted to **** in export")
+		t.Fatal("channel key must be plaintext in export")
 	}
 	if !foundAPIKey {
-		t.Fatal("api key must be redacted to **** in export")
+		t.Fatal("api key must be plaintext in export")
 	}
 
-	// 敏感信息提示必须写入导出文件头部 note 字段。
+	// 敏感信息提示必须写入导出文件头部 note 字段, 并说明 Key 是明文。
 	if dump.Note == "" {
 		t.Fatal("export must carry sensitivity note in header field")
 	}
-	if !strings.Contains(dump.Note, "敏感") || !strings.Contains(dump.Note, "API Key") || !strings.Contains(dump.Note, "渠道 Key") || !strings.Contains(dump.Note, "脱敏") {
-		t.Fatalf("sensitivity note must mention redacted credentials, got %q", dump.Note)
+	if !strings.Contains(dump.Note, "明文") || !strings.Contains(dump.Note, "API Key") || !strings.Contains(dump.Note, "渠道 Key") {
+		t.Fatalf("sensitivity note must mention plaintext keys, got %q", dump.Note)
 	}
 	if !strings.Contains(exported, `"note"`) {
 		t.Fatal("note field missing from serialized export")
@@ -122,9 +115,16 @@ func TestDBExportImportClientStatsUsageBuckets(t *testing.T) {
 		RequestCount: 100,
 	}
 
+	// 全库导出会把 header_templates 的头值打成 **** 再 upsert 回来。
+	// 测完把缓存里的明文写回, 避免后续用例读到打码后的模板。
+	originalTemplates, _ := SettingGetString(model.SettingKeyHeaderTemplates)
 	t.Cleanup(func() {
 		db.GetDB().Where("ip = ?", cs.IP).Delete(&model.ClientStat{})
 		db.GetDB().Where("id = ?", ub.ID).Delete(&model.UsageBucket{})
+		if originalTemplates != "" {
+			settingCache.Set(model.SettingKeyHeaderTemplates, "")
+			_ = SettingSetString(model.SettingKeyHeaderTemplates, originalTemplates)
+		}
 	})
 	if err := db.GetDB().Create(&cs).Error; err != nil {
 		t.Fatalf("seed client stat: %v", err)
@@ -158,7 +158,13 @@ func TestDBExportImportClientStatsUsageBuckets(t *testing.T) {
 		t.Fatal("export must contain usage_buckets with seeded data")
 	}
 
-	// 清库后导入, 验证数据还原
+	// 清库后导入, 验证统计表往返。代理仍是 ****, 先清掉以免凭据拒绝打断本用例。
+	// 渠道 Key 与 API Key 已是明文, 不改写。
+	for i := range dump.Channels {
+		if dump.Channels[i].ChannelProxy != nil && *dump.Channels[i].ChannelProxy == "****" {
+			dump.Channels[i].ChannelProxy = nil
+		}
+	}
 	db.GetDB().Where("ip = ?", cs.IP).Delete(&model.ClientStat{})
 	db.GetDB().Where("id = ?", ub.ID).Delete(&model.UsageBucket{})
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/kingsunb/NovaVeil/internal/db"
 	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/seal"
 )
 
 // cleanupImportTestRows 删除导入测试使用的高 ID 段行, 避免跨测试污染。
@@ -376,6 +377,97 @@ func TestImportRejectsRedactedAPIKey(t *testing.T) {
 	if !found {
 		t.Fatalf("preview should report redacted api_keys row, got %+v", valErr.Preview.InvalidRefs)
 	}
+}
+
+// TestImportRejectsRedactedChannelCredentials 验证渠道 Key、多 Key 与 channel_proxy
+// 上的精确 "****" 不能导入, 也不会被加密后写成真实凭据。
+func TestImportRejectsRedactedChannelCredentials(t *testing.T) {
+	ctx := context.Background()
+	t.Cleanup(func() { cleanupImportTestRows(t) })
+	mask := "****"
+	cases := []model.Channel{
+		{ID: 920611, Name: "redacted-key", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com", Key: mask},
+		{ID: 920612, Name: "redacted-keys", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com", Keys: []model.ChannelKey{{Key: mask}}},
+		{ID: 920613, Name: "redacted-proxy", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com", Key: "sk-real-but-proxy-masked", ChannelProxy: &mask},
+	}
+	for _, ch := range cases {
+		dump := &model.DBDump{Version: dbDumpVersion, Channels: []model.Channel{ch}}
+		_, err := DBImportIncremental(ctx, dump)
+		if err == nil {
+			t.Fatalf("import of channel %d should fail", ch.ID)
+		}
+		var valErr *DBImportValidationError
+		if !errors.As(err, &valErr) {
+			t.Fatalf("channel %d: error should be DBImportValidationError, got %T: %v", ch.ID, err, err)
+		}
+		found := false
+		for _, ref := range valErr.Preview.InvalidRefs {
+			if ref.Table == "channels" && ref.ID == ch.ID {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("channel %d: preview missing invalid ref: %+v", ch.ID, valErr.Preview.InvalidRefs)
+		}
+		var stored model.Channel
+		if err := db.GetDB().First(&stored, ch.ID).Error; err == nil {
+			t.Fatalf("channel %d must not be inserted", ch.ID)
+		}
+	}
+}
+
+// TestImportSealsCustomHeaderAndAllowsPrivateProxy 验证导入会加密自定义头,
+// 且内网 channel_proxy 不走 BaseURL 的出口拒绝。
+func TestImportSealsCustomHeaderAndAllowsPrivateProxy(t *testing.T) {
+	ctx := context.Background()
+	t.Cleanup(func() { cleanupImportTestRows(t) })
+	proxy := "http://alice:s3cret@10.2.3.4:7890"
+	dump := &model.DBDump{
+		Version: dbDumpVersion,
+		Channels: []model.Channel{{
+			ID:           920621,
+			Name:         "import-private-proxy",
+			Type:         model.ChannelProviderOpenAI,
+			BaseURL:      "https://example.com",
+			Key:          "sk-import-header-secret",
+			ChannelProxy: &proxy,
+			CustomHeader: []model.CustomHeader{{HeaderKey: "X-Token", HeaderValue: "header-import-secret"}},
+		}},
+	}
+	if _, err := DBImportIncremental(ctx, dump); err != nil {
+		t.Fatalf("import private proxy: %v", err)
+	}
+	var stored model.Channel
+	if err := db.GetDB().First(&stored, 920621).Error; err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !seal.IsSealed(stored.Key) || !seal.IsSealed(stored.CustomHeader[0].HeaderValue) {
+		t.Fatalf("key/header not sealed: key=%q header=%q", stored.Key, stored.CustomHeader[0].HeaderValue)
+	}
+	if stored.ChannelProxy == nil || !seal.IsSealed(*stored.ChannelProxy) {
+		t.Fatalf("proxy not sealed: %v", stored.ChannelProxy)
+	}
+	openedProxy, err := seal.Open(*stored.ChannelProxy)
+	if err != nil || openedProxy != proxy {
+		t.Fatalf("opened proxy = %q, %v", openedProxy, err)
+	}
+	openedHeader, err := seal.Open(stored.CustomHeader[0].HeaderValue)
+	if err != nil || openedHeader != "header-import-secret" {
+		t.Fatalf("opened header = %q, %v", openedHeader, err)
+	}
+	if stringsContainsCredential(stored) {
+		t.Fatal("plaintext credential stored")
+	}
+}
+
+func stringsContainsCredential(ch model.Channel) bool {
+	if ch.Key == "sk-import-header-secret" {
+		return true
+	}
+	if len(ch.CustomHeader) > 0 && ch.CustomHeader[0].HeaderValue == "header-import-secret" {
+		return true
+	}
+	return ch.ChannelProxy != nil && *ch.ChannelProxy == "http://alice:s3cret@10.2.3.4:7890"
 }
 
 // TestImportPreviewDryRun 验证预检不写入数据, 仅返回统计与校验结果。

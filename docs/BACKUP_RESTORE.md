@@ -6,13 +6,18 @@ the application export is not a full disaster-recovery snapshot.
 ## Application export
 
 `POST /api/v1/setting/export` returns a JSON file containing channels, groups,
-channel-model mappings, group items, API keys, and non-secret settings. It contains
-channel keys and API keys in plaintext.
+channel-model mappings, group items, API keys, usage buckets, client statistics, and
+non-secret settings. Channel keys and API keys are plaintext, even though the live
+database stores them as `nv1:` ciphertext. Proxy URLs, custom header values, and header
+template values are replaced with `****` and are not restored from this file.
 
-It does **not** include users/password hashes, the JWT signing secret, login-attempt
-counters, error logs, client statistics, or conversation archives. Import is
-incremental: existing rows may remain and some rows are upserted rather than replacing
-the entire database.
+It does **not** include users/password hashes, the JWT signing secret, global
+`proxy_url` / `proxy_pool`, login-attempt counters, error logs, or conversation
+archives. Import is incremental: existing rows may remain and some rows are upserted
+rather than replacing the entire database. Import rejects a channel key, API key, or
+channel proxy whose value is exactly `****`.
+
+Channel-page text export is a separate file. `POST /api/v1/channel/export` writes every channel in the cache, including builtin channels and channels with no key. Each block is `# name`, the plaintext base URL, then one plaintext key per line. A channel with no key is still present, with only the name and URL. Models, type, group, and enabled state are not in that file. Importing it creates custom channels; builtin identity is not preserved. See [REQ-003](FEATURES.md).
 
 Use the authenticated Web UI export/import controls when available. The equivalent
 HTTP endpoints are:

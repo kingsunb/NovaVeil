@@ -5,7 +5,7 @@ import { Copy, Eye, EyeOff, KeyRound, Plus, Search, Trash2, Pencil } from "lucid
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
-import type { APIKeyCreated, APIKeySummary } from "@/lib/types";
+import type { APIKeyCreated, APIKeyRequest, APIKeySummary } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { TableSkeleton } from "@/components/ui/skeleton";
@@ -63,6 +63,8 @@ export default function KeysPage() {
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => api.deleteKey(id),
+    // 删除前取消在途列表 refetch，避免旧响应在删除成功后把已删行写回来。
+    onMutate: () => qc.cancelQueries({ queryKey: ["keys"] }),
     onSuccess: () => {
       toast.success("已删除");
       setPendingDelete(null);
@@ -545,37 +547,73 @@ function KeyEditor({
     setModels(Array.from(next).sort((a, b) => a.localeCompare(b)).join(","));
   }
 
+  // 创建/更新请求体含 api_key 明文。不放进 mutation variables，也不让
+  // 创建响应的 api_key 留在 mutation.data；明文只经 onCreated 进组件 state。
+  const qc = useQueryClient();
+  const createPayloadRef = useRef<Omit<APIKeyRequest, "id"> | null>(null);
+  const updatePayloadRef = useRef<APIKeyRequest | null>(null);
+  const createdHandoffRef = useRef<APIKeyCreated | null>(null);
+
   const createMut = useMutation({
-    mutationFn: () =>
-      api.createKey({
-        // 名称可选：留空自动生成带时间戳的名称，避免列表里多行「未命名密钥」无法区分。
-        name: name.trim() || `key-${Date.now()}`,
-        api_key: newApiKey.trim(),
-        enabled,
-        expire_at: expireTimestamp,
-        supported_models: normalizeSupportedModels(models),
-        max_concurrent: maxConcurrentValue ?? 0,
-        rate_limit_rpm: rateLimitRPMValue ?? 0,
-      }),
-    onSuccess: (c) => onCreated(c),
-    onError: (e: Error) => toast.error(e.message || "创建失败"),
+    mutationFn: async () => {
+      const body = createPayloadRef.current;
+      createPayloadRef.current = null;
+      if (!body) throw new Error("缺少创建内容");
+      const created = await api.createKey(body);
+      createdHandoffRef.current = created;
+      const { api_key: _secret, ...safe } = created;
+      return safe;
+    },
+    onMutate: () => qc.cancelQueries({ queryKey: ["keys"] }),
+    onSuccess: () => {
+      const created = createdHandoffRef.current;
+      createdHandoffRef.current = null;
+      if (created) onCreated(created);
+    },
+    onError: (e: Error) => {
+      createdHandoffRef.current = null;
+      toast.error(e.message || "创建失败");
+    },
   });
 
   const updateMut = useMutation({
-    mutationFn: () =>
-      api.updateKey({
-        id: (k as APIKeySummary).id,
-        name: name.trim(),
-        api_key: newApiKey.trim(),
-        enabled,
-        expire_at: expireTimestamp,
-        supported_models: normalizeSupportedModels(models),
-        max_concurrent: maxConcurrentValue ?? 0,
-        rate_limit_rpm: rateLimitRPMValue ?? 0,
-      }),
+    mutationFn: () => {
+      const body = updatePayloadRef.current;
+      updatePayloadRef.current = null;
+      if (!body) return Promise.reject(new Error("缺少保存内容"));
+      return api.updateKey(body);
+    },
+    onMutate: () => qc.cancelQueries({ queryKey: ["keys"] }),
     onSuccess: () => onSaved(),
     onError: (e: Error) => toast.error(e.message || "保存失败"),
   });
+
+  function submitEditor() {
+    const limits = {
+      enabled,
+      expire_at: expireTimestamp,
+      supported_models: normalizeSupportedModels(models),
+      max_concurrent: maxConcurrentValue ?? 0,
+      rate_limit_rpm: rateLimitRPMValue ?? 0,
+    };
+    if (isNew) {
+      createPayloadRef.current = {
+        // 名称可选：留空自动生成带时间戳的名称，避免列表里多行「未命名密钥」无法区分。
+        name: name.trim() || `key-${Date.now()}`,
+        api_key: newApiKey.trim(),
+        ...limits,
+      };
+      createMut.mutate();
+      return;
+    }
+    updatePayloadRef.current = {
+      id: (k as APIKeySummary).id,
+      name: name.trim(),
+      api_key: newApiKey.trim(),
+      ...limits,
+    };
+    updateMut.mutate();
+  }
 
   if (!open) return null;
 
@@ -795,7 +833,7 @@ function KeyEditor({
             size="sm"
             loading={createMut.isPending || updateMut.isPending}
             disabled={!canSubmit}
-            onClick={() => (isNew ? createMut.mutate() : updateMut.mutate())}
+            onClick={submitEditor}
           >
             {isNew ? "创建" : "保存"}
           </Button>

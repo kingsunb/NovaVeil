@@ -93,8 +93,9 @@ func multipartFormField(contentType string, body []byte, field string) string {
 // 经 MergeInboundRequest 透传给上游, 其中认证类, 库自管类和逐跳类请求头会被丢弃以免覆盖渠道凭据。
 // 无密钥渠道(PrimaryKey 为空)不构造任何认证: Auth 保持 nil 时 FinalizeAuthHeaders 直接跳过认证头写入,
 // 上游收到的是完全免认证的请求。
-// randomValue 为请求级一次性解析的随机头值, 透传给 applyChannelConfig 注入会话级动态头。
-func buildPassthroughRequest(format llm.APIFormat, raw *httpclient.Request, channel model.Channel, randomValue string) (*httpclient.Request, error) {
+// randomValue 为请求级一次性解析的随机头值, 透传给 applyChannelConfig 注入普通动态头。
+// opencodeSession 可选, 原样转给 applyChannelConfig; 未传时不覆盖 x-opencode-session。
+func buildPassthroughRequest(format llm.APIFormat, raw *httpclient.Request, channel model.Channel, randomValue string, opencodeSession ...string) (*httpclient.Request, error) {
 	// BaseURL 以 ## 结尾表示地址已完整, 不再追加版本号和协议路径。
 	base := strings.TrimSuffix(channel.BaseURL, "##")
 	rawURL := base != channel.BaseURL
@@ -138,7 +139,7 @@ func buildPassthroughRequest(format llm.APIFormat, raw *httpclient.Request, chan
 	if err != nil {
 		return nil, err
 	}
-	if err := applyChannelConfig(channel, request, randomValue); err != nil {
+	if err := applyChannelConfig(channel, request, randomValue, opencodeSession...); err != nil {
 		return nil, err
 	}
 	return request, nil
@@ -604,9 +605,9 @@ func streamEventHasContent(format llm.APIFormat, event *httpclient.StreamEvent) 
 }
 
 // terminalStreamFrames 在客户端协议缺终止事件时合成正常终止事件序列, 让客户端 SDK 收到
-// 规范的收尾而不是悬挂到超时。仅用于正常收尾路径: 污染流的强制兜底(异常终止原因不出现在
-// 下游可见字节流中)与缺 [DONE] 哨兵的完整流(如 MiniMax)。
-// 提交后的流失败不走本函数, 以静默截断收尾(见转发循环): 流内错误帧无法触发客户端自动重试,
+// 规范的收尾而不是悬挂到超时。只用于缺 [DONE] / message_stop 哨兵、但终止原因已经合法的完整流
+// (如 MiniMax)。污染流不走本函数: 异常 finish 被抑制后静默截断, 不再补成功的 stop/[DONE]。
+// 提交后的流失败同样不走本函数(见转发循环): 流内错误帧无法触发客户端自动重试,
 // 缺失终止事件反而可以(Codex/opencode 等按 stream disconnected 自动重连重试)。
 func terminalStreamFrames(format llm.APIFormat) []*httpclient.StreamEvent {
 	now := time.Now().Unix()

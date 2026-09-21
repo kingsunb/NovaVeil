@@ -133,6 +133,10 @@ asset signing/Sigstore verification is not implemented; this is a remaining risk
 The built-in updater now requires and verifies the same Release `SHA256SUMS`; Docker
 images disable in-container self-update and must be upgraded by replacing the pinned image.
 
+## Channel proxy and upstream BaseURL
+
+`channel_proxy` is the channel's outbound proxy, not the upstream address. It may point at a loopback or private-network proxy such as `127.0.0.1` or an RFC 1918 host; those targets are valid. The channel `BaseURL` still rejects private, loopback, and reserved addresses, so the gateway is not an SSRF client toward the upstream itself.
+
 ## Secrets and logs
 
 The first-run admin password is written once to `/app/data/initial-admin-password`

@@ -3,6 +3,7 @@ package op
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/kingsunb/NovaVeil/internal/db"
 	"github.com/kingsunb/NovaVeil/internal/model"
@@ -301,4 +302,86 @@ func TestModelEvalQueueResetRunning(t *testing.T) {
 	var got model.ModelEvalQueueTask
 	require.NoError(t, db.GetDB().First(&got, tk.ID).Error)
 	assert.Equal(t, model.QueueTaskQueued, got.Status)
+}
+
+// TestModelEvalQueueRestartResetRecyclesUnexpiredLease 验证：租约还没过期时，
+// 周期/多实例 ResetRunning 不会把 running 收回；单实例「进程重启后的 Reset」
+// 会立刻退回 queued，而不是留到 15 分钟后再入队打第二次上游。
+// 已 done 的行保持 done。本测试显式写入 StartedAt；只改 status 的旧用例不受影响。
+func TestModelEvalQueueRestartResetRecyclesUnexpiredLease(t *testing.T) {
+	ctx := context.Background()
+	running := insertQueuedTask(t, 980090, 1, 100, "qrestart-run")
+	done := insertQueuedTask(t, 980091, 2, 200, "qrestart-done")
+	t.Cleanup(func() { cleanupQueueTasks(t, running.ID, done.ID) })
+
+	started := time.Now().Add(-time.Minute)
+	require.NoError(t, db.GetDB().Model(&model.ModelEvalQueueTask{}).Where("id = ?", running.ID).Updates(map[string]interface{}{
+		"status":     model.QueueTaskRunning,
+		"started_at": started,
+	}).Error)
+	require.NoError(t, db.GetDB().Model(&model.ModelEvalQueueTask{}).Where("id = ?", done.ID).Updates(map[string]interface{}{
+		"status":     model.QueueTaskDone,
+		"eval_id":    int64(77),
+		"started_at": started,
+	}).Error)
+
+	var before model.ModelEvalQueueTask
+	require.NoError(t, db.GetDB().First(&before, running.ID).Error)
+	require.False(t, before.StartedAt.IsZero(), "租约测试必须写上 StartedAt；零值会被 ResetRunning 回收")
+	require.Equal(t, model.QueueTaskRunning, before.Status)
+
+	require.NoError(t, ModelEvalQueueResetRunning(ctx))
+	var leased model.ModelEvalQueueTask
+	require.NoError(t, db.GetDB().First(&leased, running.ID).Error)
+	assert.Equal(t, model.QueueTaskRunning, leased.Status, "未过期租约不应被 ResetRunning 回收，否则 15 分钟内就会再跑一次")
+
+	require.NoError(t, ModelEvalQueueResetRunningOnStart(ctx))
+	var gotRun, gotDone model.ModelEvalQueueTask
+	require.NoError(t, db.GetDB().First(&gotRun, running.ID).Error)
+	require.NoError(t, db.GetDB().First(&gotDone, done.ID).Error)
+	assert.Equal(t, model.QueueTaskDone, gotDone.Status, "已完成任务不能被启动回收再次入队")
+	assert.Equal(t, int64(77), gotDone.EvalID)
+
+	if evalQueueMultiInstance() {
+		assert.Equal(t, model.QueueTaskRunning, gotRun.Status, "多实例启动不得抢走未过期 running")
+		return
+	}
+	assert.Equal(t, model.QueueTaskQueued, gotRun.Status, "单实例重启应立即回收未过期 running，而不是留到 15 分钟后再跑第二次")
+}
+
+// TestModelEvalQueueRequeueRunningSkipsCompleted 验证停机退回只改仍为 running 的指定行。
+func TestModelEvalQueueRequeueRunningSkipsCompleted(t *testing.T) {
+	ctx := context.Background()
+	running := insertQueuedTask(t, 980092, 1, 100, "qrequeue-run")
+	done := insertQueuedTask(t, 980093, 2, 200, "qrequeue-done")
+	other := insertQueuedTask(t, 980094, 3, 300, "qrequeue-other")
+	t.Cleanup(func() { cleanupQueueTasks(t, running.ID, done.ID, other.ID) })
+
+	started := time.Now().Add(-time.Minute)
+	require.NoError(t, db.GetDB().Model(&model.ModelEvalQueueTask{}).Where("id = ?", running.ID).Updates(map[string]interface{}{
+		"status":     model.QueueTaskRunning,
+		"started_at": started,
+	}).Error)
+	require.NoError(t, db.GetDB().Model(&model.ModelEvalQueueTask{}).Where("id = ?", done.ID).Updates(map[string]interface{}{
+		"status":     model.QueueTaskDone,
+		"eval_id":    int64(88),
+		"started_at": started,
+	}).Error)
+	require.NoError(t, db.GetDB().Model(&model.ModelEvalQueueTask{}).Where("id = ?", other.ID).Updates(map[string]interface{}{
+		"status":     model.QueueTaskRunning,
+		"started_at": started,
+	}).Error)
+
+	require.NoError(t, ModelEvalQueueRequeueRunning(ctx, nil))
+	require.NoError(t, ModelEvalQueueRequeueRunning(ctx, []int64{running.ID, done.ID}))
+
+	var gotRun, gotDone, gotOther model.ModelEvalQueueTask
+	require.NoError(t, db.GetDB().First(&gotRun, running.ID).Error)
+	require.NoError(t, db.GetDB().First(&gotDone, done.ID).Error)
+	require.NoError(t, db.GetDB().First(&gotOther, other.ID).Error)
+	assert.Equal(t, model.QueueTaskQueued, gotRun.Status)
+	assert.True(t, gotRun.StartedAt.IsZero(), "退回 queued 后不应留下未过期租约")
+	assert.Equal(t, model.QueueTaskDone, gotDone.Status)
+	assert.Equal(t, int64(88), gotDone.EvalID)
+	assert.Equal(t, model.QueueTaskRunning, gotOther.Status, "未列入的 running 不属于本次停机")
 }

@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -21,6 +22,38 @@ var sessionStickies = make(map[int]map[string]stickyEntry)
 // 选 4096 足够覆盖大规模租户, 又给每个分组的内存量设了有界上限; 满时新会话
 // 不再建立粘合, 已有会话的粘合/续期不受影响。
 const maxSessionStickiesPerGroup = 4096
+
+// maxSessionStickiesTotal 全部组加起来的粘合条数上限。单组 4096 挡不住很多组一起灌。
+// 满时先清过期, 仍满则新会话不建立粘合; 已有会话续期不受影响。测试可临时调低。
+var maxSessionStickiesTotal = 16384
+
+// maxSessionKeyBytes 客户端会话标识的字节上限。超限视为没有会话, 不进入粘合、
+// 上游会话号缓存或脱敏表。不截断, 避免不同长键被切成同一个键。
+const maxSessionKeyBytes = 256
+
+// maxStickyKeyBytes 进入粘合表或会话号缓存的键(含隔离前缀)的字节上限。
+// 合法隔离键是数字或 console 前缀加上不超过 maxSessionKeyBytes 的原文, 远小于此值。
+const maxStickyKeyBytes = 512
+
+// consoleSessionPrefix 是 api_key_id<=0(控制台 chat)的稳定前缀。
+// 它不以数字开头, 因此不会和 `apiKeyID:sessionKey` 撞车; 管理员同名会话
+// 也不会再以裸会话键写进脱敏表。
+const consoleSessionPrefix = "console:"
+
+// sessionScopeKey 把客户端会话标识收成按 API Key 隔离的内部键。
+// apiKeyID>0 时与脱敏键相同, 是 `apiKeyID:sessionKey`, 不把脱敏键剥回原文。
+// apiKeyID<=0 时加 console 前缀。空键与超长键返回空串, 调用方按无会话处理。
+// 键只来自调用方已经读到的 X-Session-Id / x-opencode-session, 不收首条消息、
+// conversation_id 或其他头。
+func sessionScopeKey(apiKeyID int, sessionKey string) string {
+	if sessionKey == "" || len(sessionKey) > maxSessionKeyBytes {
+		return ""
+	}
+	if apiKeyID > 0 {
+		return strconv.Itoa(apiKeyID) + ":" + sessionKey
+	}
+	return consoleSessionPrefix + sessionKey
+}
 
 // sessionStickyEnabled 返回指定分组在当前请求下是否启用会话粘合:
 // 仅故障转移模式、分组配置开启且请求携带会话标识时生效; 引用链解析的每一层独立按自身配置判断。
@@ -76,7 +109,7 @@ const stickyPruneInterval = int64(60 * time.Second / time.Millisecond)
 
 // bindSessionSticky 建立或滑动续期会话粘合, expireAt 取当前时间加配置的粘合时长。
 func bindSessionSticky(group model.Group, sessionKey string, itemID int) {
-	if sessionKey == "" || itemID == 0 || group.RelayConfig.SessionStickySeconds < 1 {
+	if sessionKey == "" || itemID == 0 || group.RelayConfig.SessionStickySeconds < 1 || len(sessionKey) > maxStickyKeyBytes {
 		return
 	}
 
@@ -91,20 +124,19 @@ func bindSessionSticky(group model.Group, sessionKey string, itemID int) {
 		pruneSessionStickyLocked(group)
 	}
 	sessions := sessionStickies[group.ID]
+	if _, exists := sessions[sessionKey]; !exists && stickyFullLocked(sessions) {
+		// 单组或跨组条目满: 先清过期/已删成员残留, 清理后仍满则拒绝新增粘合。
+		// 已有会话的续期不受影响; 新会话退化为按优先级正常选路, 不额外消耗内存。
+		pruneSessionStickyLocked(group)
+		pruneAllSessionStickiesLocked(now)
+		sessions = sessionStickies[group.ID]
+		if _, exists := sessions[sessionKey]; !exists && stickyFullLocked(sessions) {
+			return
+		}
+	}
 	if sessions == nil {
 		sessions = make(map[string]stickyEntry)
 		sessionStickies[group.ID] = sessions
-	} else if _, exists := sessions[sessionKey]; !exists && len(sessions) >= maxSessionStickiesPerGroup {
-		// 条目满: 先立即清理已过期/已删成员的残留, 清理后仍满则拒绝新增粘合。
-		// 已有会话的续期不受影响; 新会话退化为按优先级正常选路, 不额外消耗内存。
-		pruneSessionStickyLocked(group)
-		sessions = sessionStickies[group.ID]
-		if sessions == nil {
-			sessions = make(map[string]stickyEntry)
-			sessionStickies[group.ID] = sessions
-		} else if len(sessions) >= maxSessionStickiesPerGroup {
-			return
-		}
 	}
 	sessions[sessionKey] = stickyEntry{
 		ItemID:            itemID,
@@ -155,6 +187,38 @@ func PruneExpiredSessionStickies() int {
 		}
 	}
 	return removed
+}
+
+// stickyFullLocked 报告新会话是否会撑破单组或跨组上限。调用方必须持有锁。
+// sessions 为 nil 时单组计数视为 0。
+func stickyFullLocked(sessions map[string]stickyEntry) bool {
+	if sessions != nil && len(sessions) >= maxSessionStickiesPerGroup {
+		return true
+	}
+	return sessionStickyTotalLocked() >= maxSessionStickiesTotal
+}
+
+// sessionStickyTotalLocked 返回全部分组的粘合条数。调用方必须持有锁。
+func sessionStickyTotalLocked() int {
+	total := 0
+	for _, sessions := range sessionStickies {
+		total += len(sessions)
+	}
+	return total
+}
+
+// pruneAllSessionStickiesLocked 删除全部分组里已过期的粘合。调用方必须持有锁。
+func pruneAllSessionStickiesLocked(now int64) {
+	for groupID, sessions := range sessionStickies {
+		for key, entry := range sessions {
+			if entry.ExpireAtUnixMilli <= now {
+				delete(sessions, key)
+			}
+		}
+		if len(sessions) == 0 {
+			delete(sessionStickies, groupID)
+		}
+	}
 }
 
 // pruneSessionStickyLocked 清理分组内已删除成员和已过期的粘合残留; 调用方必须持有锁。

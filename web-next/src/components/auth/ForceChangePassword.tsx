@@ -1,5 +1,6 @@
 import { useAuth } from "@/store/auth";
 import { Button } from "@/components/ui/button";
+import { BrandMark } from "@/components/ui/brand-mark";
 import { ChangePasswordForm } from "./ChangePasswordForm";
 
 /**
@@ -14,14 +15,7 @@ export function ForceChangePassword() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="glass-panel glass-inset-highlight w-full max-w-md rounded-card p-6">
-        <div className="mb-3 flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-gradient-to-br from-[#007AFF] to-[#5856D6] text-sm font-bold text-white">
-            N
-          </div>
-          <h1 className="text-base font-semibold tracking-tight text-ink">
-            NovaVeil
-          </h1>
-        </div>
+        <BrandMark size="sm" withName heading className="mb-3" />
         <h2 className="text-sm font-medium text-ink">设置新密码</h2>
         <p className="mt-1 text-xs leading-relaxed text-ink-muted">
           检测到当前使用的是初始密码。为了账户安全，请先设置新密码，

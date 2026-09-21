@@ -262,6 +262,8 @@ export default function ChannelsPage() {
     }
     setImporting(true);
     try {
+      // 文本导入会改渠道列表。先取消在途轮询，避免旧列表在导入成功后写回。
+      await qc.cancelQueries({ queryKey: ["channels"] });
       const result: ChannelImportResult = await api.importChannels(text);
       const summary = `成功 ${result.success} 个，失败 ${result.failed} 个。导入只恢复名称、地址与密钥，需再补模型与分组。`;
       if (result.errors?.length) {
@@ -296,6 +298,8 @@ export default function ChannelsPage() {
         ...rest,
         name: newName,
         enabled: false,
+        // 列表里的非空代理是 ****，不能当成新渠道的代理地址写入。
+        channel_proxy: c.channel_proxy === "****" ? "" : c.channel_proxy,
         keys: c.keys.map((k) => {
           const { original_id: _oid, ...keyRest } = k;
           return { ...keyRest, id: "" };
@@ -697,8 +701,7 @@ export default function ChannelsPage() {
           <DialogHeader>
             <DialogTitle>导出全部渠道</DialogTitle>
             <DialogDescription>
-              导出文件包含每个渠道的上游地址、模型清单和所有 Key
-              明文。请确认你只在安全环境下保存此文件，并避免在公网链路分享。
+              导出全部渠道，包括内置渠道和没有 Key 的渠道。每段是渠道名、明文上游地址，以及全部明文 Key；没有 Key 时只写名称和地址。模型清单不在这份文本里。请只在安全环境下保存，不要发到公网。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

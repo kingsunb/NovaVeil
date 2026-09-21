@@ -50,8 +50,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			return
 		}
 		// 完整读取客户端请求, 正文先登记到请求状态, 后续每轮直接改写为当前目标请求。
-		raw, err := readLimitedHTTPRequest(c.Request)
+		raw, releaseBody, err := readLimitedHTTPRequest(c.Request)
 		if err != nil {
+			// 超限与取消都已在读取侧释放额度。超限是准入拒绝, 不记成上游故障, 也不进成员冷却。
 			if errors.Is(err, ErrRelayBodyTooLarge) {
 				resp.Error(c, http.StatusRequestEntityTooLarge, "request body too large")
 				return
@@ -59,6 +60,14 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			rejectRequest(c, inbound, err)
 			return
 		}
+		defer releaseBody()
+		// 请求状态里的字符串是正文的另一份副本, 和 raw.Body 一起活到本函数返回。
+		// 把它计入同一笔进程预算, 避免只按一块缓冲放行、堆上实际是两块。
+		if err := tryAcquireRelayBodyBudget(int64(len(raw.Body))); err != nil {
+			resp.Error(c, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		defer releaseRelayBodyBudget(int64(len(raw.Body)))
 
 		// 协议自动检测: 部分客户端(如 ZCode)将原生 Anthropic Messages 格式请求
 		// 发往 /v1/chat/completions 端点。OpenAI Chat 解析器会静默丢弃顶层 system
@@ -102,30 +111,46 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		apiKeyName := c.GetString("api_key_name")
 		request := newRequestState(metadataModel, requestBodyString, c.ClientIP(), apiKeyRaw, apiKeyName)
 		op.TrackClientStat(c.ClientIP())
+		var hops []refHop             // 当轮引用链: 提升到循环外供 panic 兜底读取当轮占用, 每轮选路成功后重新赋值。
+		var lifecycle *roundLifecycle // 当轮生命周期: 提升到循环外供 panic 兜底释放上游响应与并发槽位。
+		// panic 兜底必须盖住脱敏: 脱敏失败若 panic, 全文已经在请求状态里。
+		// gin 会 recover 该请求, 但当轮引用链若已持有探测候选占用或半开标记而不归还,
+		// pickGroupItem 会因候选占用永久返回空、claimHalfOpenLocked 拒绝新半开, 整组钉死到重启。
+		// 只做幂等的占用归还(不动紧急并发计数), 已定论轮次为无操作。预算由外层 releaseBody 归还。
+		defer func() {
+			if r := recover(); r != nil {
+				lifecycle.Stop()
+				releaseRefChainProbeHolds(hops)
+				abandonUnfinishedRequest(request, fmt.Errorf("relay panic: %v", r))
+				panic(r)
+			}
+		}()
 		ctx := c.Request.Context()
 		failureCounts := make(map[int]*memberFailureCounts) // 各成员的业务/基础设施失败独立计数, 成员间互不继承互不清零。
 		// 会话标识优先取 X-Session-Id, 缺省时回退读取 opencode 兼容头 x-opencode-session,
-		// 两者均为空表示客户端未启用会话粘合与稳定随机头。
+		// 两者均为空表示客户端未启用会话粘合与稳定随机头。不读取其他头, 也不把首条消息
+		// 或 conversation_id 收进键。
 		sessionKey := c.GetHeader("X-Session-Id")
 		if sessionKey == "" {
 			sessionKey = c.GetHeader(opencodeSessionHeader)
 		}
-		// 脱敏映射表按 API Key 隔离: 两个 API Key 使用相同会话 ID 时不应共享一张 Mapping,
-		// 否则存在条件性跨租户还原泄漏。会话粘合仍用原始 sessionKey(按会话粘合, 不按 Key 隔离)。
+		// 粘合、上游会话号和脱敏共用同一把隔离键: apiKeyID>0 时是 `id:sessionKey`,
+		// 控制台 api_key_id=0 时是 `console:` 前缀。不把脱敏键剥回原始 sessionKey。
 		apiKeyID := c.GetInt("api_key_id")
-		maskSessionKey := sessionKey
-		if apiKeyID > 0 && sessionKey != "" {
-			maskSessionKey = itoa(apiKeyID) + ":" + sessionKey
-		}
+		scopeKey := sessionScopeKey(apiKeyID, sessionKey)
 		// 脱敏: 全局开关 + 分组开关均开时对请求体执行一次脱敏, 映射表供响应还原复用。
 		// 每轮重试复用同一脱敏结果, 不重复扫描(文档 01 §二)。fail-closed: 脱敏失败拒绝放行明文。
 		// 分组暂不可得时跳过脱敏(循环内会等待分组出现), 开关任一关时零开销短路(文档 04 §1.4)。
 		var maskMapping *mask.Mapping
 		var streamRestorer *mask.StreamRestorer
 		if g, gErr := op.GroupGetByName(metadataModel); gErr == nil {
-			masked, mapping, matches, mErr := applyRequestMask(raw.Body, maskSessionKey, g.RelayConfig.MaskEnabled)
+			masked, mapping, matches, mErr := requestMask(raw.Body, scopeKey, g.RelayConfig.MaskEnabled)
 			if mErr != nil {
-				rejectRequest(c, inbound, fmt.Errorf("脱敏失败, 拒绝放行明文: %w", mErr))
+				// 全文已经进了请求状态。失败必须定稿, 否则截断不会发生, 明文会一直留在 running 记录里。
+				maskErr := fmt.Errorf("脱敏失败, 拒绝放行明文: %w", mErr)
+				request.markFailed(maskErr, "", nil)
+				recordErrorLog(request)
+				rejectRequest(c, inbound, maskErr)
 				return
 			}
 			raw.Body = masked
@@ -141,9 +166,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		}
 		// 有会话键的映射跨请求保留(多轮同一占位符), 由 SessionStore TTL 回收;
 		// 无会话键时 Apply 使用请求级 Mapping, 不入表, 请求结束即释放。
-		// 请求级随机头值: 同一请求的所有动态头与所有重试复用同一值, 仅在首次真正发起上游前解析一次。
-		// 解析按 (sessionKey, 渠道, Key) 命名空间, 命名空间隔离不同上游的会话; 空会话生成请求级独立 UUID。
+		// 请求级随机头与 opencode 会话头都在首次发起上游前解析一次, 之后所有重试复用。
+		// 随机头仍按 (隔离后的会话键, 渠道, Key) 命名空间; 空会话每次请求新铸且不进缓存。
+		// x-opencode-session 单独取值, 不写入这组共享随机值。
 		var requestRandomValue string
+		var requestOpencodeSession string
 		requestRandomValueResolved := false
 		exclude := 0                                   // 本请求已放弃的成员 ID, 重扫时跳过以免再次选中。
 		refSkips := 0                                  // 本请求内结构性跳过的引用计数, 超过成员总数说明全部引用均不可用。
@@ -154,20 +181,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		earlyEofRetried := make(map[int]bool)          // 已享受过提前 EOF 免费重试的成员 ID: 每个成员每请求仅免记账重试一次。
 		sanitizeRetried := make(map[int]bool)          // 已享受过 400 清洗重试的成员 ID: 每个成员每请求仅一次。
 		allCooldownClears := 0                         // 全冷却自动清除并重试的累计次数, 用于线性退避间隔计算。
-		var hops []refHop                              // 当轮引用链: 提升到循环外供 panic 兜底读取当轮占用, 每轮选路成功后重新赋值。
 		var failedIdx int                              // 引用链解析失败跳下标(仅当轮有效), 与 hops 一起提升以便用普通赋值接收。
-		var lifecycle *roundLifecycle                  // 当轮生命周期: 提升到循环外供 panic 兜底释放上游响应与并发槽位。
-
-		// panic 兜底: gin 会 recover 该请求, 但当轮引用链若已持有探测候选占用或半开标记而不归还,
-		// pickGroupItem 会因候选占用永久返回空、claimHalfOpenLocked 拒绝新半开, 整组钉死到重启。
-		// 只做幂等的占用归还(不动紧急并发计数), 已定论轮次为无操作。
-		defer func() {
-			if r := recover(); r != nil {
-				lifecycle.Stop()
-				releaseRefChainProbeHolds(hops)
-				panic(r)
-			}
-		}()
 
 		for {
 			if ctx.Err() != nil {
@@ -216,9 +230,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 
 			// 会话粘合仅在故障转移模式生效, 分组配置随时可改故每轮重新判断; 先在顶层选出本层成员。
 			item := model.GroupItem{}
-			if sessionStickyEnabled(group, sessionKey) {
+			if sessionStickyEnabled(group, scopeKey) {
 				// 粘合有效时本轮直接使用粘合成员, 失效则按优先级正常选路。
-				item = pickSessionSticky(group, sessionKey)
+				item = pickSessionSticky(group, scopeKey)
 			}
 			if item.ID == 0 {
 				// 手动模式取人工指定的成员, 故障转移模式按优先级选择未禁用且不在冷却中的成员;
@@ -259,7 +273,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 不给引用成员上冷却也不等待, 立即排除该引用改试顶层下一优先级。
 			// 把客户端协议 format 透传给引用链解析: 目标分组启用 PreferPassthrough 时,
 			// 嵌套引用选路也要按客户端协议做同协议优先排序, 与顶层 pickGroupItem 一致。
-			hops, failedIdx = resolveGroupRefChainWithContext(ctx, group, item, sessionKey, exclude, format)
+			hops, failedIdx = resolveGroupRefChainWithContext(ctx, group, item, scopeKey, exclude, format)
 			if failedIdx >= 0 {
 				// 防热旋: 单个 exclude 变量记不住多个损坏的兄弟引用, 全部引用都结构性失效时
 				// 会交替重选形成紧循环。跳过次数超过成员总数即视为整组不可用, 退避一轮后
@@ -390,7 +404,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					Model:        channelModel.Name,
 					KeyLabel:     channelKeyLabel(keyIndex, selectedKey),
 					ClientFormat: clientFormatLabel(format),
-					UpstreamType: upstreamTypeLabel(channel.Type),
+					UpstreamType: upstreamTypeLabel(channel, channelModel),
 					ProxyAddr:    roundProxyLabel(channel, effective),
 				})
 				request.finishRound(AttemptFailed, classifyRound(dispatchErr, ctx, roundCtx), dispatchErr.Error())
@@ -440,8 +454,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				KeyLabel:      channelKeyLabel(keyIndex, selectedKey),
 				ThinkingLevel: modelLimit.ThinkingLevel,
 				ClientFormat:  clientFormatLabel(format),
-				UpstreamType:  upstreamTypeLabel(channel.Type),
-				Passthrough:   supportsNativeFormat(channel, format),
+				UpstreamType:  upstreamTypeLabel(channel, channelModel),
+				Passthrough:   supportsNativeFormat(channel, channelModel, format),
 				ProxyAddr:     roundProxyLabel(channel, effective),
 			})
 			// 成员级响应超时: 流式只约束等待首个有效事件的阶段, 非流式约束等待完整响应的阶段。
@@ -449,22 +463,27 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			stopRoundTimeout := armRoundTimeout(cancelRound, timeoutSeconds)
 
 			// 按渠道协议构造出站转换器并确定是否可以直接透传。
-			outbound, passthrough, err := buildOutbound(effective, format)
+			outbound, passthrough, err := buildOutbound(effective, channelModel, format)
 
 			// 请求上游并等待首个有效响应: 非流式等待完整响应, 流式等待首个事件。
 			// 同协议渠道原样直通, 跨协议渠道经转换后请求; 此时尚未写给客户端, 失败仍可换目标重试。
 			// 请求级随机头值在首次发起上游前一次性解析, 之后所有重试复用同一值, 不在每次重试重新生成。
 			if !requestRandomValueResolved {
-				requestRandomValue = resolveRequestRandomValue(sessionKey, channel.ID, selectedKey.ID)
+				requestRandomValue = resolveRequestRandomValue(scopeKey, channel.ID, selectedKey.ID)
+				requestOpencodeSession = resolveOpencodeSessionHeader(
+					c.GetHeader(opencodeSessionHeader),
+					c.GetHeader("X-Session-Id"),
+					requestRandomValue,
+				)
 				requestRandomValueResolved = true
 			}
 			var result *upstreamResponse
 			if err == nil {
 				// 客户端与渠道协议一致时直接透传, 其余组合通过 pipeline 转换。
 				if passthrough {
-					result, err = sendPassthrough(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue)
+					result, err = sendPassthrough(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, requestOpencodeSession)
 				} else {
-					result, err = sendConverted(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue)
+					result, err = sendConverted(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, requestOpencodeSession)
 				}
 			}
 			if result != nil {
@@ -602,8 +621,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 业务成功后沿途每层建立或滑动续期会话粘合(顶层粘到引用项, 叶子组粘到叶子项),
 			// 同一会话在链路任一分组的粘合有效期内都稳定命中同一条完整链路。
 			for _, hop := range hops {
-				if sessionStickyEnabled(hop.group, sessionKey) {
-					bindSessionSticky(hop.group, sessionKey, hop.item.ID)
+				if sessionStickyEnabled(hop.group, scopeKey) {
+					bindSessionSticky(hop.group, scopeKey, hop.item.ID)
 				}
 			}
 			// 同协议透传时复制上游响应头, 但永远丢弃 Set-Cookie/Location/WWW-Authenticate
@@ -645,7 +664,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			}
 
 			// 首帧提交后无法再整轮重试, 转发期逐事件校验终止原因白名单:
-			// 异常终止块被抑制并以干净终止帧收尾(见下方污染处理), 其余事件直接转发至上游结束。
+			// 异常终止块被抑制后静默截断(不补成功 stop/[DONE]), 其余事件直接转发至上游结束。
 			if c.Writer.Header().Get("Content-Type") == "" {
 				c.Header("Content-Type", "text/event-stream")
 			}
@@ -654,7 +673,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			committed := false                // 已向客户端写出至少一个事件。
 			terminalSeen := result.terminated // 有效性窗口内已出现协议终止事件。
 			clientGone := false               // 因客户端写失败退出转发, 客户端已不可达, 无需补发终止帧。
-			polluted := false                 // 上游下发了携带异常终止原因的块: 该块被抑制, 流以合成终止帧收尾并按失败记账。
+			polluted := false                 // 上游下发了携带异常终止原因的块: 该块被抑制, 流静默截断并按失败记账。
 			var polluteErr error              // 首个污染块的异常原因, 用于请求终态留档。
 			noAnswerStop := false             // 思考-only 自然终止已命中: 终止块及其后尾帧不再写给客户端。
 			roundAnswered := false            // 整轮是否出现过最终回答信号(文本增量/工具调用)。
@@ -752,7 +771,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					}
 				}
 				// 携带异常终止原因的块(如 "finish_reason":"network_error")不得到达下游:
-				// 抑制该块并置流污染标志, 流结束后由下方合成的干净协议终止帧规范收尾。
+				// 抑制该块并置流污染标志。流结束后静默截断, 不再补成功的 stop/[DONE]。
 				if verdict.abnormalErr != nil {
 					polluted = true
 					polluteErr = verdict.abnormalErr
@@ -880,8 +899,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 而对「SSE 流缺终止事件即断开」它们有自动重连重试(stream disconnected before
 			// completion), 静默截断恰好命中该路径, 客户端感知失败后整体重试。服务端仍按失败
 			// 终态记账、落错误日志、累计成员连击, 可观测性不受影响。
-			// 污染流与缺 [DONE] 哨兵的完整流(frameFailure == nil)不受影响, 仍合成正常终止帧规范收尾。
-			if committed && !clientGone && ctx.Err() == nil && frameFailure == nil && (!terminalSeen || polluted) {
+			// 污染流同样静默截断: 异常 finish 被丢掉之后不再补成功的 stop/[DONE],
+			// 否则客户端把残缺流当成正常结束。缺 [DONE] 哨兵但终止原因合法的完整流
+			// (frameFailure == nil 且未污染) 仍合成正常终止帧规范收尾。
+			if committed && !clientGone && ctx.Err() == nil && !polluted && frameFailure == nil && !terminalSeen {
 				for _, frame := range terminalStreamFrames(format) {
 					encoded.Reset()
 					if sse.Encode(&encoded, sse.Event{Id: frame.LastEventID, Event: frame.Type, Data: frame.Data}) != nil {

@@ -108,8 +108,8 @@ func TestSessionStore_NamedKeyPersistsAcrossGets(t *testing.T) {
 
 func TestSessionStore_PruneExpired(t *testing.T) {
 	s := NewSessionStore()
-	_ = s.GetOrCreate("old")
-	_ = s.GetOrCreate("fresh")
+	s.GetOrCreate("old").Recall("old-secret", "TERM")
+	s.GetOrCreate("fresh").Recall("fresh-secret", "TERM")
 	s.mu.Lock()
 	s.sessions["old"].lastAccess = time.Now().Add(-SessionTTL - time.Second)
 	s.mu.Unlock()
@@ -118,4 +118,74 @@ func TestSessionStore_PruneExpired(t *testing.T) {
 	assert.Equal(t, 1, s.Len())
 	_ = s.GetOrCreate("fresh")
 	assert.Equal(t, 1, s.Len())
+}
+
+func TestSessionStore_MissDoesNotEnterAndHitReuses(t *testing.T) {
+	s := NewSessionStore()
+	e := NewEngine(s)
+	miss, err := e.Apply("hello", "miss", enable("PHONE"), nil)
+	assert.NoError(t, err)
+	assert.Empty(t, miss.Matches)
+	assert.Equal(t, 0, s.Len(), "未命中不得入表")
+
+	hit, err := e.Apply("13800138000", "hit", enable("PHONE"), nil)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, hit.Matches)
+	assert.Equal(t, 1, s.Len(), "命中后才入表, 供后续还原复用")
+
+	again, err := e.Apply("13800138000", "hit", enable("PHONE"), nil)
+	assert.NoError(t, err)
+	assert.Equal(t, hit.Masked, again.Masked, "已入表的会话再次命中必须复用占位符")
+	assert.Equal(t, 1, s.Len())
+
+	_, err = e.Apply("no phone here", "hit", enable("PHONE"), nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, s.Len(), "后续未命中不得删掉已有映射")
+}
+
+func TestSessionStore_ProvisionalDiscardedWithoutHit(t *testing.T) {
+	s := NewSessionStore()
+	first := s.GetOrCreate("temp")
+	assert.Equal(t, 0, s.Len())
+	s.End("temp")
+	second := s.GetOrCreate("temp")
+	assert.NotSame(t, first, second, "未命中结束后再次获取应是新映射")
+	s.End("temp")
+	assert.Equal(t, 0, s.Len())
+}
+
+func TestSessionStore_EvictsOldestOverCap(t *testing.T) {
+	prev := maxMaskSessions
+	maxMaskSessions = 2
+	t.Cleanup(func() { maxMaskSessions = prev })
+
+	s := NewSessionStore()
+	e := NewEngine(s)
+	hit := func(key, phone string) string {
+		t.Helper()
+		res, err := e.Apply(phone, key, enable("PHONE"), nil)
+		assert.NoError(t, err)
+		assert.NotEmpty(t, res.Matches)
+		return res.Masked
+	}
+	first := hit("a", "13800138000")
+	hit("b", "13900139000")
+	s.mu.Lock()
+	s.sessions["a"].lastAccess = time.Now().Add(-time.Hour)
+	s.sessions["b"].lastAccess = time.Now()
+	s.mu.Unlock()
+	hit("c", "13700137000")
+	assert.Equal(t, 2, s.Len())
+	s.mu.Lock()
+	_, aStill := s.sessions["a"]
+	_, bStill := s.sessions["b"]
+	_, cStill := s.sessions["c"]
+	s.mu.Unlock()
+	assert.False(t, aStill, "超限应淘汰最久未访问的会话")
+	assert.True(t, bStill)
+	assert.True(t, cStill)
+
+	replaced := hit("a", "13800138000")
+	assert.NotEqual(t, first, replaced, "被淘汰的会话再次命中应分配新占位符")
+	assert.Equal(t, 2, s.Len())
 }

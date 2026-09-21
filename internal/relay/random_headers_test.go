@@ -7,8 +7,8 @@ package relay
 import (
 	"encoding/hex"
 	"net/http"
-	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -41,10 +41,6 @@ func newRandomHeaderRequest() *httpclient.Request {
 		Body:    []byte(`{}`),
 	}
 }
-
-// opencodeSessionIDPattern 校验 opencode 会话 ID 格式的正则:
-// ses_ + 12 个十六进制字符 + 14 个 [0-9A-Za-z] 字符, 总长 30 字符。
-var opencodeSessionIDPattern = regexp.MustCompile(`^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`)
 
 // TestGenerateOpencodeSessionIDFormat 验证生成的会话 ID 符合 opencode 格式:
 // ses_ + 12 hex + 14 alphanumeric, 且 hex 部分是时间戳按位取反后的编码。
@@ -137,8 +133,9 @@ func TestRandomHeaderEmptySession(t *testing.T) {
 	}
 }
 
-// TestRandomHeaderMultipleHeadersSameValue 同一请求的多个动态头必须复用同一随机值,
-// 而非每个头各生成一次。通过全局规则注入两个额外头名, 连同 opencode 头共三个, 断言三者同值。
+// TestRandomHeaderMultipleHeadersSameValue 没有单独解析的 opencode 会话时,
+// 探测路径仍用同一个随机值占位 x-opencode-session 与其他动态头。
+// 转发路径的拆分见 TestOpencodeSessionSplitFromRandomHeaders。
 func TestRandomHeaderMultipleHeadersSameValue(t *testing.T) {
 	resetSessionUUIDState()
 	t.Cleanup(func() { op.RefreshChannelRandomHeaderCacheForTest("[]") })
@@ -211,6 +208,29 @@ func TestRandomHeaderConcurrentSameSession(t *testing.T) {
 		if v != first {
 			t.Fatalf("协程 %d 得到 %q, 与首个 %q 不一致, 并发同会话应复用同一 UUID", i, v, first)
 		}
+	}
+}
+
+// TestRandomHeaderAPIKeyScopeDoesNotShareUUID 不同 API Key 的同名会话不得共用上游会话号。
+func TestRandomHeaderAPIKeyScopeDoesNotShareUUID(t *testing.T) {
+	resetSessionUUIDState()
+	a := resolveRequestRandomValue(sessionScopeKey(1, "room"), 510, "k1")
+	b := resolveRequestRandomValue(sessionScopeKey(2, "room"), 510, "k1")
+	console := resolveRequestRandomValue(sessionScopeKey(0, "room"), 510, "k1")
+	if a == b || a == console || b == console {
+		t.Fatalf("隔离键应各自缓存会话号, 得到 %q %q %q", a, b, console)
+	}
+	if again := resolveRequestRandomValue(sessionScopeKey(1, "room"), 510, "k1"); again != a {
+		t.Fatalf("同一隔离键应复用会话号, 首次 %q 再次 %q", a, again)
+	}
+	longKey := sessionScopeKey(1, strings.Repeat("z", maxSessionKeyBytes+1))
+	if longKey != "" {
+		t.Fatal("超长原文在进缓存前就应被 sessionScopeKey 丢掉")
+	}
+	first := resolveRequestRandomValue(strings.Repeat("z", maxStickyKeyBytes+1), 510, "k1")
+	second := resolveRequestRandomValue(strings.Repeat("z", maxStickyKeyBytes+1), 510, "k1")
+	if first == second {
+		t.Fatal("超长键不得进会话号缓存")
 	}
 }
 
@@ -381,5 +401,162 @@ func TestRandomHeaderCollectChannelRandomHeaders(t *testing.T) {
 		if k != want[i] {
 			t.Fatalf("第 %d 个头名 = %q, 期望 %q", i, k, want[i])
 		}
+	}
+}
+
+const (
+	validSesA     = "ses_0123456789ab0123456789abcd"
+	validSesB     = "ses_abcdefabcdefZZZZZZZZZZZZZZ"
+	validSesMixed = "ses_0123456789abAbCdEfGhIjKlMn"
+)
+
+func TestValidOpencodeSessionID(t *testing.T) {
+	if !validOpencodeSessionID(validSesA) || !validOpencodeSessionID(validSesB) || !validOpencodeSessionID(validSesMixed) {
+		t.Fatal("合法样例应整段匹配")
+	}
+	rejected := []string{
+		"",
+		" " + validSesA,
+		validSesA + " ",
+		validSesA + "\n",
+		"ses_0123456789ab 0123456789ab",
+		"ses_0123456789AB0123456789abcd", // 十六进制段含大写
+		"SES_0123456789ab0123456789abcd",
+		"ses_0123456789ab0123456789abc",   // 短 1
+		"ses_0123456789ab0123456789abcde", // 长 1
+		"550e8400-e29b-41d4-a716-446655440000",
+		"not-a-session",
+	}
+	for _, value := range rejected {
+		if validOpencodeSessionID(value) {
+			t.Fatalf("不应放行 %q", value)
+		}
+	}
+}
+
+func TestResolveOpencodeSessionHeaderPrecedence(t *testing.T) {
+	fallback := "ses_ffffffffffff00000000000000"
+	if got := resolveOpencodeSessionHeader(validSesA, validSesB, fallback); got != validSesA {
+		t.Fatalf("两者都合法时应原样使用 x-opencode-session, 得到 %q", got)
+	}
+	if got := resolveOpencodeSessionHeader(validSesMixed, validSesB, fallback); got != validSesMixed {
+		t.Fatalf("大小写应原样保留, 得到 %q", got)
+	}
+	if got := resolveOpencodeSessionHeader("not-a-session", validSesB, fallback); got != validSesB {
+		t.Fatalf("仅 X-Session-Id 合法时应使用它, 得到 %q", got)
+	}
+	if got := resolveOpencodeSessionHeader(" "+validSesA, validSesB, fallback); got != validSesB {
+		t.Fatalf("带空白的 x-opencode-session 不得 trim 后放行, 得到 %q", got)
+	}
+	if got := resolveOpencodeSessionHeader("uuid-room", "also-not-ses", fallback); got != fallback {
+		t.Fatalf("都不合法时应回退已铸的值, 得到 %q", got)
+	}
+	if got := resolveOpencodeSessionHeader("hello-session", "other-shape", fallback); got != fallback {
+		t.Fatalf("非法会话号不得哈希成新的 ses_, 得到 %q", got)
+	}
+}
+
+func TestResolveOpencodeSessionDoesNotReplaceRandomCache(t *testing.T) {
+	resetSessionUUIDState()
+	scope := sessionScopeKey(1, "room")
+	minted := resolveRequestRandomValue(scope, 510, "k1")
+	got := resolveOpencodeSessionHeader(validSesA, validSesB, minted)
+	if got != validSesA {
+		t.Fatalf("入站合法值应盖过缓存, 得到 %q", got)
+	}
+	if again := resolveRequestRandomValue(scope, 510, "k1"); again != minted {
+		t.Fatalf("合法 ses_ 不得写进随机头缓存, 缓存从 %q 变成 %q", minted, again)
+	}
+}
+
+func TestOpencodeSessionSplitFromRandomHeaders(t *testing.T) {
+	resetSessionUUIDState()
+	t.Cleanup(func() { op.RefreshChannelRandomHeaderCacheForTest("[]") })
+	op.RefreshChannelRandomHeaderCacheForTest(`[
+		{"channel_id": 200, "header_key": "x-trace-id"},
+		{"channel_id": 200, "header_key": "x-client-request-id"}
+	]`)
+	channel := model.Channel{ID: 200, OpencodeCompat: true}
+	randomValue := resolveRequestRandomValue("sess-split", 200, "k1")
+	session := resolveOpencodeSessionHeader(validSesA, validSesB, randomValue)
+	if session == randomValue {
+		t.Fatal("测试前提: 客户端 ses_ 不应等于随机头值")
+	}
+
+	var seenSession, seenTrace []string
+	for retry := 0; retry < 4; retry++ {
+		req := newRandomHeaderRequest()
+		if err := applyChannelConfig(channel, req, randomValue, session); err != nil {
+			t.Fatalf("applyChannelConfig: %v", err)
+		}
+		gotSession := req.Headers.Get(opencodeSessionHeader)
+		gotTrace := req.Headers.Get("x-trace-id")
+		gotClient := req.Headers.Get("x-client-request-id")
+		if gotSession != validSesA {
+			t.Fatalf("第 %d 次 x-opencode-session = %q, 期望 %q", retry, gotSession, validSesA)
+		}
+		if gotTrace != randomValue || gotClient != randomValue {
+			t.Fatalf("第 %d 次普通动态头应保持随机值 %q, trace=%q client=%q", retry, randomValue, gotTrace, gotClient)
+		}
+		if gotSession == gotTrace {
+			t.Fatal("客户端合法 ses_ 不应写进其他动态头")
+		}
+		seenSession = append(seenSession, gotSession)
+		seenTrace = append(seenTrace, gotTrace)
+	}
+	for i := range seenSession {
+		if seenSession[i] != seenSession[0] || seenTrace[i] != seenTrace[0] {
+			t.Fatalf("重试应复用同一次解析结果, session=%v trace=%v", seenSession, seenTrace)
+		}
+	}
+}
+
+func TestOpencodeSessionOnlyXSessionID(t *testing.T) {
+	channel := model.Channel{ID: 201, OpencodeCompat: true}
+	randomValue := "trace-only"
+	session := resolveOpencodeSessionHeader("", validSesB, randomValue)
+	req := newRandomHeaderRequest()
+	if err := applyChannelConfig(channel, req, randomValue, session); err != nil {
+		t.Fatalf("applyChannelConfig: %v", err)
+	}
+	if got := req.Headers.Get(opencodeSessionHeader); got != validSesB {
+		t.Fatalf("只有 X-Session-Id 合法时上游头 = %q, 期望 %q", got, validSesB)
+	}
+}
+
+func TestOpencodeSessionDisabledDoesNotInject(t *testing.T) {
+	t.Cleanup(func() { op.RefreshChannelRandomHeaderCacheForTest("[]") })
+	op.RefreshChannelRandomHeaderCacheForTest(`[
+		{"channel_id": 202, "header_key": "x-trace-id"},
+		{"channel_id": 202, "header_key": "x-opencode-session"}
+	]`)
+	channel := model.Channel{ID: 202, OpencodeCompat: false}
+	req := newRandomHeaderRequest()
+	if err := applyChannelConfig(channel, req, "trace-value", validSesA); err != nil {
+		t.Fatalf("applyChannelConfig: %v", err)
+	}
+	if got := req.Headers.Get(opencodeSessionHeader); got != "" {
+		t.Fatalf("OpencodeCompat=false 不应注入 x-opencode-session, 实际 %q", got)
+	}
+	if got := req.Headers.Get("x-trace-id"); got != "trace-value" {
+		t.Fatalf("其他动态头应保持随机值, 实际 %q", got)
+	}
+}
+
+func TestOpencodeSessionEmptyKeyMintsOncePerCaller(t *testing.T) {
+	resetSessionUUIDState()
+	first := resolveRequestRandomValue("", 100, "k1")
+	second := resolveRequestRandomValue("", 100, "k1")
+	if first == second {
+		t.Fatal("空会话不应进缓存")
+	}
+	if got := resolveOpencodeSessionHeader("", "", first); got != first {
+		t.Fatalf("空会话回退值应是这一次已铸的号, 得到 %q", got)
+	}
+	sessionUUIDs.RLock()
+	n := len(sessionUUIDs.entries)
+	sessionUUIDs.RUnlock()
+	if n != 0 {
+		t.Fatalf("空会话不应写入缓存, 实际条目数 %d", n)
 	}
 }

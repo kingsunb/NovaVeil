@@ -82,12 +82,15 @@ export default function CustomModelsPage() {
   const enableMut = useMutation({
     mutationFn: (input: { id: number; enabled: boolean }) =>
       api.updateChannel({ id: input.id, enabled: input.enabled }),
+    // 启停前取消在途列表 refetch，避免旧响应盖掉刚切换的状态。
+    onMutate: () => qc.cancelQueries({ queryKey: ["channels"] }),
     onSuccess: invalidate,
     onError: (e: Error) => toast.error(e.message || "操作失败"),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => api.deleteChannel(id),
+    onMutate: () => qc.cancelQueries({ queryKey: ["channels"] }),
     onSuccess: () => {
       toast.success("已删除");
       setPendingDelete(null);

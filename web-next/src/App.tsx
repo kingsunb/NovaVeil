@@ -5,6 +5,7 @@ import { useAuth } from "@/store/auth";
 import { AppShell } from "@/components/layout/AppShell";
 import { ErrorBoundary } from "@/components/layout/ErrorBoundary";
 import { Button } from "@/components/ui/button";
+import { BrandMark } from "@/components/ui/brand-mark";
 import {
   CardGridSkeleton,
   LoginSkeleton,
@@ -282,14 +283,7 @@ function RollbackNotice({ flags }: { flags: Flags }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="glass-panel glass-inset-highlight w-full max-w-md rounded-card p-6">
-        <div className="mb-3 flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-gradient-to-br from-[#007AFF] to-[#5856D6] text-sm font-bold text-white">
-            N
-          </div>
-          <h1 className="text-base font-semibold tracking-tight text-ink">
-            NovaVeil
-          </h1>
-        </div>
+        <BrandMark size="sm" withName heading className="mb-3" />
         <h2 className="text-sm font-medium text-ink">
           您当前使用经典版控制台
         </h2>

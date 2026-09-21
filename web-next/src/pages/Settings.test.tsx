@@ -259,16 +259,37 @@ describe("<SettingsPage /> BackupSection 导入后失效受影响查询", () => 
     await user.click(screen.getByRole("button", { name: "备份" }));
     const fileInput = screen.getByLabelText("选择要导入的 JSON 文件");
     const dump = new File(
-      [JSON.stringify({ version: 1, channels: [], groups: [], api_keys: [], settings: [] })],
+      [JSON.stringify({ version: 1, channels: [{ key: "sk-IMPORT-PLAINTEXT" }], groups: [], api_keys: [], settings: [] })],
       "backup.json",
       { type: "application/json" },
     );
     await user.upload(fileInput, dump);
 
+    // 选文件只进入确认，不立刻导入。确认文案写明覆盖范围，交互与清空归档的 ConfirmButton 相同。
+    expect(screen.getByText(/覆盖现有渠道、分组、密钥和设置/)).toBeInTheDocument();
+    const importCalls = () =>
+      (fetch as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls.filter(
+        ([url, init]) =>
+          String(url).includes("/setting/import") &&
+          (init?.method ?? "GET").toUpperCase() === "POST",
+      );
+    expect(importCalls()).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "确认导入" }));
+    expect(importCalls()).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "再次点击确认" }));
+
     // 导入完成后各分区查询应被 invalidated（浏览时立即重新拉取）。
     await waitFor(() => {
       expect(screen.getByTestId("import-summary")).toBeInTheDocument();
     });
+    const held = qc.getMutationCache().getAll().some((mutation) => {
+      const blob = JSON.stringify({
+        data: mutation.state.data,
+        variables: mutation.state.variables,
+      });
+      return blob.includes("sk-IMPORT-PLAINTEXT");
+    });
+    expect(held).toBe(false);
     expect(qc.getQueryState(["channels"])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(["groups"])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(["keys"])?.isInvalidated).toBe(true);

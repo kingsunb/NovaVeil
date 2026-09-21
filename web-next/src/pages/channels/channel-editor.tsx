@@ -42,6 +42,7 @@ import { Switch } from "@/components/ui/switch";
 import { Field } from "@/components/ui/field";
 import { cn, NAME_RULE, URL_RULE, validateField } from "@/lib/utils";
 import { PROVIDER_LABELS } from "./constants";
+import { UpstreamProtocolLabel } from "./upstream-protocol";
 import {
   Dialog,
 
@@ -116,6 +117,8 @@ function toDraft(c: Channel | "new" | null): Draft {
 
 /** legacy 合成行的标记；提交侧据此把改密路由到旧式 Key 字段而不是 keys 切片。 */
 const LEGACY_KEY_MARKER = "legacy";
+/** 列表里非空渠道代理的固定掩码。原样回传表示保留已存代理，不是用户新输入。 */
+const CHANNEL_PROXY_MASK = "****";
 
 function channelKeysChanged(original: Channel, draft: Draft) {
   // 基线与 toDraft 对称：旧式单 Key 渠道的原始 keys 为空但存在掩码，
@@ -194,6 +197,11 @@ function buildChannelUpdateRequest(
       );
     }
   }
+  // 列表把已存代理显示成 ****。用户没改这个掩码时不要当新代理提交，
+  // 否则会被当成一次写入；省略字段，后端保留原值。空串仍表示清除。
+  if (request.channel_proxy === CHANNEL_PROXY_MASK) {
+    delete request.channel_proxy;
+  }
   return request;
 }
 
@@ -270,11 +278,20 @@ export function ChannelEditor({
     setFetchChecked(new Set());
   }, [channel, channelKey]);
 
+  // 保存载荷含 keys[].key 明文。不能作为 mutation variables 留下：
+  // React Query 会把它放进 mutation cache，登出前仍可读回。
+  // 每次提交用一次性 ticket 取回载荷，mutation state 里只留数字。
+  const savePayloadsRef = useRef(new Map<number, Draft>());
+  const saveTicketRef = useRef(0);
   const saveMut = useMutation({
-    mutationFn: (d: Draft) =>
-      isNew
+    mutationFn: (ticket: number) => {
+      const d = savePayloadsRef.current.get(ticket);
+      savePayloadsRef.current.delete(ticket);
+      if (!d) return Promise.reject(new Error("缺少保存内容"));
+      return isNew
         ? api.createChannel(d as Omit<Channel, "id">)
-        : api.updateChannel(buildChannelUpdateRequest(channel as Channel, d)),
+        : api.updateChannel(buildChannelUpdateRequest(channel as Channel, d));
+    },
     // 保存前取消可能在途的列表轮询 refetch：30s 兜底轮询若恰好在保存瞬间发出，
     // 其旧响应会在 optimistic update 之后返回并覆盖「已保存」的最新结果，导致
     // 「点了保存、toast 成功，但列表数据没变」。与 Channels 页 enableMut /
@@ -303,6 +320,12 @@ export function ChannelEditor({
     },
     onError: (e: Error) => toast.error(e.message || "保存失败"),
   });
+
+  function submitSave(next: Draft) {
+    const ticket = ++saveTicketRef.current;
+    savePayloadsRef.current.set(ticket, next);
+    saveMut.mutate(ticket);
+  }
 
   const fetchMut = useMutation({
     mutationFn: () => {
@@ -425,10 +448,10 @@ export function ChannelEditor({
       } finally {
         setAutoFetching(false);
       }
-      saveMut.mutate(enriched);
+      submitSave(enriched);
       return;
     }
-    saveMut.mutate(draft);
+    submitSave(draft);
   }
 
   // 单模型测试：逐个模型发起测试，结果按模型名写入 map，行内即时展示状态。
@@ -793,7 +816,11 @@ export function ChannelEditor({
                     <LimitsTab draft={draft} update={update} />
                   )}
                   {tab === "advanced" && (
-                    <AdvancedTab draft={draft} update={update} />
+                    <AdvancedTab
+                      draft={draft}
+                      update={update}
+                      channelId={isNew ? undefined : channel!.id}
+                    />
                   )}
                 </>
               )}
@@ -1612,6 +1639,9 @@ function ModelsTab({
                       {m.source}
                     </Pill>
                     <span className="mono truncate text-sm text-ink">{m.name}</span>
+                    {draft.opencode_compat ? (
+                      <UpstreamProtocolLabel protocol={m.upstream_protocol} />
+                    ) : null}
                     {limit && (
                       <Pill tone="neutral" className="text-[10px]">
                         限额
@@ -2014,9 +2044,11 @@ function LimitsTab({
 function AdvancedTab({
   draft,
   update,
+  channelId,
 }: {
   draft: Draft;
   update: <K extends keyof Draft>(k: K, v: Draft[K]) => void;
+  channelId?: number;
 }) {
   // 请求头模板来自设置页维护的 header_templates 设置项，渠道表单一键填充。
   const { data: settings } = useQuery({
@@ -2042,6 +2074,46 @@ function AdvancedTab({
     }
   }, [settings]);
   const [selectedTemplate, setSelectedTemplate] = useState("");
+  // 代理明文只在眼睛打开时留在组件 state，不进 React Query。
+  const [proxyVisible, setProxyVisible] = useState(false);
+  const [proxySecret, setProxySecret] = useState<string | null>(null);
+  const [proxyLoading, setProxyLoading] = useState(false);
+  const proxyGenRef = useRef(0);
+  const proxyMasked = (draft.channel_proxy ?? "") === CHANNEL_PROXY_MASK;
+
+  useEffect(() => {
+    proxyGenRef.current += 1;
+    setProxyVisible(false);
+    setProxySecret(null);
+    setProxyLoading(false);
+  }, [channelId]);
+
+  async function revealProxy() {
+    if (!channelId) return;
+    const gen = ++proxyGenRef.current;
+    setProxyVisible(true);
+    setProxyLoading(true);
+    setProxySecret(null);
+    try {
+      const value = await api.getChannelProxy(channelId);
+      if (gen !== proxyGenRef.current) return;
+      setProxySecret(value);
+    } catch (err) {
+      if (gen !== proxyGenRef.current) return;
+      setProxyVisible(false);
+      setProxySecret(null);
+      toast.error(err instanceof Error ? err.message : "代理明文拉取失败");
+    } finally {
+      if (gen === proxyGenRef.current) setProxyLoading(false);
+    }
+  }
+
+  function hideProxy() {
+    proxyGenRef.current += 1;
+    setProxyVisible(false);
+    setProxySecret(null);
+    setProxyLoading(false);
+  }
 
   /**
    * 一键按模板填充：同名 Key（不区分大小写）用模板值覆盖，新 Key 追加；
@@ -2069,14 +2141,16 @@ function AdvancedTab({
     <div className="space-y-4">
       <Field
         label="渠道代理（可选）"
-        hint="可从代理池下拉选择，也可手动填写；支持 http(s) 与 socks5/socks5h。需开启下方「启用代理」开关才会生效"
+        hint="可从代理池下拉选择，也可手动填写；支持 http(s) 与 socks5/socks5h。列表只显示掩码，点眼睛查看明文。未改掩码就保存会保留原代理。需开启下方「启用代理」开关才会生效"
       >
         {proxyPool.length > 0 && (
           <Select
             className="mb-1.5 h-7 w-full text-xs"
             value=""
             onChange={(e) => {
-              if (e.target.value) update("channel_proxy", e.target.value);
+              if (!e.target.value) return;
+              hideProxy();
+              update("channel_proxy", e.target.value);
             }}
             aria-label="从代理池选择"
           >
@@ -2088,12 +2162,41 @@ function AdvancedTab({
             ))}
           </Select>
         )}
-        <Input
-          value={draft.channel_proxy ?? ""}
-          onChange={(e) => update("channel_proxy", e.target.value)}
-          placeholder="http://127.0.0.1:7890"
-          className="mono"
-        />
+        <div className="relative">
+          <Input
+            value={
+              proxyMasked && proxyVisible
+                ? proxyLoading
+                  ? "加载中…"
+                  : (proxySecret ?? "")
+                : (draft.channel_proxy ?? "")
+            }
+            onChange={(e) => {
+              // 一开始改就离开掩码：明文不再只是展示，而是用户输入的新代理。
+              hideProxy();
+              update("channel_proxy", e.target.value);
+            }}
+            placeholder="http://127.0.0.1:7890"
+            className="mono pr-9"
+            aria-label="渠道代理"
+            readOnly={proxyMasked && proxyVisible && proxyLoading}
+          />
+          {channelId && proxyMasked && (
+            <button
+              type="button"
+              onClick={() => (proxyVisible ? hideProxy() : void revealProxy())}
+              aria-label={proxyVisible ? "隐藏代理" : "显示代理"}
+              aria-pressed={proxyVisible}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-muted transition-colors hover:text-ink"
+            >
+              {proxyVisible ? (
+                <EyeOff className="h-3.5 w-3.5" aria-hidden />
+              ) : (
+                <Eye className="h-3.5 w-3.5" aria-hidden />
+              )}
+            </button>
+          )}
+        </div>
       </Field>
       <Field label="参数覆盖（JSON）">
         <Textarea

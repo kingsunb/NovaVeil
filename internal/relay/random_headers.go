@@ -1,6 +1,9 @@
 package relay
 
 import (
+	"net/http"
+	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,6 +16,33 @@ import (
 
 // opencodeSessionHeader opencode 兼容请求头的固定头名。
 const opencodeSessionHeader = "x-opencode-session"
+
+// opencodeSessionIDPattern 是上游接受的 x-opencode-session 整段格式:
+// ses_ + 12 位小写十六进制 + 14 位字母数字。与模型同步测试里的格式正则对齐。
+// 不接受前后空白, 调用方不得 TrimSpace 后再拿来匹配。
+var opencodeSessionIDPattern = regexp.MustCompile(`^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`)
+
+// validOpencodeSessionID 报告 value 是否整段是合法 opencode 会话号。
+// 不改大小写, 不截断, 不 trim。空白、大写十六进制和长度偏差都不是合法值。
+func validOpencodeSessionID(value string) bool {
+	return opencodeSessionIDPattern.MatchString(value)
+}
+
+// resolveOpencodeSessionHeader 为一次转发选择上游 x-opencode-session。
+// 入站 x-opencode-session 合法时原样返回; 否则 X-Session-Id 合法时原样返回;
+// 两者都合法但不相同的, 用 x-opencode-session。都不合法时返回 fallback,
+// fallback 应是本请求已经解析好的 sessionUUIDFor 结果。
+// 命中入站合法值时不再铸新号, 也不把该值写进随机头缓存, 避免 x-trace-id 变成同一个会话号。
+// 缓存里已有的随机值不能覆盖本请求带进来的合法值。
+func resolveOpencodeSessionHeader(opencodeHeader, sessionIDHeader, fallback string) string {
+	if validOpencodeSessionID(opencodeHeader) {
+		return opencodeHeader
+	}
+	if validOpencodeSessionID(sessionIDHeader) {
+		return sessionIDHeader
+	}
+	return fallback
+}
 
 // generateOpencodeSessionID 生成 opencode 格式的会话 ID。算法抽到 internal/utils/opencodeid
 // 公共包，供转发路径与模型同步/探测路径共用，保证两处注入值格式一致。
@@ -64,7 +94,9 @@ const sessionUUIDPruneInterval = int64(60 * time.Second / time.Millisecond)
 // channelID 与 keyID 共同构成命名空间: 不同渠道/Key 的同一会话标识互不冲突,
 // 避免指向不同上游的会话 ID 互相覆盖。keyID 为空串表示单 Key 渠道。
 func sessionUUIDFor(sessionKey string, channelID int, keyID string) string {
-	if sessionKey == "" {
+	// 空键与超长键不进缓存。调用方应传入 sessionScopeKey, 使不同 API Key 的同名会话
+	// 不共用上游会话号; 本函数不把键剥回原始 sessionKey。
+	if sessionKey == "" || len(sessionKey) > maxStickyKeyBytes {
 		return generateOpencodeSessionID()
 	}
 	cacheKey := sessionUUIDCacheKey{sessionKey: sessionKey, channelID: channelID, keyID: keyID}
@@ -156,8 +188,10 @@ func collectChannelRandomHeaders(channel model.Channel) []string {
 	return keys
 }
 
-// injectRandomHeaders 在静态自定义 Header 之后注入会话级动态头: 同一请求的所有头复用
-// 同一随机值(由调用方在请求级一次性解析并传入), 天然覆盖同名静态头(http.Header.Set 为覆盖写);
+// injectRandomHeaders 在静态自定义 Header 之后注入会话级动态头。
+// x-trace-id 等普通动态头复用调用方传入的 randomValue。
+// x-opencode-session 不走这个共享值: 转发路径会在本函数之后用单独解析的会话号覆盖。
+// 没有单独会话号、且头尚未存在时, 才用 randomValue 占位, 让没有客户端会话的探测请求仍能带上头。
 // 无任何动态头可注入或随机值为空时立即返回(零开销快速路径)。
 // 头名合法性已在校验阶段拒绝敏感头, 此处无需再守卫上游认证凭据。
 func injectRandomHeaders(channel model.Channel, randomValue string, request *httpclient.Request) {
@@ -166,8 +200,27 @@ func injectRandomHeaders(channel model.Channel, randomValue string, request *htt
 		return
 	}
 	for _, key := range keys {
+		if strings.EqualFold(key, opencodeSessionHeader) {
+			continue
+		}
 		request.Headers.Set(key, randomValue)
 	}
+	if channel.OpencodeCompat && request.Headers.Get(opencodeSessionHeader) == "" {
+		request.Headers.Set(opencodeSessionHeader, randomValue)
+	}
+}
+
+// applyResolvedOpencodeSession 把本请求已经解析好的 x-opencode-session 写到上游请求。
+// OpencodeCompat 为假或会话值为空时不注入。调用方应在 injectRandomHeaders 之后调用,
+// 以便覆盖共享随机值占位和静态自定义头。
+func applyResolvedOpencodeSession(channel model.Channel, session string, request *httpclient.Request) {
+	if !channel.OpencodeCompat || session == "" || request == nil {
+		return
+	}
+	if request.Headers == nil {
+		request.Headers = make(http.Header)
+	}
+	request.Headers.Set(opencodeSessionHeader, session)
 }
 
 // resolveRequestRandomValue 在请求级一次性解析本请求所有随机头应使用的稳定会话 ID:

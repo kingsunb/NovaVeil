@@ -53,7 +53,7 @@ type ConvDiag struct {
 func beginConvTrace(format llm.APIFormat, channel model.Channel, inputBody []byte) *ConvTrace {
 	ct := &ConvTrace{
 		Source:      clientFormatLabel(format),
-		Target:      upstreamTypeLabel(channel.Type),
+		Target:      upstreamTypeLabel(channel, nil),
 		ChannelID:   channel.ID,
 		ChannelName: channel.Name,
 		InputBytes:  len(inputBody),

@@ -2,7 +2,7 @@
 
 ## 从这里开始
 
-- **当前项目规划**：[ROADMAP.md](ROADMAP.md)，汇总代码现状、下一阶段优先级和验收边界（2026-09-16 源码核对）。
+- **当前项目规划**：[ROADMAP.md](ROADMAP.md)。OpenCode 协议和会话头已在工作区落地；能力快照仍未做。历史审计报告不因路线图更新而改写。
 - **功能记录**：[FEATURES.md](FEATURES.md)，查看需求与修复背景；其中历史条目不替代当前工作区状态或发布记录。
 - **部署运维**：参见下表中的部署、备份与安全指南。
 - **专项实施**：前端生产改进以 [FOLLOW_UP.md](frontend-redesign/FOLLOW_UP.md) 为入口；脱敏当前进度以 [脱敏开发总览](脱敏开发/README.md) 为入口。
@@ -15,6 +15,9 @@
 | [SECURE_DEPLOYMENT.md](SECURE_DEPLOYMENT.md) | 安全部署指南（TLS、防火墙、硬化） |
 | [BACKUP_RESTORE.md](BACKUP_RESTORE.md) | 备份与恢复操作手册 |
 | [CHANNEL_PASSTHROUGH.md](CHANNEL_PASSTHROUGH.md) | 渠道 PassThrough 透传机制设计文档 |
+| [OPENCODE_NATIVE_PROTOCOL_PLAN.md](OPENCODE_NATIVE_PROTOCOL_PLAN.md) | OpenCode 按模型记录原生协议（工作区已落地，未提交） |
+| [OPENCODE_SESSION_CACHE_KEY_PLAN.md](OPENCODE_SESSION_CACHE_KEY_PLAN.md) | OpenCode 合法 ses_ 原样上送，并保留 prompt_cache_key（工作区已落地，未提交） |
+| [OPENCODE_MODEL_CAPABILITY_PLAN.md](OPENCODE_MODEL_CAPABILITY_PLAN.md) | OpenCode 同步能力快照，不带计价（仍未实施） |
 | [DEVELOPMENT_routing.md](DEVELOPMENT_routing.md) | 请求路由与故障转移开发文档 |
 | [STABILITY_UX_BASELINE.md](STABILITY_UX_BASELINE.md) | 稳定性与 UX 验收基线 |
 | [FEATURES.md](FEATURES.md) | 功能需求清单（REQ/BUG 记录与设计意图） |

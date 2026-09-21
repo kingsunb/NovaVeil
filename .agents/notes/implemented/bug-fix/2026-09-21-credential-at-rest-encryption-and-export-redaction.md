@@ -15,7 +15,7 @@ Status: implemented
 
 - **新增 `internal/seal` 字段级加密包**：AES-256-GCM 原语。密文带 `nv1:` 版本前缀，无前缀的存量行按明文兼容读取；新写入恒为密文。密钥来源：`security.encryption_key` 配置（任意字符串派生 32 字节）或数据目录下 `novaveil-encryption.key`（0600，不存在则生成）；未 Configure 的测试/初始化路径回退进程内随机密钥。
 - **敏感字段写入前统一加密、读入缓存前统一解密**：`internal/op/channel.go`（ChannelCreate/ChannelUpdate/channelRefreshCache/导入）、`internal/op/apikey.go`（APIKeyCreate/APIKeyUpdate/apiKeyRefreshCache）、`internal/op/crypto.go` 负责渠道副本加密与解密。进程内缓存与 API 返回继续使用明文，转发路径不受影响。
-- **SEC-03**：`exportChannel` 只返回 `****` + 末四位的密钥掩码，不再返回明文；导出文件用于跨实例核对数量与尾号。
+- **SEC-03**：列表接口仍只返回 `****` + 末四位的密钥掩码。纯文本「导出全部渠道」后来改回明文渠道名、明文 BaseURL 和明文 Key，见 [渠道文本导出明文](2026-09-22-channel-export-plaintext.md)。数据库备份导出的打码仍是下一条。
 - **SEC-04**：`DBExportAll` 导出前把 `channels.key`、`channels.channel_proxy`、`channels.keys[].key`、`api_keys.api_key` 全部替换为 `****`；`ChannelProxy` 的脱敏哨兵判断是整串等于 `"****"`，只要不是该精确哨兵就覆盖为掩码（历史明文代理 URL 即使包含 `****` 子串也覆盖，不原样回生）。settings 过滤扩展到 `auth_jwt_secret`、`proxy_url`、`proxy_pool`。导入路径统一先 `seal.Open` 解明文预检、再 `seal.Seal` 落库。
 - **导出即脱敏，导入不再接受脱敏凭据**：`analyzeImport` 对脱敏 API Key(`****`)直接拒绝，对其余 API Key 走与创建/更新接口相同的 `validateAPIKeyCustom` 最小长度校验；渠道导入预检对每个非 custom 渠道执行完整 `ValidateChannelEgressBaseURL`，防止构造备份文件让网关导入一个 SSRF 上游地址。文本渠道导入同样拒绝任何含 `****` 的密钥行，避免把掩码当上游凭据落库。
 - **内置渠道 Key 也密文落库**：`internal/builtin` 在 `gormDB.Create(&channel)` 之前统一 `sealBuiltinChannelForDB` 加密 Key/Keys/ChannelProxy，不再把内置渠道的 `"public"` 等 Key 明文写入 DB。
@@ -25,13 +25,13 @@ Status: implemented
 ## 备选方案
 
 - **全库 SQLCipher/整库存加密**：安全性最高，但迁移和备份格式变更大，本轮按字段级最小闭合实现；重访信号为 SQLite 文件被整体拖库。
-- **导出接口干脆删除渠道导出**：影响现有工具迁移流程；选择保留掩码格式以维持可核对性。
+- **导出接口干脆删除渠道导出**：影响现有工具迁移流程。当时保留了掩码格式；文本导出的明文策略见 [渠道文本导出明文](2026-09-22-channel-export-plaintext.md)。
 - **仅对 Key 做不可逆哈希后导出**：无法开销核对场景，选择掩码最末四位。
 
 ## 后果
 
 - **收益**：库内静态凭据不再明文；备份文件再无可用凭据；弱 Key 被拒绝；初始密码文件不再长期留存。
-- **代价与已知上限**：字段级加密只加密了列值，表结构/数据量仍可见；存量行按明文读，下一次写入才会加密（迁移按读时兼容）。`seal.Configure` 在启动早期调用，未 Configure 的进程写库会产生重启后无法解密的密文——单元测试不落库不受影响。
+- **代价与已知上限**：字段级加密只加密了列值，表结构/数据量仍可见；存量行按明文读，下一次写入才会加密（迁移按读时兼容）。`seal.Configure` 在启动早期调用，未 Configure 的进程写库会产生重启后无法解密的密文——单元测试不落库不受影响。自定义请求头、请求头模板、JWT 密钥、`proxy_url` 与 `proxy_pool` 的补齐，以及渠道列表不再返回代理明文，见 [头与代理列加密](2026-09-22-seal-header-proxy-and-mask-list.md)。
 
 ## 验证
 

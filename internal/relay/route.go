@@ -216,7 +216,7 @@ func itemMatchesClientFormat(item model.GroupItem, format llm.APIFormat) bool {
 	if err != nil {
 		return false
 	}
-	return supportsNativeFormat(channel, format)
+	return supportsNativeFormat(channel, item.ChannelModel, format)
 }
 
 // claimEmergencyItem 紧急兜底放行的加锁入口: 常规选路一无所获时把配置的紧急成员交给本轮请求。

@@ -1,11 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { AppShell } from "./AppShell";
 
-vi.mock("./Sidebar", () => ({ Sidebar: () => <nav aria-label="测试侧栏" /> }));
-vi.mock("./Topbar", () => ({ Topbar: () => <header>测试顶栏</header> }));
+vi.mock("./Sidebar", () => ({
+  Sidebar: ({ onNavigate }: { onNavigate?: () => void }) => (
+    <nav aria-label="测试侧栏">
+      <a href="/dashboard" onClick={() => onNavigate?.()}>
+        总览
+      </a>
+    </nav>
+  ),
+}));
+vi.mock("./Topbar", () => ({
+  Topbar: ({ onOpenNavigation }: { onOpenNavigation: () => void }) => (
+    <header>
+      测试顶栏
+      <button type="button" onClick={onOpenNavigation}>
+        打开主导航
+      </button>
+    </header>
+  ),
+}));
 vi.mock("./CommandPalette", () => ({ CommandPalette: () => null }));
 
 function Navigation() {
@@ -76,5 +93,33 @@ describe("AppShell 主区滚动复位", () => {
     // 命令面板状态更新仍不触发路由滚动副作用。
     await user.keyboard("{Control>}k{/Control}");
     expect(main.scrollTop).toBe(500);
+  });
+});
+
+describe("AppShell 移动抽屉焦点", () => {
+  it("圈定 Tab，关闭后焦点回到打开按钮", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query.includes("max-width"),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+      onchange: null,
+    }));
+    try {
+      render(shell());
+      const openBtn = screen.getByRole("button", { name: "打开主导航" });
+      openBtn.focus();
+      await user.click(openBtn);
+      const link = screen.getByRole("link", { name: "总览" });
+      await waitFor(() => expect(link).toHaveFocus());
+      await user.tab();
+      expect(link).toHaveFocus();
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(openBtn).toHaveFocus());
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

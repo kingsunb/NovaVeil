@@ -2,6 +2,7 @@ package op
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -64,35 +65,112 @@ func DBExportAll(ctx context.Context) (*model.DBDump, error) {
 	}
 
 	d.Settings = filterSecretSettings(d.Settings)
-	redactCredentialsForExport(d)
+	if err := revealKeysForExport(d); err != nil {
+		return nil, err
+	}
+	if err := redactHeaderTemplatesForExport(d.Settings); err != nil {
+		return nil, err
+	}
+	redactNonKeyCredentialsForExport(d)
 	return d, nil
 }
 
-// redactCredentialsForExport 把导出中的敏感凭据替换为 "****"(审计 SEC-04):
-// 备份文件不再包含 API Key / 渠道 Key / 代理凭据原文; 密钥本身的泄密风险降为零。
-// 渠道多 Key 与 API Key 都被置掩码, 导入方将获得掩码值而非可用的上游凭据。
-func redactCredentialsForExport(d *model.DBDump) {
+// revealKeysForExport 把库内 nv1: 密文解成明文再写入备份。
+// 渠道旧式 Key、多 Key 和 API Key 都解开。没有 nv1: 前缀的存量明文保持原样。
+// 只拿到数据库文件时这些密文无法在另一台机器使用，备份要能直接还原调用。
+func revealKeysForExport(d *model.DBDump) error {
 	for i := range d.Channels {
-		if d.Channels[i].Key != "" {
-			d.Channels[i].Key = "****"
-		}
-		// 仅当已是精确的 "****" 哨兵值时跳过；历史明文代理 URL 中即使包含
-		// "****" 子串(例如密码恰为该字面量)也一律覆盖为哨兵掩码，避免导出泄密。
-		if d.Channels[i].ChannelProxy != nil && *d.Channels[i].ChannelProxy != "****" {
-			redacted := "****"
-			d.Channels[i].ChannelProxy = &redacted
-		}
-		for j := range d.Channels[i].Keys {
-			if d.Channels[i].Keys[j].Key != "" {
-				d.Channels[i].Keys[j].Key = "****"
+		ch := &d.Channels[i]
+		if ch.Key != "" {
+			plain, err := seal.Open(ch.Key)
+			if err != nil {
+				return fmt.Errorf("导出渠道 %d(%s) 的 Key 失败: %w", ch.ID, ch.Name, err)
 			}
+			ch.Key = plain
+		}
+		for j := range ch.Keys {
+			if ch.Keys[j].Key == "" {
+				continue
+			}
+			plain, err := seal.Open(ch.Keys[j].Key)
+			if err != nil {
+				return fmt.Errorf("导出渠道 %d(%s) 的 Key 失败: %w", ch.ID, ch.Name, err)
+			}
+			ch.Keys[j].Key = plain
 		}
 	}
 	for i := range d.APIKeys {
-		if d.APIKeys[i].APIKey != "" {
-			d.APIKeys[i].APIKey = "****"
+		if d.APIKeys[i].APIKey == "" {
+			continue
+		}
+		plain, err := seal.Open(d.APIKeys[i].APIKey)
+		if err != nil {
+			return fmt.Errorf("导出 API Key %d(%s) 失败: %w", d.APIKeys[i].ID, d.APIKeys[i].Name, err)
+		}
+		d.APIKeys[i].APIKey = plain
+	}
+	return nil
+}
+
+// redactNonKeyCredentialsForExport 备份里仍打码的是代理地址和自定义头值，不是 Key。
+// 自定义头保留 header_key，只把非空 header_value 打成精确哨兵。
+func redactNonKeyCredentialsForExport(d *model.DBDump) {
+	for i := range d.Channels {
+		if d.Channels[i].ChannelProxy != nil && *d.Channels[i].ChannelProxy != redactedSecret {
+			redacted := redactedSecret
+			d.Channels[i].ChannelProxy = &redacted
+		}
+		for j := range d.Channels[i].CustomHeader {
+			if d.Channels[i].CustomHeader[j].HeaderValue != "" {
+				d.Channels[i].CustomHeader[j].HeaderValue = redactedSecret
+			}
 		}
 	}
+}
+
+// redactHeaderTemplatesForExport 解开 header_templates(密文或存量明文)后,
+// 保留模板名与头名, 把非空头值打成 "****"。auth_jwt_secret、proxy_url、proxy_pool
+// 已由 filterSecretSettings 整行剔除, 不会出现在备份里。
+func redactHeaderTemplatesForExport(rows []model.Setting) error {
+	for i := range rows {
+		if rows[i].Key != model.SettingKeyHeaderTemplates {
+			continue
+		}
+		plain, err := openSettingValue(rows[i].Key, rows[i].Value)
+		if err != nil {
+			return fmt.Errorf("导出请求头模板失败: %w", err)
+		}
+		masked, err := maskHeaderTemplateSecrets(plain)
+		if err != nil {
+			return err
+		}
+		rows[i].Value = masked
+	}
+	return nil
+}
+
+// maskHeaderTemplateSecrets 打码头模板里的头值, 不删除模板结构。
+func maskHeaderTemplateSecrets(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return raw, nil
+	}
+	var templates []model.HeaderTemplate
+	if err := json.Unmarshal([]byte(raw), &templates); err != nil {
+		return "", fmt.Errorf("导出请求头模板失败: %w", err)
+	}
+	for i := range templates {
+		for j := range templates[i].Headers {
+			if templates[i].Headers[j].HeaderValue != "" {
+				templates[i].Headers[j].HeaderValue = redactedSecret
+			}
+		}
+	}
+	out, err := json.Marshal(templates)
+	if err != nil {
+		return "", fmt.Errorf("导出请求头模板失败: %w", err)
+	}
+	return string(out), nil
 }
 
 // DBImportValidationError 在导入预检发现校验问题时返回, 携带完整预检结果供 handler 展示。
@@ -225,7 +303,11 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 		} else {
 			res.RowsAffected["api_keys"] = n
 		}
-		if n, err := createUpsertSettings(tx, filterSecretSettings(dump.Settings)); err != nil {
+		sealedSettings, sealErr := sealSettingsForDB(filterSecretSettings(dump.Settings))
+		if sealErr != nil {
+			return fmt.Errorf("导入设置失败: %w", sealErr)
+		}
+		if n, err := createUpsertSettings(tx, sealedSettings); err != nil {
 			return fmt.Errorf("导入设置失败: %w", err)
 		} else {
 			res.RowsAffected["settings"] = n
@@ -423,6 +505,32 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 		if _, err := normalizeChannelKeys(ch.Keys); err != nil {
 			preview.SettingsIssues = append(preview.SettingsIssues,
 				fmt.Sprintf("渠道 %d 密钥校验失败: %v", ch.ID, err))
+		}
+		// 导出把 Key / 多 Key / channel_proxy 打成精确 "****"。该哨兵不是可用凭据,
+		// 必须在加密落库之前拒绝, 避免把掩码密封成真实密钥或代理。
+		if ch.Key == redactedSecret {
+			preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
+				Table: "channels",
+				ID:    ch.ID,
+				Desc:  "渠道 Key 已脱敏(****)，无法作为凭据导入；请替换为真实密钥后再导入",
+			})
+		}
+		if ch.ChannelProxy != nil && *ch.ChannelProxy == redactedSecret {
+			preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
+				Table: "channels",
+				ID:    ch.ID,
+				Desc:  "渠道代理已脱敏(****)，无法作为凭据导入；请替换为真实代理地址后再导入",
+			})
+		}
+		for _, key := range ch.Keys {
+			if key.Key == redactedSecret {
+				preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
+					Table: "channels",
+					ID:    ch.ID,
+					Desc:  "渠道多 Key 已脱敏(****)，无法作为凭据导入；请替换为真实密钥后再导入",
+				})
+				break
+			}
 		}
 	}
 
@@ -843,6 +951,24 @@ func createUpsertAll[T any](tx *gorm.DB, rows []T, columns []clause.Column) (int
 		UpdateAll: true,
 	}).CreateInBatches(&rows, batchSize)
 	return result.RowsAffected, result.Error
+}
+
+// sealSettingsForDB 加密导入设置中仍会落库的敏感列(目前是 header_templates)。
+// auth_jwt_secret、proxy_url、proxy_pool 在调用前已被滤掉。
+func sealSettingsForDB(rows []model.Setting) ([]model.Setting, error) {
+	if len(rows) == 0 {
+		return rows, nil
+	}
+	stored := make([]model.Setting, len(rows))
+	for i, row := range rows {
+		stored[i] = row
+		sealed, err := sealSettingValue(row.Key, row.Value)
+		if err != nil {
+			return nil, err
+		}
+		stored[i].Value = sealed
+	}
+	return stored, nil
 }
 
 func createUpsertSettings(tx *gorm.DB, rows []model.Setting) (int64, error) {

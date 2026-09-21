@@ -27,15 +27,17 @@ import (
 // 运行时将 xxx 替换为客户端请求头 xxx 的实际值, 用于透传 User-Agent、X-Request-Id 等头到上游。
 var clientHeaderPlaceholder = regexp.MustCompile(`\{client_header:[^}]+\}`)
 
-// supportsNativeFormat 判断客户端协议是否为渠道协议的原生格式; 同协议时可整包透传, 否则需经 pipeline 转换。
+// supportsNativeFormat 判断客户端协议是否为这一跳的原生格式; 同协议时可整包透传, 否则需经 pipeline 转换。
 // 当渠道开启 PassThroughBodyEnabled (完全渠道透传) 时, 任意客户端协议均视为原生格式, 直接原样透传至上游。
-func supportsNativeFormat(channel model.Channel, format llm.APIFormat) bool {
+// channelModel 提供 OpenCode 模型行上的上游协议; 为空或协议为空时仍按渠道类型判断。
+func supportsNativeFormat(channel model.Channel, channelModel *model.ChannelModel, format llm.APIFormat) bool {
 	// 完全渠道透传: 渠道声明上游支持多协议, 任意客户端格式均原样透传。
 	// custom (固定回复) 渠道除外 — 它不对接真实上游, 透传无意义。
+	// 完全透传优先于模型协议。
 	if channel.PassThroughBodyEnabled && channel.Type != model.ChannelProviderCustom {
 		return true
 	}
-	switch channel.Type {
+	switch outboundProvider(channel, channelModel) {
 	case model.ChannelProviderOpenAI:
 		// OpenAI 渠道原生支持全部 OpenAI 系接口: 对话、图片生成/编辑/变体、视频、语音合成/转写/翻译、嵌入。
 		switch format {
@@ -88,10 +90,12 @@ func clientFormatLabel(format llm.APIFormat) string {
 	}
 }
 
-// upstreamTypeLabel 返回上游渠道协议在日志中的展示名; 与 clientFormatLabel 统一为
+// upstreamTypeLabel 返回这一跳实际上游协议在日志中的展示名; 与 clientFormatLabel 统一为
 // 下划线机器可读形式 (openai_chat / openai_responses / anthropic …), 便于前后端按
 // 字符串直接比对协议。自定义固定回复渠道保留中文人类可读名, 属不同协议类型, 不在统一范围内。
-func upstreamTypeLabel(channelType model.ChannelProvider) string {
+// 完全透传或没有模型协议时展示渠道类型; OpenCode 模型协议非空时展示该协议。
+func upstreamTypeLabel(channel model.Channel, channelModel *model.ChannelModel) string {
+	channelType := outboundProvider(channel, channelModel)
 	if channelType == model.ChannelProviderOpenAI {
 		return "openai_chat"
 	}
@@ -101,6 +105,37 @@ func upstreamTypeLabel(channelType model.ChannelProvider) string {
 	return string(channelType)
 }
 
+// outboundProvider 决定这一跳出站转换器使用的协议。
+// 顺序: 完全透传仍用渠道类型; OpencodeCompat 且模型协议为 chat/responses/anthropic
+// 时用该协议; 其余情况用 channel.Type。自定义渠道即使写了协议也忽略。
+func outboundProvider(channel model.Channel, channelModel *model.ChannelModel) model.ChannelProvider {
+	if channel.PassThroughBodyEnabled && channel.Type != model.ChannelProviderCustom {
+		return channel.Type
+	}
+	if provider, ok := modelProtocolProvider(channel, channelModel); ok {
+		return provider
+	}
+	return channel.Type
+}
+
+// modelProtocolProvider 在 OpenCode 兼容渠道上把模型协议映射到现有转换器。
+// 自定义渠道、未开启 OpencodeCompat、协议为空或无法识别时返回 false。
+func modelProtocolProvider(channel model.Channel, channelModel *model.ChannelModel) (model.ChannelProvider, bool) {
+	if channel.Type == model.ChannelProviderCustom || !channel.OpencodeCompat || channelModel == nil {
+		return "", false
+	}
+	switch channelModel.UpstreamProtocol {
+	case model.UpstreamProtocolChat:
+		return model.ChannelProviderOpenAI, true
+	case model.UpstreamProtocolResponses:
+		return model.ChannelProviderOpenAIResponses, true
+	case model.UpstreamProtocolAnthropic:
+		return model.ChannelProviderAnthropic, true
+	default:
+		return "", false
+	}
+}
+
 // keylessPlaceholderKey 无密钥渠道在转换路径使用的占位凭据。
 // openai/openai_responses/volcengine 出站转换器无条件构造 Bearer 认证, 空明文会在
 // pipeline 的 FinalizeAuthHeaders 阶段以 "bearer token is required" 失败(该阶段先于
@@ -108,15 +143,16 @@ func upstreamTypeLabel(channelType model.ChannelProvider) string {
 // 保证无密钥渠道经转换后的上游请求同样不携带任何认证头。
 const keylessPlaceholderKey = "keyless-placeholder"
 
-// buildOutbound 按渠道协议构造出站转换器, 并判断客户端请求能否直接透传。
-func buildOutbound(channel model.Channel, format llm.APIFormat) (transformer.Outbound, bool, error) {
+// buildOutbound 按这一跳的有效协议构造出站转换器, 并判断客户端请求能否直接透传。
+// channelModel 参与 OpenCode 模型协议选择; 完全透传时忽略该协议。
+func buildOutbound(channel model.Channel, channelModel *model.ChannelModel, format llm.APIFormat) (transformer.Outbound, bool, error) {
 	key := channel.PrimaryKey()
 	if key == "" {
 		key = keylessPlaceholderKey
 	}
 	staticKey := auth.NewStaticKeyProvider(key)
-	passthrough := supportsNativeFormat(channel, format)
-	switch channel.Type {
+	passthrough := supportsNativeFormat(channel, channelModel, format)
+	switch outboundProvider(channel, channelModel) {
 	case model.ChannelProviderOpenAI:
 		outbound, err := openai.NewOutboundTransformerWithConfig(&openai.Config{PlatformType: openai.PlatformOpenAI, BaseURL: channel.BaseURL, APIKeyProvider: staticKey})
 		return outbound, passthrough, err
@@ -317,8 +353,10 @@ func applyChannelModelLimits(channel model.Channel, request *httpclient.Request)
 }
 
 // applyChannelConfig 按渠道配置覆盖上游请求的参数并追加自定义 Header; model 与 stream 由转发流程决定, 不允许覆盖。
-// randomValue 为请求级一次性解析的随机头值, 同一请求的所有头与所有重试复用此值。
-func applyChannelConfig(channel model.Channel, request *httpclient.Request, randomValue string) error {
+// randomValue 为请求级一次性解析的随机头值, 同一请求的普通动态头与所有重试复用此值。
+// opencodeSession 可选: 传入时在动态头之后覆盖 x-opencode-session, 不把该值写进其他动态头。
+// 未传入时保持探测路径的旧行为(由 injectRandomHeaders 用 randomValue 占位)。
+func applyChannelConfig(channel model.Channel, request *httpclient.Request, randomValue string, opencodeSession ...string) error {
 	contentType := request.Headers.Get("Content-Type")
 	// multipart/form-data 请求(图片编辑/变体、语音转写/翻译): 跳过全部 JSON 参数改写
 	// (sjson 对 multipart 体会产生垃圾), 仅应用自定义 Header 与动态头。
@@ -366,8 +404,12 @@ func applyChannelConfig(channel model.Channel, request *httpclient.Request, rand
 		})
 		request.Headers.Set(header.HeaderKey, value)
 	}
-	// 动态(随机/会话稳定)头在静态自定义 Header 之后注入, 同名时动态值覆盖静态固定值。
+	// 动态头在静态自定义 Header 之后注入。普通动态头共用 randomValue。
+	// 转发路径传入的 opencode 会话号在这之后覆盖 x-opencode-session, 调试日志看到的是最终值。
 	injectRandomHeaders(channel, randomValue, request)
+	if len(opencodeSession) > 0 {
+		applyResolvedOpencodeSession(channel, opencodeSession[0], request)
+	}
 	// [debug] 打印最终发往上游的完整请求头, 便于排查 opencode 兼容头等注入是否生效。
 	// 仅 Debug 级别输出; Authorization / X-Api-Key / X-Goog-Api-Key 仅显示前缀, 不泄露完整凭据。
 	if log.GetLevel() <= log.DebugLevel {
