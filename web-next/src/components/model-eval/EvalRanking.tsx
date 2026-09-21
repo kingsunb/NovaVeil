@@ -73,7 +73,7 @@ export function EvalRanking({ busy, onShowHistory }: { busy: boolean; onShowHist
             </Button>
           </div>
         </div>
-        <p className="text-[11px] leading-relaxed text-ink-subtle">仅显示格式合规的成功结果，越靠前优先级越高。输入名次后按回车或移开焦点保存，其他模型自动顺延；超过最大名次时排到最后。{existingAuto ? `更新将用当前排序替换 ${AUTO_GROUP_NAME} 的现有成员。` : "可从历史记录加入成功结果。"}</p>
+        <p className="text-[11px] leading-relaxed text-ink-subtle">显示请求成功的结果，格式不符的也在内，越靠前优先级越高。失败结果不在此列表。输入名次后按回车或移开焦点保存，其他模型自动顺延；超过最大名次时排到最后。{existingAuto ? `更新将用当前排序替换 ${AUTO_GROUP_NAME} 的现有成员。` : "从历史加入时，目前只能选择格式合规的记录。"}</p>
       </div>
 
       {ranksQuery.isError ? (
@@ -81,7 +81,7 @@ export function EvalRanking({ busy, onShowHistory }: { busy: boolean; onShowHist
       ) : ranksQuery.isLoading ? (
         <div className="space-y-3 p-4"><Skeleton className="h-20 w-full" /><Skeleton className="h-20 w-full" /><Skeleton className="h-20 w-full" /></div>
       ) : rankable.length === 0 ? (
-        <EmptyState icon={<ListChecks className="h-5 w-5" />} title="还没有成功的排序结果" hint="格式合规的成功评估会自动加入排序，也可以从历史记录手动加入。" />
+        <EmptyState icon={<ListChecks className="h-5 w-5" />} title="还没有成功的排序结果" hint="请求成功的评估会自动加入排序，格式不符的也包括在内。从历史手动加入时，目前只能选择格式合规的记录。" />
       ) : (
         <ul className="divide-y divide-border/40">
           {rankable.map((record, index) => (

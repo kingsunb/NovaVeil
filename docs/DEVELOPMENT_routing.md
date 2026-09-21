@@ -144,6 +144,14 @@
    - 若未达阈值：保持 CLOSED，但本请求切换其他渠道。
 5. **整批探测失败：** 失败渠道重新 OPEN，冷却等级 +1，冷却时间乘以倍数（不超过最大冷却上限），继续等待下一批渠道到期后再并行测试。
 
+### 全冷却自动重试
+
+上一节的流程图描述的是冷却一直保留到到期、再走半开探测的路径。新分组另外默认打开一条捷径：`all_cooldown_retry_base_seconds = 3`。
+
+故障转移选路发现「至少有一个未禁用成员，且这些成员全都处于未到期冷却」时，不等冷却自然到期。它先清空该分组的冷却、冷却等级、提交后连击和紧急封锁（不取消已经在飞的半开探测，也不清路由亲和或会话粘合），再按 `base`、`2*base`、`3*base`……等待，上限是 `all_cooldown_retry_max_seconds`（默认 60 秒），然后用真实业务请求重试。
+
+把 `all_cooldown_retry_base_seconds` 设为 0 才关闭这条捷径。关闭后，没有可选成员时按 `member_retry_interval_seconds` 等待，冷却到期后再走半开探测。手动模式不使用冷却，不会触发自动清除。
+
 ---
 
 ## 三、有正常渠道时的半开探测
@@ -184,25 +192,36 @@
 
 ## 四、配置项说明
 
-分组 Relay 配置持久化在分组的 `RelayConfig` 字段中（数据库内以 JSON 存储，见 `internal/model/group.go` 的 `GroupRelayConfig`），保存时空值由 `NormalizeGroupRelayConfig` 按下表默认值补齐。
+分组 Relay 配置持久化在分组的 `RelayConfig` 字段中（数据库内以 JSON 存储，见 `internal/model/group.go` 的 `GroupRelayConfig`）。新分组，以及整份为零值的配置，使用 `DefaultGroupRelayConfig`（下表）。
 
-| 字段 | 类型 | 默认值 | 说明 |
+`NormalizeGroupRelayConfig` 不会把每个省略字段都填成下表默认值。整份配置为零值时才整体替换；否则只把越界数值钳回默认。表中写明「0 表示关闭或不限」的字段，显式写 0 会保留。布尔字段在 JSON 里省略时是 `false`：只要配置里已经有其它字段，就不会被改成 `true`。因此 `session_sticky_enabled` 的默认 `true` 只属于新分组的默认配置，保存时不会把显式的 `false` 改回去。
+
+| 字段 | 类型 | 新分组默认值 | 说明 |
 | --- | --- | --- | --- |
 | `member_max_attempts` | int | 3 | 单个成员包含首次请求的总尝试次数，仅在故障转移模式生效。 |
 | `member_infra_max_retries` | int | 3 | 单个成员连续发生基础设施层错误（代理/DNS/TLS/连接重置/连接中断，即 `upstream_network` 类）的最大容忍次数，达到后走正常冷却通道；与业务失败（`member_max_attempts`）分开计数。0 表示与 `member_max_attempts` 一致。 |
-| `member_retry_interval_seconds` | int | 3 | 同一成员相邻两次尝试之间的等待秒数。 |
+| `member_retry_interval_seconds` | int | 2 | 同一成员相邻两次尝试之间的等待秒数。没有可选成员，或引用结构性跳过过多时，也用它做退避。 |
 | `member_non_stream_response_timeout_seconds` | int | 1200 | 单个成员返回完整非流式响应的超时秒数。 |
-| `member_stream_first_event_timeout_seconds` | int | 300 | 单个成员返回首个有效流事件的超时秒数。 |
+| `member_stream_first_event_timeout_seconds` | int | 60 | 单个成员返回首个有效流事件的超时秒数。 |
+| `member_stream_idle_timeout_seconds` | int | 120 | 流式转发期间，相邻事件的空闲超时秒数；超时按失败定稿。0 表示不限。 |
+| `member_stream_max_bytes` | int | 0 | 单次流式转发累计事件字节上限，超过按失败定稿。0 表示不限。 |
+| `member_stream_max_events` | int | 0 | 单次流式转发累计事件数上限，超过按失败定稿。0 表示不限。 |
 | `member_cooldown_seconds` | int | 60 | 单个成员耗尽尝试后被跳过的秒数，仅在故障转移模式生效。 |
-| `member_affinity_seconds` | int | 300 | 成员亲和时间：故障切换成功后继续保持当前成员的秒数；当前成员失败会立即结束亲和，0 表示不保持。 |
-| `session_sticky_enabled` | bool | false | 是否启用会话粘合：同一会话的请求在粘合有效期内固定使用同一成员。 |
+| `member_affinity_seconds` | int | 300 | 成员亲和时间：故障切换成功后继续保持当前成员的秒数；当前成员失败会立即结束亲和。0 表示不保持。 |
+| `session_sticky_enabled` | bool | true | 是否启用会话粘合：同一会话的请求在粘合有效期内固定使用同一成员。仅故障转移模式生效。 |
 | `session_sticky_seconds` | int | 300 | 会话粘合时长秒数，粘合成员每次业务成功后滑动续期。 |
-| `cooldown_backoff_multiplier` | float64 | 2 | 半开探测失败后的冷却时间倍数，冷却等级每升一级乘一次，最小为 1 表示不退避。 |
+| `cooldown_backoff_multiplier` | float64 | 2 | 半开探测失败后的冷却时间倍数，冷却等级每升一级乘一次。最小为 1，表示不退避。 |
 | `cooldown_max_seconds` | int | 1800 | 成员冷却时间上限秒数，退避后不超过该值。 |
+| `all_cooldown_retry_base_seconds` | int | 3 | 全部未禁用成员都在冷却中时，自动清除冷却并重试的基础间隔秒数，每轮线性递增。0 表示不自动清除。 |
+| `all_cooldown_retry_max_seconds` | int | 60 | 全冷却自动重试的间隔上限秒数。 |
 | `background_probe_enabled` | bool | false | 是否启用后台定时探测，对处于 OPEN 状态的成员周期性发起半开测试。 |
 | `background_probe_interval_seconds` | int | 60 | 后台定时探测的执行间隔秒数。 |
-| `max_request_rounds` | int | 60 | 单个请求的最大选路轮次（含引用跳过与等待重试），超限以客户端协议错误收尾，防失控轮转。 |
-| `max_request_seconds` | int | 0 | 单个请求的整体安全截止时间秒数，0 表示不限(默认)；超时后同样以错误收尾。 |
+| `emergency_item_id` | int | 0 | 紧急兜底成员 ID。常规选路和整批探测都没有结果时，对该成员节流放行（同时最多 3 个请求）。0 表示关闭；必须指向本分组已有成员。 |
+| `prefer_passthrough` | bool | false | 故障转移时是否把与客户端协议相同的成员整体前移。分类内部仍按优先级升序，同协议没有健康成员时回退到其它协议。 |
+| `mask_enabled` | bool | false | 是否对本分组启用请求脱敏。还要全局脱敏开关为 true 才生效。 |
+| `auto_match_models` | bool | false | 是否按分组名称自动纳入名称包含该关键词的渠道模型。 |
+| `max_request_rounds` | int | 600 | 单个请求的最大选路轮次（含引用跳过与等待重试）。超限后以错误收尾，防止空转。 |
+| `max_request_seconds` | int | 0 | 单个请求的整体时长上限秒数。超时后不再开始新一轮尝试。0 表示不限。 |
 
 ---
 
@@ -223,23 +242,32 @@
 2. **目标不存在：** 引用指向的分组已被删除或名称失效（`groupLookupFunc` 查询失败）。
 3. **成环或超限：** 引用链出现环（`visited` 集合命中），或深度超过 `model.MaxGroupRefDepth`。
 
-三种场景统一按「结构性解析失败」处理：
+三种场景统一按「结构性解析失败」处理。单次失败不计失败、不进冷却、也不等待，马上改试顶层下一个优先级。它不是「本请求内永久排除、并且一直不等待」。
 
 ```text
 解析某跳引用成员失败
         ↓
-立即排除该引用（仅限当次请求）
+不计失败 · 不给该引用上冷却 · 这一次不等待
+        ↓
+exclude 只记住本轮这一个顶层引用成员
         ↓
 马上尝试顶层下一优先级成员
         ↓
-不计失败 · 不进冷却 · 无等待
-        ↓
-下个请求重新评估；目标分组恢复后自动回流
+本请求内的结构性跳过次数是否已经超过顶层成员数？
+        /                          \
+      否                            是
+      ↓                              ↓
+继续选下一个                   清空 exclude
+                                     ↓
+                          等待 member_retry_interval_seconds
+                                     ↓
+                     同一请求内重新评估（含此前跳过的引用）
 ```
 
-- 排除范围仅为**当次请求**：本请求内不再尝试该引用；下一个请求从头重新评估，不携带任何记忆。
-- 不产生任何记账：无失败计数、无冷却、无退避；祖先跳只做探测占用归还（`releaseRefChainHops`）。
-- 目标分组的不可用是暂态时（如成员冷却到期），后续请求自然重新选中该引用并恢复原链路。
+- `exclude` 是单个成员 ID，不是一个排除集合。它记不住多个同时损坏的兄弟引用；跳过次数一旦超过顶层成员数，就清空排除并退避一轮，避免这几个坏引用交替紧循环。
+- 选路已经没有任何候选时，同样先清空 `exclude`，再按 `member_retry_interval_seconds` 等待后重扫。等待窗口里目标分组的冷却可能到期，同一请求可以重新选中先前跳过的引用。
+- 单次结构性跳过本身仍不记账：无失败计数、无冷却。沿途探测占用和紧急额度由 `releaseRefChainHops` 归还，并清除指向这条死链的会话粘合。
+- 下一个新请求不携带上一个请求的 `exclude`。目标分组恢复后，新请求会重新评估该引用。
 
 ### 与瞬态上游失败的对照
 
@@ -249,13 +277,18 @@
 | --- | --- | --- |
 | 触发时机 | 真实派发前，解析引用链阶段 | 已向叶子成员发起真实上游调用之后 |
 | 典型场景 | 目标无可选成员 / 目标不存在 / 成环超限 | 上游 5xx、响应超时、网络错误等 |
-| 当次请求动作 | 立即排除该引用，尝试顶层下一优先级 | 按成员级重试策略等待后重试同一成员或切换 |
+| 当次请求动作 | 单次失败立即改试顶层下一优先级，只记住这一个顶层成员。跳过次数超过成员数，或已经没有候选时，清空排除并等待 `member_retry_interval_seconds`，再在同一请求内重评 | 按成员级重试策略等待后重试同一成员或切换 |
 | 失败计数归属 | 不计数 | 计入该叶子成员的失败统计 |
-| 冷却与退避归属 | 均不涉及 | 未达 `member_max_attempts` 时按 `member_retry_interval_seconds` 退避等待；耗尽后进 `member_cooldown_seconds` 冷却 |
+| 冷却与退避归属 | 不给引用成员上冷却。单次跳过也不等待；只有整组都选不出或跳过过多时才用重试间隔防热旋 | 未达 `member_max_attempts` 时按 `member_retry_interval_seconds` 退避等待；耗尽后进 `member_cooldown_seconds` 冷却 |
 
 ### `member_retry_interval_seconds` 的准确含义
 
-该配置（默认 3 秒，各分组独立配置）只作用于真实派发后的成员级失败：同一成员失败但尚未达到 `member_max_attempts` 时，相邻两次尝试之间的退避等待秒数。它不是轮询间隔，也不参与引用解析——引用跳过不受它影响：解析失败既不等待该间隔，也不消耗任何重试预算。
+该配置（新分组默认 2 秒，各分组独立配置）有两处用途，都不是轮询间隔：
+
+1. 真实派发之后：同一成员失败但还没达到 `member_max_attempts` 时，相邻两次尝试之间的等待秒数。
+2. 还没派发时：本轮没有任何可选成员，或者引用结构性跳过次数已经超过顶层成员数。这时用同一个间隔退避，然后重新选路。
+
+单次引用解析失败既不等待这个间隔，也不消耗 `member_max_attempts`。
 
 ---
 
@@ -276,4 +309,5 @@
 | 成员级响应超时生效（非流式完整响应 / 流式首事件） | `internal/relay/handler.go`（主循环） |
 | Relay 配置字段、默认值与空值补齐 | `internal/model/group.go`（配置） |
 | 全部成员不可用时的紧急兜底渠道：常规选路与整批探测均无果时，节流放行分组配置的最后防线成员 | `internal/relay/route.go`（`claimEmergencyLocked`，并发上限 `emergencyMaxConcurrent = 3`）、`internal/model/group.go`（`emergency_item_id` 配置项） |
-| 分组引用解析失败的跳过语义：立即排除该引用、尝试顶层下一优先级，不计失败不进冷却不等待，下个请求重新评估自动回流 | `internal/relay/handler.go`（主循环）、`internal/relay/route.go`（`resolveGroupRefChain`） |
+| 分组引用解析失败：单次跳过不计失败、不进冷却、不等待；无候选或跳过过多时清空排除并按重试间隔重评 | `internal/relay/handler.go`（主循环）、`internal/relay/route.go`（`resolveGroupRefChain`） |
+| 全部未禁用成员都在冷却中时自动清除冷却并线性退避重试 | `internal/relay/handler.go`（主循环）、`internal/relay/route.go`（`allMembersInCooldown`、`ResetGroupCooldown`） |

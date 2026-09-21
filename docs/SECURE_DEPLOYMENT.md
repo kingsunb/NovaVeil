@@ -101,9 +101,18 @@ export NOVAVEIL_SECURITY_COOKIE_SECURE=true
 
 Keep `server.host=0.0.0.0` inside the container; restrict exposure at the host,
 reverse proxy, and firewall. Same-origin checks support HTTPS termination when the
-proxy preserves `Host`, without trusting `X-Forwarded-*`. The server intentionally
-trusts no proxy source by default, so IP-based rate limiting behind a proxy still
-requires an explicit trusted-proxy configuration in application code.
+proxy preserves `Host`. Those checks do not trust `X-Forwarded-*`.
+
+The process trusts no proxy unless `server.trusted_proxies` lists the proxy CIDR
+or IP. The environment variable `NOVAVEIL_SERVER_TRUSTED_PROXIES` is comma-separated
+and, when non-empty, replaces the file list. An empty list ignores
+`X-Forwarded-For`, so login rate limits see the proxy address. Change the
+configuration; do not edit application code.
+
+`security.cookie_secure` defaults to false (`NOVAVEIL_SECURITY_COOKIE_SECURE`).
+The auth cookie is also marked Secure when the request itself is TLS. A proxy that
+terminates TLS presents plain HTTP to the process, so set the flag there. Leave it
+false for direct HTTP, or the browser will not send the cookie back.
 
 ## Updates
 

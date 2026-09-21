@@ -696,7 +696,7 @@ func GroupReplaceItemsByName(ctx context.Context, name string, ranks []model.Mod
 			return nil
 		}
 
-		// 复核存活的成员按分类顺序入组, priority 递减、首项最高。
+		// 复核存活的成员按 position 顺序入组: priority 从 1 递增, 数值越小路由越优先。
 		newItems := make([]model.GroupItem, 0, liveCount)
 		for _, cmID := range resolvedModelIDs {
 			if _, ok := liveSet[cmID]; !ok {

@@ -396,7 +396,7 @@ export default function ModelEvalPage() {
                 </ol>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/50 p-4">
-                <p className="min-w-0 text-[11px] leading-relaxed text-ink-subtle">格式合规的成功结果会自动进入排序，其余结果保留在历史，便于重测与排查。</p>
+                <p className="min-w-0 text-[11px] leading-relaxed text-ink-subtle">请求成功的结果会自动进入排序，格式不符的也包括在内。失败结果只留在历史，便于重测与排查。</p>
                 <Button type="button" variant="secondary" size="sm" onClick={() => changeView("queue")}>
                   <ListOrdered className="h-3.5 w-3.5" aria-hidden />查看评估队列
                 </Button>

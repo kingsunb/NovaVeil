@@ -2,10 +2,10 @@
  * 模型评估页核心逻辑：固定测试题、包裹标记、HTML 提取与格式判定。
  *
  * 评估流程：对每个渠道的每个模型发送 EVAL_PROMPT，模型须把完整 HTML 放在
- * RESULT_START / RESULT_END 之间。根据回复是否合规决定是否进入排序：
- *  - 测试报错 → 保留历史与失败原因，不参与分组
- *  - 请求成功但未按格式包裹 → 保留历史，不参与排序和分组
- *  - 成功且包裹合规 → 正常参与手动排序
+ * RESULT_START / RESULT_END 之间。排序资格看请求是否成功，不看格式是否合规：
+ *  - 测试报错（error）→ 只留历史与失败原因，不进入排序，也不覆盖已有成功快照
+ *  - 请求成功（ok 与 violation）→ 进入排序，并可写入 auto 分组
+ * 管理台「加入排序」按钮目前只对 ok 可点，比 from-history 接口更窄。
  */
 
 /** 包裹起始标记。 */
@@ -83,9 +83,9 @@ export function extractRenderableHtml(content: string): string {
 
 /**
  * EvalOutcome 单个渠道模型的评估终态。
- *  - error      : 测试请求失败（上游报错/超时/拒绝），保留记录但不参与分组。
- *  - violation  : 请求成功但未按格式包裹，保留记录但不参与排序和分组。
- *  - ok         : 成功且包裹合规，正常参与手动排序。
+ *  - error      : 测试请求失败（上游报错/超时/拒绝），不进入排序，也不覆盖已有成功快照。
+ *  - violation  : 请求成功但未按格式包裹，与 ok 一样可以进入排序并写入 auto 分组。
+ *  - ok         : 成功且包裹合规，可以进入排序。
  */
 export type EvalOutcome = "ok" | "violation" | "error";
 

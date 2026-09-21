@@ -193,7 +193,8 @@ go run main.go start
 | 改端口 | `NOVAVEIL_SERVER_PORT=9000 ./novaveil start` |
 | 用 MySQL | `"database": {"type":"mysql","path":"user:pwd@tcp(host:3306)/novaveil"}` |
 | 用 PostgreSQL | `"database": {"type":"postgres","path":"postgresql://user:pwd@host:5432/novaveil?sslmode=disable"}` |
-| 反代后启用安全 Cookie | `NOVAVEIL_SECURITY_COOKIE_SECURE=true` |
+| 反代后启用安全 Cookie | `NOVAVEIL_SECURITY_COOKIE_SECURE=true`（直接 HTTP 保持 false） |
+| 反代后按真实客户端 IP 限速 | `NOVAVEIL_SERVER_TRUSTED_PROXIES=127.0.0.1/32`（逗号分隔，非空时覆盖配置文件） |
 
 > MySQL / PostgreSQL 需先手动建库，程序自动建表。SQLite 无需任何前置操作。
 
@@ -234,5 +235,4 @@ pnpm 11.23.0）实测通过的项目：
 | HTTPS | 自行在反代终止 TLS | 同左，Compose 默认绑 127.0.0.1:8888 |
 | 适用 | 开发、内网、无容器运行时 | 生产、多副本、需强隔离 |
 
-独立部署默认不信任任何代理头（`X-Forwarded-For` 不可伪造绕过登录限速）；置于反向代理
-之后时需自行配置 gin 可信代理，才能按真实客户端 IP 限速。
+独立部署默认不信任任何代理头（`server.trusted_proxies` 为空，`X-Forwarded-For` 不能伪造绕过登录限速）。置于反向代理之后时，把代理 CIDR 或 IP 写入 `server.trusted_proxies`，或设置 `NOVAVEIL_SERVER_TRUSTED_PROXIES`。不要为此修改应用代码。反代终止 TLS 时另设 `security.cookie_secure=true`；进程自己收到的 TLS 请求会自动给 Cookie 加 `Secure`。
