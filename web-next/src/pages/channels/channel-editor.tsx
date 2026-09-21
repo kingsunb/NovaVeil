@@ -882,9 +882,8 @@ function CredTab({
   const builtin = !!draft.builtin;
 
   // 眼睛显示：默认掩码/密文态；已保存行首次点眼睛时按需直接 fetch 该渠道的
-  // 密钥明文。不走 React Query 缓存：明文只在 CredTab 的 state 里存续，
-  // 关闭编辑器/切换 Tab 卸载时即丢弃，避免 reveal 后仍留在 query cache 中
-  // （审计 FE-02）。
+  // 密钥明文。明文只放在本组件的 secrets 里用于展示，不写进 draft。
+  // 否则点一次眼睛会让后续保存把全部明文再提交回去。
   const [visibleKeys, setVisibleKeys] = useState<Record<number, boolean>>({});
   const [secrets, setSecrets] = useState<ChannelKey[] | null>(null);
   const secretsFetchGenRef = useRef(0);
@@ -919,36 +918,15 @@ function CredTab({
     clearedSecretIdsRef.current = new Set();
   }, [channelId]);
 
-  useEffect(() => {
-    if (!secrets) return;
-    // 回填仍无明文的已保存行；不覆盖用户手动输入的内容，也不回填被用户
-    // 明确清空的行。
-    let changed = false;
-    const next = draft.keys.map((row) => {
-      if (row.key) return row;
-      const stableId = row.original_id ?? row.id;
-      if (stableId && clearedSecretIdsRef.current.has(stableId)) return row;
-      if (row.key_masked && clearedSecretIdsRef.current.has(row.key_masked)) {
-        return row;
-      }
-      if (row.id) {
-        const found = secrets.find((s) => s.id === row.id);
-        if (found?.key) {
-          changed = true;
-          return { ...row, key: found.key };
-        }
-        return row;
-      }
-      // 旧式单 Key 渠道归一化行没有 id，凭后端下发的掩码行识别，取首条明文。
-      if (row.key_masked && secrets[0]?.key) {
-        changed = true;
-        return { ...row, key: secrets[0].key };
-      }
-      return row;
-    });
-    if (changed) update("keys", next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [secrets]);
+  function revealedKey(row: ChannelKey): string {
+    if (!secrets) return "";
+    const stableId = row.original_id ?? row.id;
+    if (stableId && clearedSecretIdsRef.current.has(stableId)) return "";
+    if (row.key_masked && clearedSecretIdsRef.current.has(row.key_masked)) return "";
+    if (row.id) return secrets.find((item) => item.id === row.id)?.key ?? "";
+    if (row.key_masked) return secrets[0]?.key ?? "";
+    return "";
+  }
 
   function toggleKeyVisible(idx: number) {
     const row = draft.keys[idx];
@@ -1098,7 +1076,7 @@ function CredTab({
               <div className="relative flex-1">
                 <Input
                   type={visibleKeys[i] ? "text" : "password"}
-                  value={k.key}
+                  value={k.key || (visibleKeys[i] ? revealedKey(k) : "")}
                   onChange={(e) => {
                     const next = [...draft.keys];
                     const value = e.target.value;

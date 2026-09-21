@@ -141,8 +141,9 @@ images disable in-container self-update and must be upgraded by replacing the pi
 
 The first-run admin password is written once to `/app/data/initial-admin-password`
 with mode `0600`; it is never written to normal logs. Read it from the protected data
-volume, change it immediately, and confirm the bootstrap file is removed after the
-password change. The Compose log driver limits disk usage but does not encrypt logs.
+volume before the first login. That login deletes the file. Change the password
+immediately afterward; other operations stay blocked until you do. The Compose log
+driver limits disk usage but does not encrypt logs.
 
 Application export files contain channel and API keys in plaintext. Conversation
 retention, when enabled, stores request content below `/app/data/conversations`.

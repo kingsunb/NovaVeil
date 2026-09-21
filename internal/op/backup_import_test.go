@@ -379,8 +379,8 @@ func TestImportRejectsRedactedAPIKey(t *testing.T) {
 	}
 }
 
-// TestImportRejectsRedactedChannelCredentials 验证渠道 Key、多 Key 与 channel_proxy
-// 上的精确 "****" 不能导入, 也不会被加密后写成真实凭据。
+// TestImportRejectsRedactedChannelCredentials 验证渠道 Key 与多 Key 上的精确 "****"
+// 不能导入。代理和自定义头的 "****" 是现行导出打码, 不拒绝整份备份, 也不写回。
 func TestImportRejectsRedactedChannelCredentials(t *testing.T) {
 	ctx := context.Background()
 	t.Cleanup(func() { cleanupImportTestRows(t) })
@@ -388,7 +388,6 @@ func TestImportRejectsRedactedChannelCredentials(t *testing.T) {
 	cases := []model.Channel{
 		{ID: 920611, Name: "redacted-key", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com", Key: mask},
 		{ID: 920612, Name: "redacted-keys", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com", Keys: []model.ChannelKey{{Key: mask}}},
-		{ID: 920613, Name: "redacted-proxy", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com", Key: "sk-real-but-proxy-masked", ChannelProxy: &mask},
 	}
 	for _, ch := range cases {
 		dump := &model.DBDump{Version: dbDumpVersion, Channels: []model.Channel{ch}}
@@ -413,6 +412,41 @@ func TestImportRejectsRedactedChannelCredentials(t *testing.T) {
 		if err := db.GetDB().First(&stored, ch.ID).Error; err == nil {
 			t.Fatalf("channel %d must not be inserted", ch.ID)
 		}
+	}
+}
+
+func TestImportDropsRedactedProxyAndCustomHeader(t *testing.T) {
+	ctx := context.Background()
+	t.Cleanup(func() { cleanupImportTestRows(t) })
+	mask := "****"
+	dump := &model.DBDump{
+		Version: dbDumpVersion,
+		Channels: []model.Channel{{
+			ID:           920613,
+			Name:         "redacted-proxy",
+			Type:         model.ChannelProviderOpenAI,
+			BaseURL:      "https://example.com",
+			Key:          "sk-real-but-proxy-masked",
+			ChannelProxy: &mask,
+			CustomHeader: []model.CustomHeader{{HeaderKey: "X-Token", HeaderValue: mask}},
+		}},
+	}
+	if _, err := DBImportIncremental(ctx, dump); err != nil {
+		t.Fatalf("redacted proxy must not block key import: %v", err)
+	}
+	var stored model.Channel
+	if err := db.GetDB().First(&stored, 920613).Error; err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	plain, err := seal.Open(stored.Key)
+	if err != nil || plain != "sk-real-but-proxy-masked" {
+		t.Fatalf("key = %q err=%v", plain, err)
+	}
+	if stored.ChannelProxy != nil {
+		t.Fatalf("redacted proxy must be omitted, got %q", *stored.ChannelProxy)
+	}
+	if len(stored.CustomHeader) != 0 {
+		t.Fatalf("redacted custom header must be omitted, got %+v", stored.CustomHeader)
 	}
 }
 

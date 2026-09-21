@@ -1835,7 +1835,7 @@ function BackupSection() {
         <div>
           <CardTitle>备份</CardTitle>
           <CardDescription>
-            导出 / 导入渠道、分组、密钥、设置、用量汇总与客户端统计为 JSON
+            导出 / 导入渠道、分组、密钥、设置、用量汇总与客户端统计为 JSON。渠道 Key 与 API Key 明文导出是预期行为
           </CardDescription>
         </div>
       </CardHeader>
@@ -1844,7 +1844,7 @@ function BackupSection() {
         <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-2.5 text-xs text-warning">
           <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
           <span>
-            备份文件包含渠道密钥与 API Key 明文，请妥善保管（加密存储 / 限制访问权限），切勿提交到代码仓库或公共存储。
+            渠道 Key 与 API Key 以明文导出，导入后可以直接还原调用。这是预期行为，不是漏脱敏。代理、自定义头和请求头模板仍是 ****，导入时不会覆盖线上原值。请把文件当生产凭据保管。
           </span>
         </div>
 

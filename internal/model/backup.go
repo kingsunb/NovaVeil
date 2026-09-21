@@ -11,8 +11,9 @@ const DBDumpSensitiveNote = "PLAINTEXT KEYS: channel keys and API keys in this b
 // Import uses incremental semantics (insert new rows, and upsert on tables with natural keys).
 //
 // 敏感性: Channels.Key/Keys 与 APIKeys.APIKey 在导出时是明文(库内 nv1: 已解开)。
-// ChannelProxy、自定义头值和请求头模板值仍脱敏为 "****"。这些精确 "****" 在导入预检中会被拒绝,
-// 避免把掩码加密后当成真实凭据落库。auth_jwt_secret、proxy_url、proxy_pool 不出现在备份中。
+// ChannelProxy、自定义头值和请求头模板值仍脱敏为 "****"。导入时这些打码字段不恢复:
+// 代理清空、自定义头整行丢掉、请求头模板整份跳过, 避免把掩码密封成真实凭据或覆盖线上模板。
+// 渠道 Key / API Key 若恰为 "****"(旧文件或手改)则整份导入拒绝。auth_jwt_secret、proxy_url、proxy_pool 不出现在备份中。
 // users 表不导出, 不含用户密码哈希。
 // 实时请求日志(ErrorLog)不导出; 但用量汇总(UsageBuckets)与客户端调用统计
 // (ClientStats)作为跨重启的持久数据参与导出, 换平台后趋势图与防滥用审计不丢。

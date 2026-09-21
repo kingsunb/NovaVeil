@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -613,17 +614,12 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			}
 			// 记录本轮已经取得可提交的上游响应。
 			request.finishRound(AttemptSuccess, "", "")
-			// 上游成功后沿途各层解除冷却与探测占用, 并按各自路由配置处理亲和:
-			// 引用跳被业务确认说明它确能产出可用下游, 叶子层独立完成自己的候选确认与恢复。
-			for _, hop := range hops {
-				recordRouteSuccess(hop.group, hop.item.ID)
-			}
-			// 业务成功后沿途每层建立或滑动续期会话粘合(顶层粘到引用项, 叶子组粘到叶子项),
-			// 同一会话在链路任一分组的粘合有效期内都稳定命中同一条完整链路。
-			for _, hop := range hops {
-				if sessionStickyEnabled(hop.group, scopeKey) {
-					bindSessionSticky(hop.group, scopeKey, hop.item.ID)
-				}
+			// 非流式正文已经完整取回, 此时才能记业务成功。
+			// 流式只是拿到了可开始转发的事件流, 正文还可能中途断开。若在这里就
+			// recordRouteSuccess, 会先清掉提交后失败连击, 默认阈值下熔断永远打不开。
+			// 流式成功改到整段转发结束、且没有失败哨兵时再记。
+			if !metadataStreaming {
+				commitRouteOutcome(hops, scopeKey)
 			}
 			// 同协议透传时复制上游响应头, 但永远丢弃 Set-Cookie/Location/WWW-Authenticate
 			// 等危险头与逐跳头, 防止恶意/被攻陷渠道注入这些头驱逐管理员 cookie 或重定向客户端。
@@ -646,6 +642,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				request.markCommitted()
 				// 脱敏还原: 非流式响应占位符→原文(文档 01 §3.1)。
 				result.body = restoreNonStream(result.body, maskMapping)
+				// 还原会改变字节长度。上游带来的 Content-Length 若原样留下,
+				// net/http 会按声明长度截断或报 ErrContentLength。
+				if got := c.Writer.Header().Get("Content-Length"); got != "" && got != strconv.Itoa(len(result.body)) {
+					c.Writer.Header().Del("Content-Length")
+				}
 				n, err := c.Writer.Write(result.body)
 				if err == nil && n != len(result.body) {
 					err = io.ErrShortWrite
@@ -945,8 +946,23 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 				return
 			}
+			// 流已经完整交付且聚合成功, 这时才确认成员恢复并续上粘合。
+			commitRouteOutcome(hops, scopeKey)
 			request.markSucceeded(string(responseBody), result.usage)
 			return
+		}
+	}
+}
+
+// commitRouteOutcome 在一轮业务真正成功后确认路由并续上会话粘合。
+// 流式调用必须等转发结束且没有失败哨兵; 提前调用会清掉提交后失败连击。
+func commitRouteOutcome(hops []refHop, scopeKey string) {
+	for _, hop := range hops {
+		recordRouteSuccess(hop.group, hop.item.ID)
+	}
+	for _, hop := range hops {
+		if sessionStickyEnabled(hop.group, scopeKey) {
+			bindSessionSticky(hop.group, scopeKey, hop.item.ID)
 		}
 	}
 }
@@ -1066,6 +1082,10 @@ var droppedUpstreamHeaders = map[string]bool{
 	"Trailer":             true,
 	"Transfer-Encoding":   true,
 	"Upgrade":             true,
+	// 前置 nginx 会把这些头当成内部重定向或关闭缓冲的指令。
+	"X-Accel-Redirect":  true,
+	"X-Accel-Buffering": true,
+	"X-Sendfile":        true,
 }
 
 // copyUpstreamHeaders 复制上游响应头到客户端响应。
@@ -1074,9 +1094,10 @@ var droppedUpstreamHeaders = map[string]bool{
 // 流式分支额外剔除 Content-Length 类定长分帧头(大小写不敏感), 防止上游误带的定长声明
 // 破坏逐事件分帧与合成终止帧追加; 非流式分支保留 Content-Length。
 func copyUpstreamHeaders(dst, src http.Header, streaming bool) {
+	hopByHop := connectionHeaderTokens(src)
 	for key, values := range src {
 		canon := http.CanonicalHeaderKey(key)
-		if droppedUpstreamHeaders[canon] {
+		if droppedUpstreamHeaders[canon] || hopByHop[canon] {
 			continue
 		}
 		if streaming && canon == "Content-Length" {
@@ -1084,6 +1105,25 @@ func copyUpstreamHeaders(dst, src http.Header, streaming bool) {
 		}
 		dst[key] = values
 	}
+}
+
+// connectionHeaderTokens 取出 Connection 点名的逐跳头。
+// Connection 本身已丢弃, 但它点名的头否则会原样回到客户端。
+func connectionHeaderTokens(src http.Header) map[string]bool {
+	raw := src.Values("Connection")
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]bool)
+	for _, value := range raw {
+		for _, part := range strings.Split(value, ",") {
+			name := http.CanonicalHeaderKey(strings.TrimSpace(part))
+			if name != "" {
+				out[name] = true
+			}
+		}
+	}
+	return out
 }
 
 // errNoAvailableChannels 面向下游的统一终态错误消息:

@@ -27,6 +27,17 @@ import (
 // 运行时将 xxx 替换为客户端请求头 xxx 的实际值, 用于透传 User-Agent、X-Request-Id 等头到上游。
 var clientHeaderPlaceholder = regexp.MustCompile(`\{client_header:[^}]+\}`)
 
+// blockedCustomHeader 是自定义头不能覆盖、也不能从出站头回读的名字。
+func blockedCustomHeader(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "authorization", "proxy-authorization", "x-api-key", "x-goog-api-key", "api-key",
+		"cookie", "host", "content-length", "transfer-encoding", "connection":
+		return true
+	default:
+		return false
+	}
+}
+
 // supportsNativeFormat 判断客户端协议是否为这一跳的原生格式; 同协议时可整包透传, 否则需经 pipeline 转换。
 // 当渠道开启 PassThroughBodyEnabled (完全渠道透传) 时, 任意客户端协议均视为原生格式, 直接原样透传至上游。
 // channelModel 提供 OpenCode 模型行上的上游协议; 为空或协议为空时仍按渠道类型判断。
@@ -394,13 +405,23 @@ func applyChannelConfig(channel model.Channel, request *httpclient.Request, rand
 	}
 
 	// 转换器已经写入的认证等敏感 Header 不允许被自定义配置覆盖。
+	// Host / Content-Length / Transfer-Encoding 也不允许写: 随机头保存时已经拒绝它们,
+	// 自定义头若能写, 会改分帧或把渠道密钥经 {client_header:Authorization} 再抄一份出去。
 	for _, header := range channel.CustomHeader {
+		if blockedCustomHeader(header.HeaderKey) {
+			continue
+		}
 		if request.Headers.Get(header.HeaderKey) != "" && httpclient.IsSensitiveHeader(header.HeaderKey) {
 			continue
 		}
 		// 值中的 {client_header:xxx} 片段替换为客户端请求头 xxx 的实际值。
+		// 此时出站头里的 Authorization 已经是渠道密钥, 敏感头名替换为空。
 		value := clientHeaderPlaceholder.ReplaceAllStringFunc(header.HeaderValue, func(placeholder string) string {
-			return request.Headers.Get(placeholder[len("{client_header:") : len(placeholder)-1])
+			name := placeholder[len("{client_header:") : len(placeholder)-1]
+			if blockedCustomHeader(name) {
+				return ""
+			}
+			return request.Headers.Get(name)
 		})
 		request.Headers.Set(header.HeaderKey, value)
 	}

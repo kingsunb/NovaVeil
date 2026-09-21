@@ -49,6 +49,9 @@ func RecordUsageBucket(targetModel string, input, output, reasoning, cached int6
 	if durationMs < 0 {
 		durationMs = 0
 	}
+	if cost < 0 {
+		cost = 0
+	}
 	if input == 0 && output == 0 {
 		return
 	}
@@ -295,8 +298,8 @@ func RecordErrorBucket(targetModel string) {
 		return
 	}
 	bucket := model.UsageBucket{
-		BucketAt:  usageBucketNow().UTC().Truncate(UsageBucketHour),
-		ModelName: targetModel,
+		BucketAt:   usageBucketNow().UTC().Truncate(UsageBucketHour),
+		ModelName:  targetModel,
 		ErrorCount: 1,
 	}
 	err := gormDB.Clauses(clause.OnConflict{

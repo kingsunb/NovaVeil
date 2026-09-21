@@ -377,6 +377,14 @@ func recoverExpiredItems(ctx context.Context, group model.Group, candidates []mo
 		publishRouteLocked(route)
 		return winner
 	}
+	// 请求取消或客户端断开不是成员失败。只清半开标记, 不升冷却档。
+	if ctx.Err() != nil {
+		for _, item := range candidates {
+			delete(route.HalfOpens, item.ID)
+		}
+		publishRouteLocked(route)
+		return model.GroupItem{}
+	}
 	now := time.Now().UnixMilli()
 	for _, item := range candidates {
 		reopenItemLocked(route, group.RelayConfig, item.ID, now)
@@ -463,6 +471,12 @@ func recordPostCommitFailure(group model.Group, itemID int) bool {
 	}
 	delete(route.PostCommitStrikes, itemID)
 	route.Cooldowns[itemID] = time.Now().UnixMilli() + cooldownMillis(group.RelayConfig, 1)
+	// 亲和在扫冷却之前就会命中。提交后进冷却若不拆亲和, 后续请求仍打到已 OPEN 的成员。
+	if route.CurrentItemID == itemID {
+		route.CurrentItemID = 0
+		route.AffinityUntil = 0
+		route.affinityArmed = true
+	}
 	publishRouteLocked(route)
 	return true
 }
@@ -586,15 +600,19 @@ func releaseRouteProbe(group model.Group, itemID int) {
 	if route == nil {
 		return
 	}
+	changed := false
 	if route.ProbeItemID == itemID || route.HalfOpens[itemID] > 0 {
 		delete(route.HalfOpens, itemID)
 		if route.ProbeItemID == itemID {
 			route.ProbeItemID = 0
 		}
-		publishRouteLocked(route)
-		return
+		changed = true
 	}
+	// 半开标记和紧急额度可能同时存在。只清半开就返回会把紧急并发额度漏掉。
 	if releaseEmergencyLocked(route, itemID) {
+		changed = true
+	}
+	if changed {
 		publishRouteLocked(route)
 	}
 }

@@ -46,6 +46,8 @@ func init() {
 
 func login(c *gin.Context) {
 	ip := c.ClientIP()
+	unlockIP := loginLimiter.lockIP(ip)
+	defer unlockIP()
 	if allowed, retryAfter := loginLimiter.check(c.Request.Context(), ip); !allowed {
 		rejectRateLimited(c, retryAfter)
 		return

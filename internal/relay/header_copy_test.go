@@ -78,8 +78,10 @@ func TestCopyUpstreamHeadersDropsDangerousHeaders(t *testing.T) {
 		"Set-Cookie2":       {"auth=evil2"},
 		"Location":          {"https://evil.example/"},
 		"Www-Authenticate":  {"Basic realm=\"x\""},
-		"Connection":        {"keep-alive"},
+		"Connection":        {"keep-alive, X-Upstream-Auth"},
 		"Transfer-Encoding": {"chunked"},
+		"X-Accel-Redirect":  {"/etc/passwd"},
+		"X-Upstream-Auth":   {"secret"},
 	}
 	dst := http.Header{}
 
@@ -105,6 +107,12 @@ func TestCopyUpstreamHeadersDropsDangerousHeaders(t *testing.T) {
 	}
 	if got := dst.Get("Content-Type"); got != "text/event-stream" {
 		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+	if got := dst.Get("X-Accel-Redirect"); got != "" {
+		t.Fatalf("X-Accel-Redirect must be dropped, got %q", got)
+	}
+	if got := dst.Get("X-Upstream-Auth"); got != "" {
+		t.Fatalf("Connection-nominated header must be dropped, got %q", got)
 	}
 }
 

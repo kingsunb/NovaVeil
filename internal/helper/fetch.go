@@ -120,8 +120,7 @@ func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.C
 	}
 
 	var result model.OpenAIModelList
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeModelList(resp.Body, &result); err != nil {
 		return nil, err
 	}
 
@@ -142,7 +141,7 @@ func fetchGeminiModels(client *http.Client, ctx context.Context, request model.C
 		baseURL = transformer.NormalizeBaseURL(request.BaseURL, "")
 	}
 
-	for {
+	for page := 0; page < maxModelListPages; page++ {
 		req, err := http.NewRequestWithContext(
 			ctx,
 			http.MethodGet,
@@ -172,7 +171,7 @@ func fetchGeminiModels(client *http.Client, ctx context.Context, request model.C
 			return nil, err
 		}
 		var result model.GeminiModelList
-		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
+		decodeErr := decodeModelList(resp.Body, &result)
 		// 逐页显式关闭: 循环内 defer 会累积到函数返回, 多页渠道会同时持有 N 个响应体。
 		resp.Body.Close()
 		if decodeErr != nil {
@@ -201,7 +200,7 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 	var allModels []string
 	var afterID string
 	baseURL := transformer.NormalizeBaseURL(request.BaseURL, "v1")
-	for {
+	for page := 0; page < maxModelListPages; page++ {
 
 		req, err := http.NewRequestWithContext(
 			ctx,
@@ -235,7 +234,7 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 			return nil, err
 		}
 		var result model.AnthropicModelList
-		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
+		decodeErr := decodeModelList(resp.Body, &result)
 		// 逐页显式关闭: 循环内 defer 会累积到函数返回, 多页渠道会同时持有 N 个响应体。
 		resp.Body.Close()
 		if decodeErr != nil {
@@ -261,6 +260,22 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 // readUpstreamErrorSnippet 读取上游非 2xx 响应体前 512 字节用于错误上下文。
 // 截断避免超大错误页耗内存; 调用方拿到本片段后须自行关闭 resp.Body —— 错误路径不再
 // 解码, body 流已被消费, 不能再喂给 json.NewDecoder。
+const (
+	maxModelListBytes = 16 << 20
+	maxModelListPages = 32
+)
+
+func decodeModelList(r io.Reader, dst any) error {
+	buf, err := io.ReadAll(io.LimitReader(r, maxModelListBytes+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(buf)) > maxModelListBytes {
+		return fmt.Errorf("model list exceeds %d bytes", maxModelListBytes)
+	}
+	return json.Unmarshal(buf, dst)
+}
+
 func readUpstreamErrorSnippet(body io.ReadCloser) string {
 	snippet, _ := io.ReadAll(io.LimitReader(body, 512))
 	return strings.TrimSpace(string(snippet))

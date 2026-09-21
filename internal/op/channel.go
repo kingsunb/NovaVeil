@@ -140,8 +140,8 @@ func ChannelImportFromText(ctx context.Context, text string) (success, failed in
 			if keyLine == "" {
 				continue
 			}
-			// 管理端导出的文本对 Key 做固定掩码(如 ****1234)。掩码不是可用
-			// 凭据, 直接把掩码当作上游 Key 导入会创建坏渠道; 这里整块拒绝。
+			// 现行文本导出写的是明文 Key。含 **** 的行只可能来自旧文件或手改,
+			// 不能当作上游凭据导入。
 			if strings.Contains(keyLine, "****") {
 				maskedKey = true
 				break
@@ -220,6 +220,12 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		}
 		selectFields = append(selectFields, "base_url")
 		updates.BaseURL = *req.BaseURL
+	} else if req.Type != nil && *req.Type != model.ChannelProviderCustom && existingChannel.Type == model.ChannelProviderCustom {
+		// custom 创建时不校验地址。只改类型、不带新地址时必须复查库里的 BaseURL,
+		// 否则内网地址会在改成 openai 之后被同步和测试直接打出去。
+		if err := validateChannelBaseURL(existingChannel.BaseURL); err != nil {
+			return nil, fmt.Errorf("切换上游类型后原地址不可用: %w", err)
+		}
 	}
 	if req.Key != nil {
 		if err := rejectRedactedCredential("渠道密钥", *req.Key); err != nil {
@@ -817,8 +823,35 @@ func validateEgressIP(raw net.IP) error {
 				return fmt.Errorf("禁止访问内网/环回/链路本地/保留地址")
 			}
 		}
+		return nil
+	}
+	if v4, ok := embeddedTunnelIPv4(ip); ok {
+		if err := validateEgressIP(v4); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// embeddedTunnelIPv4 取出 6to4、NAT64 和 Teredo 内嵌的 IPv4。
+// 这些地址在 Go 里是全球单播, 但内嵌的可以是 169.254.169.254 或私网。
+func embeddedTunnelIPv4(ip net.IP) (net.IP, bool) {
+	ip = ip.To16()
+	if ip == nil || ip.To4() != nil {
+		return nil, false
+	}
+	switch {
+	case ip[0] == 0x20 && ip[1] == 0x02:
+		return net.IPv4(ip[2], ip[3], ip[4], ip[5]).To4(), true
+	case ip[0] == 0x00 && ip[1] == 0x64 && ip[2] == 0xff && ip[3] == 0x9b &&
+		ip[4] == 0 && ip[5] == 0 && ip[6] == 0 && ip[7] == 0 &&
+		ip[8] == 0 && ip[9] == 0 && ip[10] == 0 && ip[11] == 0:
+		return net.IPv4(ip[12], ip[13], ip[14], ip[15]).To4(), true
+	case ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0 && ip[3] == 0:
+		return net.IPv4(ip[12]^0xff, ip[13]^0xff, ip[14]^0xff, ip[15]^0xff).To4(), true
+	default:
+		return nil, false
+	}
 }
 
 // isTestBinary 检测当前二进制是否为 go test 测试二进制: testing 包注册的 test.v

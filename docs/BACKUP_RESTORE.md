@@ -14,8 +14,10 @@ template values are replaced with `****` and are not restored from this file.
 It does **not** include users/password hashes, the JWT signing secret, global
 `proxy_url` / `proxy_pool`, login-attempt counters, error logs, or conversation
 archives. Import is incremental: existing rows may remain and some rows are upserted
-rather than replacing the entire database. Import rejects a channel key, API key, or
-channel proxy whose value is exactly `****`.
+rather than replacing the entire database. Channel keys and API keys in this file are
+plaintext on purpose, so a restore can call upstreams again. A key whose value is
+exactly `****` is rejected. A proxy, custom header, or header template whose value is
+exactly `****` is omitted and does not overwrite a live secret.
 
 Channel-page text export is a separate file. `POST /api/v1/channel/export` writes every channel in the cache, including builtin channels and channels with no key. Each block is `# name`, the plaintext base URL, then one plaintext key per line. A channel with no key is still present, with only the name and URL. Models, type, group, and enabled state are not in that file. Importing it creates custom channels; builtin identity is not preserved. See [REQ-003](FEATURES.md).
 

@@ -33,6 +33,7 @@ var loginLimiter = newLoginRateLimiter(loginFailWindow, loginMaxFailures)
 // 过期行由各副本惰性清理(距上次全表清理超过 window/4 时执行)。
 type loginRateLimiter struct {
 	mu        sync.Mutex // 仅保护 lastSweep; 数据操作本身由 gorm 连接池保证并发安全
+	ipMu      sync.Map   // 按 IP 串行化 check 与 recordFailure, 挡住同一进程内的并行爆破
 	conn      *gorm.DB   // 独立连接仅供测试注入, 为空时回退全局连接
 	window    time.Duration
 	maxFails  int
@@ -54,6 +55,15 @@ func (l *loginRateLimiter) dbConn() *gorm.DB {
 		return l.conn
 	}
 	return db.GetDB()
+}
+
+// lockIP 让同一 IP 的检查、失败记账和成功清零不能并行。
+// 多副本之间仍靠数据库行数, 这里只封住单进程里 check 与 insert 之间的空窗。
+func (l *loginRateLimiter) lockIP(ip string) func() {
+	value, _ := l.ipMu.LoadOrStore(ip, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // check 返回该 IP 是否允许再次尝试登录; 不允许时同时返回建议等待时长(Retry-After)。

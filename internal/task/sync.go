@@ -50,6 +50,10 @@ func SyncModelsTask() error {
 		if !channel.AutoSync {
 			continue
 		}
+		if err := op.ValidateChannelEgressBaseURL(channel.BaseURL); err != nil {
+			log.Warnf("skip syncing models for channel %s: %v", channel.Name, err)
+			continue
+		}
 		// 单渠道级超时: 全部渠道共享总预算时, 一个挂死渠道会耗尽 30 分钟预算,
 		// 其余渠道全部被饿死; 单渠道 3 分钟足够完成分页模型列表。
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, 3*time.Minute)

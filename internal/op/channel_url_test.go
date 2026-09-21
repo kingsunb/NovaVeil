@@ -45,6 +45,9 @@ func TestValidateChannelEgressBaseURL(t *testing.T) {
 		"http://198.51.100.1:8080",
 		"http://203.0.113.1:8080",
 		"http://240.0.0.1:8080",
+		"http://[2002:a9fe:a9fe::]/",
+		"http://[64:ff9b::a9fe:a9fe]/",
+		"http://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/",
 	} {
 		if err := ValidateChannelEgressBaseURL(raw); err == nil {
 			t.Fatalf("private/loopback/link-local address should be rejected: %s", raw)

@@ -39,7 +39,9 @@ func GetHTTPClientSystemProxy(useProxy bool) (*http.Client, error) {
 		}
 		// 每次出站都标注系统代理的使用与地址(密码打码), 便于在日志中追踪出口。
 		// 挂 Debug 级别: 该行在每请求路径上, Info 级别下高频刷屏。
-		log.Debugf("outbound via system proxy: %s", MaskProxySecret(currentProxyURL))
+		if log.GetLevel() <= log.DebugLevel {
+			log.Debugf("outbound via system proxy: %s", MaskProxySecret(currentProxyURL))
+		}
 
 		clientLock.RLock()
 		if systemProxyClient != nil && systemProxyURL == currentProxyURL {

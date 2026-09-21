@@ -112,6 +112,68 @@ func revealKeysForExport(d *model.DBDump) error {
 	return nil
 }
 
+// dropRedactedNonKeyCredentials 丢掉导出打码后的代理和自定义头。
+// 这些字段不是明文 Key, 导入时不恢复, 也不把 "****" 密封成真实头值。
+func dropRedactedNonKeyCredentials(ch *model.Channel) {
+	if ch == nil {
+		return
+	}
+	if ch.ChannelProxy != nil && *ch.ChannelProxy == redactedSecret {
+		ch.ChannelProxy = nil
+	}
+	if len(ch.CustomHeader) == 0 {
+		return
+	}
+	kept := make([]model.CustomHeader, 0, len(ch.CustomHeader))
+	for _, header := range ch.CustomHeader {
+		if header.HeaderValue == redactedSecret {
+			continue
+		}
+		kept = append(kept, header)
+	}
+	ch.CustomHeader = kept
+}
+
+// omitUnrestorableSettings 去掉整份都是打码头值的请求头模板。
+// 现行导出会把模板头值写成 "****"。按 key upsert 会覆盖线上仍在使用的模板。
+func omitUnrestorableSettings(rows []model.Setting) []model.Setting {
+	if len(rows) == 0 {
+		return rows
+	}
+	kept := make([]model.Setting, 0, len(rows))
+	for _, row := range rows {
+		if row.Key == model.SettingKeyHeaderTemplates && headerTemplateFullyRedacted(row.Value) {
+			continue
+		}
+		kept = append(kept, row)
+	}
+	return kept
+}
+
+func headerTemplateFullyRedacted(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	var templates []model.HeaderTemplate
+	if err := json.Unmarshal([]byte(raw), &templates); err != nil {
+		return false
+	}
+	sawValue := false
+	for _, template := range templates {
+		for _, header := range template.Headers {
+			if header.HeaderValue == "" {
+				continue
+			}
+			sawValue = true
+			if header.HeaderValue != redactedSecret {
+				return false
+			}
+		}
+	}
+	return sawValue
+}
+
 // redactNonKeyCredentialsForExport 备份里仍打码的是代理地址和自定义头值，不是 Key。
 // 自定义头保留 header_key，只把非空 header_value 打成精确哨兵。
 func redactNonKeyCredentialsForExport(d *model.DBDump) {
@@ -303,7 +365,7 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 		} else {
 			res.RowsAffected["api_keys"] = n
 		}
-		sealedSettings, sealErr := sealSettingsForDB(filterSecretSettings(dump.Settings))
+		sealedSettings, sealErr := sealSettingsForDB(omitUnrestorableSettings(filterSecretSettings(dump.Settings)))
 		if sealErr != nil {
 			return fmt.Errorf("导入设置失败: %w", sealErr)
 		}
@@ -501,25 +563,21 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 	}
 
 	// --- 渠道密钥校验 ---
-	for _, ch := range dump.Channels {
+	for i := range dump.Channels {
+		ch := &dump.Channels[i]
 		if _, err := normalizeChannelKeys(ch.Keys); err != nil {
 			preview.SettingsIssues = append(preview.SettingsIssues,
 				fmt.Sprintf("渠道 %d 密钥校验失败: %v", ch.ID, err))
 		}
-		// 导出把 Key / 多 Key / channel_proxy 打成精确 "****"。该哨兵不是可用凭据,
-		// 必须在加密落库之前拒绝, 避免把掩码密封成真实密钥或代理。
+		// 现行导出的渠道 Key 与 API Key 是明文, 可以还原调用。
+		// 精确 "****" 的 Key 只来自旧文件或手改, 不能密封成凭据。
+		// 代理和自定义头的 "****" 是现行导出的打码结果, 不恢复, 也不因此拒绝整份备份。
+		dropRedactedNonKeyCredentials(ch)
 		if ch.Key == redactedSecret {
 			preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
 				Table: "channels",
 				ID:    ch.ID,
 				Desc:  "渠道 Key 已脱敏(****)，无法作为凭据导入；请替换为真实密钥后再导入",
-			})
-		}
-		if ch.ChannelProxy != nil && *ch.ChannelProxy == redactedSecret {
-			preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
-				Table: "channels",
-				ID:    ch.ID,
-				Desc:  "渠道代理已脱敏(****)，无法作为凭据导入；请替换为真实代理地址后再导入",
 			})
 		}
 		for _, key := range ch.Keys {
@@ -636,9 +694,8 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 	preview.Cycles = cycles
 
 	// --- API Key 领域校验与唯一性 ---
-	// 导出端对所有 API Key 做了 "****" 掩码脱敏。掩码不是可用的上游凭据,
-	// 直接导入会得到一个明文恰为 "****" 的启用 Key(已通过最小长度? 仅为 4 字符),
-	// 必须拒绝; 其余 Key 沿用创建/更新接口的 validateAPIKeyCustom 最小长度规则。
+	// 现行导出的 API Key 是明文。精确 "****" 只来自旧文件或手改, 不能当可用密钥导入。
+	// 其余 Key 沿用创建/更新接口的 validateAPIKeyCustom 最小长度规则。
 	dumpAPIKeyValues := make(map[string]int, len(dump.APIKeys))
 	for _, ak := range dump.APIKeys {
 		if ak.APIKey == "****" {

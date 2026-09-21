@@ -100,7 +100,7 @@ http://localhost:5174
 
 ### 🔐 默认账户
 
-首次启动会自动创建管理员账户 `admin`，随机密码写入 `data/initial-admin-password`，权限为仅属主可读写（`0600`），不会写入常规日志。首次登录后必须修改密码才能进行其他操作；改密成功后该引导文件会自动删除。
+首次启动会自动创建管理员账户 `admin`，随机密码写入 `data/initial-admin-password`，权限为仅属主可读写（`0600`），不会写入常规日志。请在登录前读这个文件：第一次登录成功就会删掉它。登录后仍必须先改密码，才能做其他操作。
 
 > ⚠️ **安全提示**：请仅从受保护的数据卷读取引导密码，并立即修改。
 
@@ -251,7 +251,7 @@ import os
 
 client = OpenAI(   
     base_url="http://127.0.0.1:8080/v1",   
-    api_key="sk-NovaVeil-P48ROljwJmWBYVARjwQM8Nkiezlg7WOrXXOWDYY8TI5p9Mzg", 
+    api_key="sk-NovaVeil-...", 
 )
 completion = client.chat.completions.create(
     model="gpt-4o",  # 填写正确的分组名称

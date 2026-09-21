@@ -15,14 +15,20 @@ import (
 // 日志降为 Debug 级别, 避免 Info 级别下高频刷屏与 url.Parse 开销。
 func ChannelHttpClient(channel *model.Channel) (*http.Client, error) {
 	if !channel.Proxy {
-		log.Debugf("channel %d(%s) outbound direct: proxy disabled", channel.ID, channel.Name)
+		if log.GetLevel() <= log.DebugLevel {
+			log.Debugf("channel %d(%s) outbound direct: proxy disabled", channel.ID, channel.Name)
+		}
 		return client.GetHTTPClientSystemProxy(false)
 	}
 	if channel.ChannelProxy == nil || strings.TrimSpace(*channel.ChannelProxy) == "" {
-		log.Debugf("channel %d(%s) outbound via system proxy", channel.ID, channel.Name)
+		if log.GetLevel() <= log.DebugLevel {
+			log.Debugf("channel %d(%s) outbound via system proxy", channel.ID, channel.Name)
+		}
 		return client.GetHTTPClientSystemProxy(true)
 	}
 	addr := strings.TrimSpace(*channel.ChannelProxy)
-	log.Debugf("channel %d(%s) outbound via channel proxy: %s", channel.ID, channel.Name, client.MaskProxySecret(addr))
+	if log.GetLevel() <= log.DebugLevel {
+		log.Debugf("channel %d(%s) outbound via channel proxy: %s", channel.ID, channel.Name, client.MaskProxySecret(addr))
+	}
 	return client.GetHTTPClientCustomProxy(addr)
 }

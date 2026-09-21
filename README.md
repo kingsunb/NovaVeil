@@ -102,7 +102,7 @@ http://localhost:5174
 
 ### 🔐 Default Credentials
 
-On first launch an `admin` account is created automatically and its random password is written to `data/initial-admin-password` with owner-only (`0600`) permissions. It is never printed to normal logs. You must change it after logging in before any other operations are allowed; the bootstrap file is removed after a successful password change.
+On first launch an `admin` account is created automatically and its random password is written to `data/initial-admin-password` with owner-only (`0600`) permissions. It is never printed to normal logs. Read that file before logging in: the first successful login deletes it. You must still change the password before any other operation is allowed.
 
 > ⚠️ **Security Notice**: Read the bootstrap file only from the protected data volume, then change the password immediately.
 
@@ -250,7 +250,7 @@ import os
 
 client = OpenAI(   
     base_url="http://127.0.0.1:8080/v1",   
-    api_key="sk-NovaVeil-P48ROljwJmWBYVARjwQM8Nkiezlg7WOrXXOWDYY8TI5p9Mzg", 
+    api_key="sk-NovaVeil-...", 
 )
 completion = client.chat.completions.create(
     model="gpt-4o",  # group name
