@@ -28,6 +28,9 @@ type UserStatus struct {
 type UserLogin struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// Remember 勾选「信任此设备」时为 true, 认证 cookie 持久 24 小时; 为 false 时签发
+	// 会话 cookie(浏览器关闭即失效, 单次会话)。只能二选一, 不再接受客户端自报任意时长。
+	Remember bool `json:"remember"`
 }
 
 // UserChangePassword is the request body for changing the current password.

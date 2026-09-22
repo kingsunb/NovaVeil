@@ -16,6 +16,8 @@ export interface UserStatus {
 export interface UserLoginRequest {
   username: string;
   password: string;
+  /** 勾选「信任此设备」为 true（cookie 持久 24h）；否则为单次会话 cookie。 */
+  remember?: boolean;
 }
 
 // ============================================================

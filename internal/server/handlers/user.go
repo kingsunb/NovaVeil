@@ -68,7 +68,7 @@ func login(c *gin.Context) {
 		log.Warnf("login succeeded but failed to remove initial password file: %v", err)
 	}
 	loginLimiter.reset(c.Request.Context(), ip)
-	token, maxAge, err := auth.GenerateJWTToken()
+	token, maxAge, err := auth.GenerateJWTToken(user.Remember)
 	if err != nil {
 		resp.Error(c, http.StatusInternalServerError, resp.ErrInternalServer)
 		return

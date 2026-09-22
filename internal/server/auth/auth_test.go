@@ -22,7 +22,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestGenerateAndVerifyTokenUsesKVSecret(t *testing.T) {
-	token, maxAge, err := GenerateJWTToken()
+	token, maxAge, err := GenerateJWTToken(true)
 	if err != nil {
 		t.Fatalf("GenerateJWTToken error: %v", err)
 	}
@@ -61,7 +61,7 @@ func mangleToken(token string) string {
 }
 
 func TestSecretRotationInvalidatesTokens(t *testing.T) {
-	oldToken, _, err := GenerateJWTToken()
+	oldToken, _, err := GenerateJWTToken(true)
 	if err != nil {
 		t.Fatalf("GenerateJWTToken error: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestSecretRotationInvalidatesTokens(t *testing.T) {
 	if VerifyJWTToken(oldToken) {
 		t.Fatal("token signed with previous secret must be invalid after rotation")
 	}
-	newToken, _, err := GenerateJWTToken()
+	newToken, _, err := GenerateJWTToken(true)
 	if err != nil {
 		t.Fatalf("GenerateJWTToken after rotate: %v", err)
 	}
@@ -83,15 +83,24 @@ func TestSecretRotationInvalidatesTokens(t *testing.T) {
 	}
 }
 
-// TestGenerateJWTTokenFixedDuration 钉死登录会话固定 24 小时:
-// 客户端可配置 expire 已移除, maxAge 恒为 sessionMaxAge。
-func TestGenerateJWTTokenFixedDuration(t *testing.T) {
-	_, maxAge, err := GenerateJWTToken()
+// TestGenerateJWTTokenRememberControlsCookieMaxAge 钉死「记住我」二选一语义:
+// remember=true → 持久 24h(记住设备); remember=false → 0(会话 cookie, 单次会话)。
+// JWT exp 两端都恒为 24h 的服务端上限, 客户端不能自报任意时长。
+func TestGenerateJWTTokenRememberControlsCookieMaxAge(t *testing.T) {
+	_, maxAge, err := GenerateJWTToken(true)
 	if err != nil {
-		t.Fatalf("GenerateJWTToken: %v", err)
+		t.Fatalf("GenerateJWTToken(true): %v", err)
 	}
 	if maxAge != sessionMaxAge {
-		t.Fatalf("maxAge = %d, want %d (fixed 24h)", maxAge, sessionMaxAge)
+		t.Fatalf("remember maxAge = %d, want %d (24h)", maxAge, sessionMaxAge)
+	}
+
+	_, maxAge, err = GenerateJWTToken(false)
+	if err != nil {
+		t.Fatalf("GenerateJWTToken(false): %v", err)
+	}
+	if maxAge != 0 {
+		t.Fatalf("session maxAge = %d, want 0 (session cookie)", maxAge)
 	}
 }
 

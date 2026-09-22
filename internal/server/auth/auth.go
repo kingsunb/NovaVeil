@@ -11,14 +11,15 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/op"
 )
 
-// sessionMaxAge 是登录会话的固定有效期(秒)。
-// 历史上登录 expire 由客户端提交并钳到 24h(审计 L-8 修复); 现已移除客户端可配置,
-// 统一固定 24 小时: JWT exp 与 cookie MaxAge 均按此签发。
+// sessionMaxAge 是「记住此设备」登录会话的 cookie 有效期(秒): JWT exp 与持久 cookie MaxAge 均按此签发。
 const sessionMaxAge = 24 * 3600
 
-// GenerateJWTToken 签发一个固定 24 小时有效的 JWT, 返回 (token, maxAge秒)。
-// maxAge 供 SetAuthCookie 设置 cookie MaxAge; 有效期不再由调用方指定。
-func GenerateJWTToken() (string, int, error) {
+// GenerateJWTToken 签发一个服务端有效期固定 24 小时的 JWT, 返回 (token, cookieMaxAge秒)。
+// remember=true 时 cookieMaxAge=sessionMaxAge, cookie 持久 24 小时(记住设备);
+// remember=false 时 cookieMaxAge=0, 由 SetAuthCookie 落成不带 Max-Age 的会话 cookie,
+// 浏览器关闭即失效(单次会话)。JWT exp 始终钳在 24h 上限而不由客户端指定——客户端只能
+// 二选一, 不能自签任意时长的长期凭据(L-8 安全边界不变)。
+func GenerateJWTToken(remember bool) (string, int, error) {
 	secret, err := op.AuthJWTSecretGet()
 	if err != nil {
 		return "", 0, err
@@ -35,7 +36,11 @@ func GenerateJWTToken() (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	return token, sessionMaxAge, nil
+	maxAge := 0
+	if remember {
+		maxAge = sessionMaxAge
+	}
+	return token, maxAge, nil
 }
 
 func VerifyJWTToken(token string) bool {

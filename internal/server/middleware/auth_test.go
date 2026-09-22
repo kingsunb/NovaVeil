@@ -171,6 +171,21 @@ func TestSetAuthCookieAttributes(t *testing.T) {
 	}
 }
 
+func TestSetAuthCookieSessionScope(t *testing.T) {
+	conf.AppConfig.Security.CookieSecure = false
+	defer func() { conf.AppConfig.Security.CookieSecure = false }()
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/user/login", nil)
+	// remember=false 时 maxAge=0: net/http 省略 Max-Age, 渲染为会话 cookie, 关闭浏览器即失效。
+	SetAuthCookie(c, "token-value", 0)
+	attrs := cookieAttrs(t, w)
+	if _, hasMaxAge := attrs["Max-Age"]; hasMaxAge {
+		t.Fatalf("session cookie must omit Max-Age, got %q", attrs["Max-Age"])
+	}
+}
+
 func TestClearAuthCookieExpiresSession(t *testing.T) {
 	conf.AppConfig.Security.CookieSecure = false
 	defer func() { conf.AppConfig.Security.CookieSecure = false }()
@@ -214,7 +229,7 @@ func TestAuthRejectsMissingAndInvalidToken(t *testing.T) {
 
 func TestMustChangePasswordWhitelist(t *testing.T) {
 	seedUser(t, "password-2", true)
-	token, _, err := auth.GenerateJWTToken()
+	token, _, err := auth.GenerateJWTToken(true)
 	if err != nil {
 		t.Fatalf("GenerateJWTToken: %v", err)
 	}
@@ -245,7 +260,7 @@ const respMessageMustChangePassword = "Password change required"
 
 func TestAfterPasswordChangeAllPathsAllowedOldTokensInvalid(t *testing.T) {
 	seedUser(t, "password-3", true)
-	oldToken, _, err := auth.GenerateJWTToken()
+	oldToken, _, err := auth.GenerateJWTToken(true)
 	if err != nil {
 		t.Fatalf("GenerateJWTToken: %v", err)
 	}
@@ -253,7 +268,7 @@ func TestAfterPasswordChangeAllPathsAllowedOldTokensInvalid(t *testing.T) {
 		t.Fatalf("UserChangePassword: %v", err)
 	}
 
-	newToken, _, err := auth.GenerateJWTToken()
+	newToken, _, err := auth.GenerateJWTToken(true)
 	if err != nil {
 		t.Fatalf("GenerateJWTToken: %v", err)
 	}

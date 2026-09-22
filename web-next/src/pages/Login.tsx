@@ -15,6 +15,7 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const usernameRef = useRef<HTMLInputElement | null>(null);
@@ -30,7 +31,7 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      await login(username, password);
+      await login(username, password, remember);
       toast.success(`欢迎回来，${username}`);
       navigate("/dashboard", { replace: true });
     } catch (err) {
@@ -91,6 +92,21 @@ export default function LoginPage() {
             />
           </label>
 
+          <label
+            htmlFor="remember-device"
+            className="flex cursor-pointer items-center gap-2 text-[13px] text-ink-muted"
+          >
+            <input
+              id="remember-device"
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
+              aria-label="信任此设备（24 小时内免登录）"
+              className="h-4 w-4 rounded-md border-border/60 accent-[#007AFF]"
+            />
+            信任此设备（24 小时内免登录）
+          </label>
+
           {error && (
             <p
               role="alert"
@@ -110,10 +126,6 @@ export default function LoginPage() {
             {loading ? "登录中…" : "登录"}
           </Button>
         </div>
-
-        <p className="mt-6 text-center text-[11px] leading-relaxed text-ink-subtle">
-          首次登录请使用控制台初始化提示的管理员凭据
-        </p>
       </form>
     </div>
   );

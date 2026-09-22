@@ -48,6 +48,37 @@ describe("api.getNowVersion", () => {
   });
 });
 
+describe("api.login", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(ok({ username: "admin", must_change_password: false })),
+      ),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("POST /api/v1/user/login 透传 remember 到请求体", async () => {
+    await api.login({ username: "u", password: "p", remember: false });
+    const call = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe("/api/v1/user/login");
+    expect(JSON.parse(call[1].body)).toEqual({
+      username: "u",
+      password: "p",
+      remember: false,
+    });
+  });
+
+  it("勾选记住我时 remember=true 串行化", async () => {
+    await api.login({ username: "u", password: "p", remember: true });
+    const body = JSON.parse(
+      (fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body,
+    );
+    expect(body.remember).toBe(true);
+  });
+});
+
 describe("api.createChannel", () => {
   beforeEach(() => {
     vi.stubGlobal(

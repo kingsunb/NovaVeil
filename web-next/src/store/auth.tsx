@@ -23,7 +23,7 @@ interface AuthState {
 }
 
 interface AuthContextValue extends AuthState {
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string, remember?: boolean) => Promise<void>;
   logout: () => Promise<void>;
   refreshStatus: () => Promise<void>;
 }
@@ -104,9 +104,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback<AuthContextValue["login"]>(
-    async (username, password) => {
+    async (username, password, remember = true) => {
       const gen = ++generationRef.current;
-      const s = await api.login({ username, password });
+      const s = await api.login({ username, password, remember });
       if (gen !== generationRef.current) return;
       // 新会话建立后清除上一个用户残留的对话 localStorage（兜底：token 过期、
       // 浏览器关闭等未走 logout 的场景），避免跨用户泄漏对话历史与 mask 会话 ID。

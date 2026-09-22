@@ -33,6 +33,7 @@ import type {
   TokenTrendRange,
   UsageDetail,
   UsageHeatmapPoint,
+  UserLoginRequest,
   UserStatus,
 } from "./types";
 import type {
@@ -731,7 +732,7 @@ export function parseHeaderTemplates(
 
 export const api = {
   // ----- 用户 -----
-  login: (body: { username: string; password: string }) =>
+  login: (body: UserLoginRequest) =>
     http<UserStatus>("/user/login", {
       method: "POST",
       body: JSON.stringify(body),
