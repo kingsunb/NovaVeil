@@ -195,6 +195,7 @@ go run main.go start
 | 用 PostgreSQL | `"database": {"type":"postgres","path":"postgresql://user:pwd@host:5432/novaveil?sslmode=disable"}` |
 | 反代后启用安全 Cookie | `NOVAVEIL_SECURITY_COOKIE_SECURE=true`（直接 HTTP 保持 false） |
 | 反代后按真实客户端 IP 限速 | `NOVAVEIL_SERVER_TRUSTED_PROXIES=127.0.0.1/32`（逗号分隔，非空时覆盖配置文件） |
+| 渠道上游指向内网服务（如 docker 网络内自建网关） | 无需额外配置：BaseURL 不限地址范围，直接写 `http://grok2api:8000` 这类内网地址即可 |
 
 > MySQL / PostgreSQL 需先手动建库，程序自动建表。SQLite 无需任何前置操作。
 

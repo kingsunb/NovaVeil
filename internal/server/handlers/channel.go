@@ -206,7 +206,7 @@ func fetchModel(c *gin.Context) {
 			resp.Error(c, http.StatusNotFound, err.Error())
 			return
 		}
-		// 回退已存渠道同样执行完整出口校验, 防止较早版本写入的私网地址经 fetch-model 回放(审计 SEC-01)。
+		// 回退已存渠道同样执行 BaseURL 格式校验(与 ChannelCreate 同规则)。
 		if err := op.ValidateChannelEgressBaseURL(stored.BaseURL); err != nil {
 			resp.Error(c, http.StatusBadRequest, err.Error())
 			return
@@ -220,7 +220,7 @@ func fetchModel(c *gin.Context) {
 		return
 	}
 	// 未保存/带 BaseURL 的表单: 提交值尚未经过 ChannelCreate 校验, 必须在发起探测前
-	// 用完整出口校验拦截私网/环回/metadata 地址(审计 SEC-01)。
+	// 执行与 ChannelCreate 相同的 BaseURL 格式校验。
 	if err := op.ValidateChannelEgressBaseURL(request.BaseURL); err != nil {
 		resp.Error(c, http.StatusBadRequest, err.Error())
 		return

@@ -30,14 +30,14 @@
 
 ### 3.1 凭据
 
-库内渠道 Key、多 Key、自定义头、头模板、JWT 密钥、全局代理和渠道代理都是 `nv1:`。列表只出掩码。数据库备份里的渠道 Key 与 API Key 是明文；代理和自定义头值仍是 `****`。`channel_proxy` 允许指向内网代理，BaseURL 仍拒绝私网。导入拒绝精确 `****`。
+库内渠道 Key、多 Key、自定义头、头模板、JWT 密钥、全局代理和渠道代理都是 `nv1:`。列表只出掩码。数据库备份里的渠道 Key 与 API Key 是明文；代理和自定义头值仍是 `****`。`channel_proxy` 与 `BaseURL` 均不做目标地址范围限制，内网代理/内网上游都可直连。导入拒绝精确 `****`。
 
 前端眼睛按钮不把密钥放进 `useQuery`。渠道保存和创建 API Key 的明文也不进 mutation state。渠道代理列表只显示 `****`，编辑器点眼睛才请求明文。
 
 - [x] 上述列已加密。数据库备份的渠道 Key 与 API Key 是明文。渠道文本导出包含全部渠道（含内置渠道和没有 Key 的渠道），写出明文渠道名、明文 BaseURL 和明文 Key。列表接口仍只出掩码。
 - [x] 保存和创建成功后清掉 mutation 里的明文，创建结果只留在组件状态。代理明文同样不进 React Query。
 - [x] 数据库导入拒绝渠道 Key 和代理上的精确 `****`。文本导入已经拒绝。
-- [x] `channel_proxy` 不套用 BaseURL 的出口拒绝。内网代理可以写，说明在 `docs/SECURE_DEPLOYMENT.md`。
+- [x] `channel_proxy` 与渠道 `BaseURL` 均不做出口地址范围限制。内网代理/内网上游都可写，说明在 `docs/SECURE_DEPLOYMENT.md`。
 
 ### 3.2 请求体并发内存
 

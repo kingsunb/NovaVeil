@@ -135,7 +135,9 @@ images disable in-container self-update and must be upgraded by replacing the pi
 
 ## Channel proxy and upstream BaseURL
 
-`channel_proxy` is the channel's outbound proxy, not the upstream address. It may point at a loopback or private-network proxy such as `127.0.0.1` or an RFC 1918 host; those targets are valid. The channel `BaseURL` still rejects private, loopback, and reserved addresses, so the gateway is not an SSRF client toward the upstream itself.
+`channel_proxy` is the channel's outbound proxy, not the upstream address. It may point at a loopback or private-network proxy such as `127.0.0.1` or an RFC 1918 host; those targets are valid. The channel `BaseURL` is not address-range restricted either: it accepts public, private, loopback, link-local, and reserved targets, so an internal gateway such as `http://grok2api:8000` on the Compose network can be used directly as an upstream. Only the basic format is enforced — http/https scheme, a host present, and no userinfo.
+
+This is a deliberate trade-off. A direct channel is therefore an SSRF client toward its configured upstream: whoever can create or edit a channel can make the gateway reach any internal host and the cloud metadata endpoint. Treat channel write access as privileged, and isolate the gateway's network when it points at internal services.
 
 ## Secrets and logs
 

@@ -4,16 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"flag"
 	"fmt"
 	"maps"
-	"net"
 	"net/url"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/kingsunb/NovaVeil/internal/db"
@@ -695,36 +692,19 @@ func normalizeChannelTags(tags []string) []string {
 	return normalized
 }
 
-// validateChannelBaseURL 校验渠道上游地址。生产环境执行完整出口校验(语法 + DNS
-// 解析后的私网/环回/metadata 拒绝); Go 测试二进制放宽为仅语法校验, 方便 httptest
-// 等回环上游跑集成测试。fetch-model 等接受未保存渠道表单的入口必须调用
-// validateChannelEgressBaseURL 强制完整校验, 不能退化成仅语法校验(审计 SEC-01)。
+// validateChannelBaseURL 校验渠道上游地址。BaseURL 不再限制可访问的目标地址范围
+// (公网/私网/环回/链路本地/保留段均可), 仅强制基本格式: 非空、http/https scheme、
+// host 存在、不含 userinfo。内网自建网关(如 http://grok2api:8000)可直接作为上游。
 func validateChannelBaseURL(raw string) error {
-	if isTestBinary() {
-		return validateChannelBaseURLSyntax(raw)
-	}
-	return validateChannelEgressBaseURL(raw)
+	return validateChannelBaseURLSyntax(raw)
 }
 
-// ValidateChannelEgressBaseURL 对未保存渠道表单/已存渠道回退路径执行完整出口校验。
-// 导出给 handlers 使用, 避免私网地址经 fetch-model 绕过 ChannelCreate 的校验。
+// ValidateChannelEgressBaseURL 校验渠道上游 BaseURL 字符串。命名保留自历史版本:
+// 早期在此做私网/环回/metadata 出口拦截(审计 SEC-01), 现已移除地址范围限制, 只做与
+// validateChannelBaseURL 相同的 scheme/host/userinfo 格式校验。导出给 handlers/task/
+// backup 复用, 保持既有调用方不变。
 func ValidateChannelEgressBaseURL(raw string) error {
-	return validateChannelEgressBaseURL(raw)
-}
-
-// validateChannelEgressBaseURL 对渠道上游 BaseURL 做完整出口校验:
-// 必须是 http/https 且不含 userinfo, 并且域名解析后的所有 IP 都不是内网/环回/
-// 链路本地/metadata 等禁止直连地址。
-// channel_proxy 不走这套校验: 它是出站代理地址, 指向 127.0.0.1 或私网代理是合法部署。
-func validateChannelEgressBaseURL(raw string) error {
-	if err := validateChannelBaseURLSyntax(raw); err != nil {
-		return err
-	}
-	parsed, _ := url.Parse(strings.TrimSpace(raw))
-	if err := validateEgressHost(parsed.Hostname()); err != nil {
-		return fmt.Errorf("渠道地址 %s 不允许访问: %w", strings.TrimSpace(raw), err)
-	}
-	return nil
+	return validateChannelBaseURLSyntax(raw)
 }
 
 func validateChannelBaseURLSyntax(raw string) error {
@@ -740,124 +720,6 @@ func validateChannelBaseURLSyntax(raw string) error {
 		return fmt.Errorf("渠道地址不能包含 userinfo")
 	}
 	return nil
-}
-
-// validateEgressHost 校验出站目标主机名: 先按字面 IP 判定, 否则做 DNS 解析并逐一
-// 拒绝落入禁止范围的地址。需要访问真实内网域名(如自建网关)的部署, 可由管理员改用
-// 该内网服务的公网地址或显式代理; 渠道出口不允许默认连通任意内网主机。
-func validateEgressHost(host string) error {
-	host = strings.TrimSpace(host)
-	if host == "" {
-		return fmt.Errorf("主机不能为空")
-	}
-	// host 形如 [::1]:8080 时剥掉括号; 普通 host 不会带括号。
-	literal := strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
-	if ip := net.ParseIP(literal); ip != nil {
-		// 过时的 IPv4-compatible/translated IPv6 字面量(::127.0.0.1、
-		// ::ffff:0:127.0.0.1)可编码 IPv4 环回/内网地址, 而 Go 对这类 16 字节
-		// 表示 IsLoopback/IsPrivate 均返回 false。含点分十进制的 IPv6 字面量
-		// 一律拒绝, 不试图猜测其意图; 正规 IPv6 公网地址不会写成这种形式。
-		if strings.Contains(literal, ":") && strings.Contains(literal, ".") && ip.To4() == nil {
-			return fmt.Errorf("渠道地址不允许使用 IPv4 兼容的 IPv6 字面量: %s", literal)
-		}
-		return validateEgressIP(ip)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return fmt.Errorf("域名解析失败: %w", err)
-	}
-	if len(addrs) == 0 {
-		return fmt.Errorf("域名未解析到任何 IP")
-	}
-	for _, addr := range addrs {
-		if err := validateEgressIP(addr.IP); err != nil {
-			return fmt.Errorf("域名 %s 解析到禁止地址 %s: %w", host, addr.IP, err)
-		}
-	}
-	return nil
-}
-
-// reservedIPv4Blocks 是 Go 标准库 IsPrivate/IsLoopback 等未覆盖、但不应作为
-// 渠道上游直连目标的 IPv4 保留段(CGN、基准测试、文档示例、未来保留段)。
-// 这些地址要么不可公网路由, 要么仅用于特殊场景, 直连它们属于 SSRF 面。
-var reservedIPv4Blocks = func() []*net.IPNet {
-	cidrs := []string{
-		"0.0.0.0/8",       // "本网络" 保留段
-		"100.64.0.0/10",   // CGNAT 共享地址空间
-		"192.0.0.0/24",    // IETF 协议分配保留段
-		"192.0.2.0/24",    // TEST-NET-1
-		"198.18.0.0/15",   // 网络基准测试
-		"198.51.100.0/24", // TEST-NET-2
-		"203.0.113.0/24",  // TEST-NET-3
-		"240.0.0.0/4",     // 未来保留段(含广播)
-	}
-	blocks := make([]*net.IPNet, 0, len(cidrs))
-	for _, cidr := range cidrs {
-		_, block, err := net.ParseCIDR(cidr)
-		if err != nil {
-			continue
-		}
-		blocks = append(blocks, block)
-	}
-	return blocks
-}()
-
-// validateEgressIP 拒绝私网、环回、链路本地、未指定地址、组播与广播地址, 以及
-// IPv4 保留段(CGN/测试网段/未来保留段)。IPv4-mapped IPv6 先归一化到 4 字节再判。
-func validateEgressIP(raw net.IP) error {
-	ip := raw
-	if ip4 := raw.To4(); ip4 != nil {
-		ip = ip4
-	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() ||
-		!ip.IsGlobalUnicast() {
-		return fmt.Errorf("禁止访问内网/环回/链路本地/保留地址")
-	}
-	if ip.To4() != nil {
-		for _, block := range reservedIPv4Blocks {
-			if block.Contains(ip) {
-				return fmt.Errorf("禁止访问内网/环回/链路本地/保留地址")
-			}
-		}
-		return nil
-	}
-	if v4, ok := embeddedTunnelIPv4(ip); ok {
-		if err := validateEgressIP(v4); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// embeddedTunnelIPv4 取出 6to4、NAT64 和 Teredo 内嵌的 IPv4。
-// 这些地址在 Go 里是全球单播, 但内嵌的可以是 169.254.169.254 或私网。
-func embeddedTunnelIPv4(ip net.IP) (net.IP, bool) {
-	ip = ip.To16()
-	if ip == nil || ip.To4() != nil {
-		return nil, false
-	}
-	switch {
-	case ip[0] == 0x20 && ip[1] == 0x02:
-		return net.IPv4(ip[2], ip[3], ip[4], ip[5]).To4(), true
-	case ip[0] == 0x00 && ip[1] == 0x64 && ip[2] == 0xff && ip[3] == 0x9b &&
-		ip[4] == 0 && ip[5] == 0 && ip[6] == 0 && ip[7] == 0 &&
-		ip[8] == 0 && ip[9] == 0 && ip[10] == 0 && ip[11] == 0:
-		return net.IPv4(ip[12], ip[13], ip[14], ip[15]).To4(), true
-	case ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0 && ip[3] == 0:
-		return net.IPv4(ip[12]^0xff, ip[13]^0xff, ip[14]^0xff, ip[15]^0xff).To4(), true
-	default:
-		return nil, false
-	}
-}
-
-// isTestBinary 检测当前二进制是否为 go test 测试二进制: testing 包注册的 test.v
-// flag 仅存在于测试二进制。仅用于放宽渠道出口校验, 生产二进制不受影响。
-func isTestBinary() bool {
-	return flag.Lookup("test.v") != nil
 }
 
 // cacheableChannel 返回可写入缓存或对外发布的渠道副本:

@@ -313,11 +313,12 @@ func TestDBExportMasksHeadersAndOmitsProxySettings(t *testing.T) {
 }
 
 func TestChannelCreateAllowsPrivateChannelProxy(t *testing.T) {
-	if err := ValidateChannelEgressBaseURL("http://127.0.0.1:7890"); err == nil {
-		t.Fatal("BaseURL must still reject loopback")
+	// 上游 BaseURL 已不做地址范围限制: 环回/私网 BaseURL 同样可被接受。
+	if err := ValidateChannelEgressBaseURL("http://127.0.0.1:7890"); err != nil {
+		t.Fatalf("BaseURL loopback should be accepted: %v", err)
 	}
-	if err := ValidateChannelEgressBaseURL("http://10.1.0.5:8080"); err == nil {
-		t.Fatal("BaseURL must still reject private addresses")
+	if err := ValidateChannelEgressBaseURL("http://10.1.0.5:8080"); err != nil {
+		t.Fatalf("BaseURL private address should be accepted: %v", err)
 	}
 	ctx := context.Background()
 	proxy := "http://alice:s3cret@127.0.0.1:7890"

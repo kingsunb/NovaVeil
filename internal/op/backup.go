@@ -424,7 +424,7 @@ func normalizeImportGroups(dump *model.DBDump) {
 //   - 分组引用循环: 有效态分组引用链无环
 //   - API Key 领域校验与唯一性: 与正常写接口相同的最小长度校验, 脱敏 Key 拒绝;
 //     dump 内及与现存库无重复明文
-//   - 渠道 BaseURL 出口校验: 非 custom 渠道禁止导入私网/环回/保留段地址
+//   - 渠道 BaseURL 校验: 非 custom 渠道强制 http/https + host + 无 userinfo 格式
 //   - 分组模式: manual / failover / 空(默认)
 func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, error) {
 	preview := &model.DBImportPreview{
@@ -592,9 +592,9 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 		}
 	}
 
-	// --- 渠道 BaseURL 出口校验(与正常写接口同规则) ---
-	// 备份导入同样不能成为 SSRF 防护的旁路: 非 custom 渠道会被 relay 直接用于
-	// 上游访问, 必须在这里做完整 egress 校验(私网/环回/metadata/保留段拒绝)。
+	// --- 渠道 BaseURL 校验(与正常写接口同规则) ---
+	// 非 custom 渠道会被 relay 直接用于上游访问, 这里复用的校验只强制 http/https、
+	// host、无 userinfo 格式; 不做目标地址范围限制。
 	for _, ch := range dump.Channels {
 		if ch.Type == model.ChannelProviderCustom {
 			continue
