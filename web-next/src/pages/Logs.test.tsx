@@ -475,6 +475,51 @@ describe("<LogsPage /> 追踪 Sheet 诊断区块与时间线", () => {
     expect(within(dialog).queryByText("（估算）")).toBeNull();
   });
 
+  it("令牌汇总展示缓存命中率百分比「缓存 N (xx%)」", async () => {
+    const dialog = await openTrace({
+      ...makeLog(1),
+      usage: {
+        prompt_tokens: 101,
+        completion_tokens: 51,
+        total_tokens: 152,
+        prompt_tokens_details: { cached_tokens: 30 },
+      },
+    });
+    // 命中率 = 缓存输入 30 / 总输入 101 ≈ 29.7%，随「缓存 30」一并展示。
+    expect(within(dialog).getByText(/缓存 30/)).toBeTruthy();
+    expect(within(dialog).getByText("(29.7%)")).toBeTruthy();
+  });
+
+  it("无缓存命中时不展示百分比（CacheSuffix 返回 null）", async () => {
+    const dialog = await openTrace(makeLog(1));
+    expect(within(dialog).getByText(/tokens 101 \/ 51/)).toBeTruthy();
+    expect(within(dialog).queryByText(/缓存/)).toBeNull();
+    expect(within(dialog).queryByText(/\(\d+(\.\d+)?%\)/)).toBeNull();
+  });
+
+  it("流式进行中详情展示实时输出速度 c/s，非 tok/s", async () => {
+    // committed：首字已到、未定稿，按「累计输出字符 / 首字以来耗时」实时折算 c/s。
+    const dialog = await openTrace({
+      ...makeLog(1),
+      status: "committed",
+      output_chars: 9000,
+    });
+    fireEvent.click(within(dialog).getByText("详情"));
+    await waitFor(() => {
+      expect(within(dialog).getByText(/输出 \d+(\.\d+)? c\/s/)).toBeTruthy();
+    });
+    expect(within(dialog).queryByText(/tok\/s/)).toBeNull();
+  });
+
+  it("终态详情展示 tok/s 而非 c/s", async () => {
+    const dialog = await openTrace(makeLog(1));
+    fireEvent.click(within(dialog).getByText("详情"));
+    await waitFor(() => {
+      expect(within(dialog).getByText(/tok\/s/)).toBeTruthy();
+    });
+    expect(within(dialog).queryByText(/c\/s/)).toBeNull();
+  });
+
   it("时间线：成功尝试三行布局(渠道+模型+密钥/代理/首字+耗时)，失败尝试保持单行", async () => {
     const dialog = await openTrace({
       ...makeLog(1),
@@ -519,6 +564,46 @@ describe("<LogsPage /> 追踪 Sheet 诊断区块与时间线", () => {
     expect(timeline.getByText("—")).toBeTruthy();
     expect(timeline.getByText("timeout")).toBeTruthy();
     expect(timeline.getByText("上游超时")).toBeTruthy();
+  });
+
+  it("失败终态在详情直出最后一次失败详情（err_class + err_brief）", async () => {
+    const dialog = await openTrace({
+      ...makeLog(3),
+      attempts: [
+        {
+          seq: 1,
+          channel_id: 1,
+          channel_name: "openai-prod",
+          member_id: 1,
+          model: "gpt-4o",
+          latency_ms: 1200,
+          outcome: "failed",
+          err_class: "upstream_5xx",
+          err_brief: "上游返回 502",
+        },
+        {
+          seq: 2,
+          channel_id: 1,
+          channel_name: "openai-prod",
+          member_id: 2,
+          model: "gpt-4o",
+          latency_ms: 0,
+          outcome: "failed",
+          err_class: "timeout",
+          err_brief: "上游超时",
+        },
+      ],
+    });
+    fireEvent.click(within(dialog).getByText("详情"));
+    await waitFor(() => {
+      const block = within(dialog).getByTestId("failed-detail");
+      expect(block).toBeTruthy();
+      // 只取最后一次失败（seq 2）的 timeout/上游超时，而非 seq 1 的 upstream_5xx。
+      expect(within(block).getByText("timeout")).toBeTruthy();
+      expect(within(block).getByText("上游超时")).toBeTruthy();
+      expect(within(block).getByText("（第 2 次尝试）")).toBeTruthy();
+      expect(within(block).queryByText("上游返回 502")).toBeNull();
+    });
   });
 
   it("时间线：成功尝试无首字时回退纯总耗时，无代理时显示直连", async () => {

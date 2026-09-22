@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
@@ -825,6 +826,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					break
 				}
 				c.Writer.Flush()
+				// 累计已转发的输出字符数(按还原后 payload 的 UTF-8 字符近似)并节流发布,
+				// 供前端日志详情在流式进行中按累计字符/耗时实时折算输出速度(c/s)。
+				request.noteOutputChars(utf8.RuneCount(event.Data))
 				// 协议终态已交付: 立即结束转发, 不再阻塞等待上游关闭连接。
 				if last {
 					break

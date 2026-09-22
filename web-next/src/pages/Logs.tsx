@@ -60,6 +60,44 @@ function cacheTokensOf(
   return r.usage?.prompt_tokens_details?.cached_tokens ?? 0;
 }
 
+// 输入 token 中命中缓存的占比(百分比), 用于日志「缓存 N (xx%)」直观展示 prompt cache 收益;
+// 无缓存或不含输入 token 时返回 null(不展示百分比)。
+function cacheRateOf(
+  r: { usage?: { prompt_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } },
+): number | null {
+  const prompt = r.usage?.prompt_tokens ?? 0;
+  const cached = cacheTokensOf(r);
+  if (cached <= 0 || prompt <= 0) return null;
+  return (cached / prompt) * 100;
+}
+
+// 百分比展示: 四舍五入到 0.1 并去掉无意义的尾随 0 (85% / 42.3%)。
+function formatPercent(rate: number): string {
+  if (!Number.isFinite(rate)) return "—";
+  const tenth = Math.round(rate * 10) / 10;
+  return `${Number.isInteger(tenth) ? Math.round(tenth) : tenth}%`;
+}
+
+// 「缓存 N (xx%)」片段; 无缓存时返回 null。命中率 = 缓存输入 token / 总输入 token。
+function CacheSuffix({
+  r,
+  className,
+}: {
+  r: { usage?: { prompt_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } };
+  className?: string;
+}) {
+  const cached = cacheTokensOf(r);
+  if (cached <= 0) return null;
+  const rate = cacheRateOf(r);
+  return (
+    <>
+      {" / 缓存 "}
+      {formatNumber(cached)}
+      {rate != null && <span className={className}> ({formatPercent(rate)})</span>}
+    </>
+  );
+}
+
 type Tab = "live" | "err";
 
 type SSEStatus = "connecting" | "open" | "closed";
@@ -407,15 +445,15 @@ function useElapsedTick(active: boolean) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const timer = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(timer);
   }, [active]);
   return now;
 }
 
 /**
- * 耗时单元格：秒级计时器收敛在单元格内部，只重渲染自身，而不是整张
- * 虚拟化表格 —— 之前 now 放在 LiveTable 顶层，每秒迫使 200 行全部重渲染。
+ * 耗时单元格：500ms 计时器收敛在单元格内部，只重渲染自身，而不是整张
+ * 虚拟化表格 —— 之前 now 放在 LiveTable 顶层，定时器触发迫使 200 行全部重渲染。
  * 窄列（90px）放不下「首字 X · 总耗时 Y」单行，有首字时拆成两行右对齐；
  * 无首字时回退纯总耗时单行。
  */
@@ -561,12 +599,7 @@ function LiveTable({
                   <div role="gridcell" className="num text-xs text-ink-muted">
                     {formatNumber(r.usage.prompt_tokens)} /{" "}
                     {formatNumber(r.usage.completion_tokens)}
-                    {cacheTokensOf(r) > 0 && (
-                      <>
-                        {" / 缓存"}
-                        {formatNumber(cacheTokensOf(r))}
-                      </>
-                    )}
+                    <CacheSuffix r={r} />
                   </div>
                   <div role="gridcell" className="num text-xs text-ink-muted">
                     <ElapsedCell r={r} />
@@ -700,7 +733,7 @@ function TraceSheet({
   const [responseLoading, setResponseLoading] = useState(false);
   const attempts = req?.attempts ?? [];
 
-  // 进行中请求的耗时每秒重渲染（与 ElapsedCell 同款定时器），否则详情底部
+  // 进行中请求的耗时每 500ms 重渲染（与 ElapsedCell 同款定时器），否则详情底部
   // 「进行中 · 1m22s」会冻结在首次渲染的值，秒数不随时间更新。
   const detailRunning = req?.status === "running" || req?.status === "committed";
   const detailNow = useElapsedTick(detailRunning);
@@ -791,7 +824,6 @@ function TraceSheet({
 
   const requestFailed = req.status === "failed" || req.status === "canceled";
   const isRunning = req.status === "running" || req.status === "committed";
-  const cachedTokens = cacheTokensOf(req);
 
   return (
     <Dialog open={!!req} onOpenChange={(o) => !o && onClose()}>
@@ -1004,12 +1036,7 @@ function TraceSheet({
             <span className="tabular-nums">
               tokens {formatNumber(req.usage.prompt_tokens)} /{" "}
               {formatNumber(req.usage.completion_tokens)}
-              {cachedTokens > 0 && (
-                <>
-                  {" / 缓存"}
-                  {formatNumber(cachedTokens)}
-                </>
-              )}
+              <CacheSuffix r={req} />
             </span>
             {req.usage_estimated && (
               <span className="text-ink-subtle">（估算）</span>
@@ -1066,6 +1093,12 @@ function DetailTab({
     ? new Date(req.first_token_at).toLocaleString("zh-CN")
     : "—";
 
+  // 最后一次失败尝试：attempts 按轮次升序，倒序取首个 outcome===failed，
+  // 即「最后一次失败」的错误类别与摘要，供失败终态在详情里直出失败原因。
+  const lastFailure = [...attempts].reverse().find(
+    (a) => a.outcome === "failed",
+  );
+
   // 耗时指标：完整总耗时 = 请求到达 → 完成；首字耗时 = 请求到达 → 首字；
   // 响应完成耗时 = 首字 → 完成（输出阶段）。完整总耗时与请求列表/底部指标
   // 使用同一口径：进行中按 now - started_at，终态按后端 duration_ms。
@@ -1107,9 +1140,20 @@ function DetailTab({
       ? req.usage.completion_tokens / (responseMs / 1000)
       : null;
 
+  // 流式进行中：按累计输出字符 / 首字以来耗时实时折算输出速度 c/s(字符/秒);
+  // 字符数为后端在流式转发时节流累加的 payload UTF-8 字符近似值。终态切换回 token/s。
+  const liveOutputCps =
+    firstValid && !terminal && firstAtMs != null && now > firstAtMs
+      ? (req.output_chars ?? 0) / ((now - firstAtMs) / 1000)
+      : null;
+
   const speedParts: string[] = [];
-  if (totalTps != null) speedParts.push(`总 ${formatTps(totalTps)} tok/s`);
-  if (outputTps != null) speedParts.push(`输出 ${formatTps(outputTps)} tok/s`);
+  if (!terminal && liveOutputCps != null && liveOutputCps > 0) {
+    speedParts.push(`输出 ${formatTps(liveOutputCps)} c/s`);
+  } else {
+    if (totalTps != null) speedParts.push(`总 ${formatTps(totalTps)} tok/s`);
+    if (outputTps != null) speedParts.push(`输出 ${formatTps(outputTps)} tok/s`);
+  }
   const speedText = speedParts.length > 0 ? speedParts.join(" · ") : "—";
 
   return (
@@ -1122,6 +1166,29 @@ function DetailTab({
           {STATE_LABEL[req.status] ?? req.status}
         </Pill>
       </DetailRow>
+      {req.status === "failed" && lastFailure && (
+        <div
+          data-testid="failed-detail"
+          className="rounded-card border border-destructive/30 bg-destructive/5 p-3"
+        >
+          <div className="mb-1.5 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-medium text-ink-muted">
+              失败详情
+            </span>
+            <span className="text-[11px] text-ink-subtle">
+              （第 {lastFailure.seq} 次尝试）
+            </span>
+            {lastFailure.err_class && (
+              <Pill tone="danger" dot={false} className="text-[10px]">
+                {lastFailure.err_class}
+              </Pill>
+            )}
+          </div>
+          <p className="whitespace-pre-wrap text-xs leading-relaxed text-destructive/90">
+            {lastFailure.err_brief || "（无错误摘要）"}
+          </p>
+        </div>
+      )}
       <DetailRow label="模型">
         <span className="text-ink">{req.model}</span>
         {req.thinking_level && (
@@ -1211,7 +1278,7 @@ function DetailTab({
           {formatNumber(req.usage.total_tokens)}
           {cacheTokensOf(req) > 0 && (
             <span className="ml-2 text-ink-muted">
-              / 缓存 {formatNumber(cacheTokensOf(req))}
+              <CacheSuffix r={req} />
             </span>
           )}
           {req.usage_estimated && (

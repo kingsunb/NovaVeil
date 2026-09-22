@@ -79,6 +79,9 @@ type RequestState struct {
 	StartedAt time.Time `json:"started_at"` // 请求到达时间。
 	// 首字时点：首个已交付客户端的事件/整响应提交的时刻，用于展示首字耗时（TTFT）。
 	FirstTokenAt time.Time     `json:"first_token_at,omitempty"`
+	// OutputChars 累计已转发给客户端的输出字符数(按已转发事件 payload 的 UTF-8 字符数近似, 含结构化帧开销)。
+	// 流式进行中由 noteOutputChars 持续累加并节流发布, 前端据此实时折算输出速度(c/s); 终态为最终累计值。
+	OutputChars  int64         `json:"output_chars,omitempty"`
 	Duration     time.Duration `json:"-"`                  // 内部保存纳秒精度；JSON 通过 MarshalJSON 输出 duration 与 duration_ms。
 	Model        string        `json:"model"`              // 客户端请求的模型名称, 即分组名称。
 	ClientIP     string        `json:"client_ip"`          // 发起请求的客户端 IP 地址。
@@ -112,6 +115,7 @@ type RequestState struct {
 	stopRequested  bool               // 管理端请求整体终止标记: 置位后转发循环在最近的安全点退出, 不再发起任何新尝试。
 	stopCh         chan struct{}      // 管理端整体终止信号: StopRequest 中 close 一次, wait/select 据此立即唤醒而非等定时器到期。
 	roundStartedAt time.Time          // 最新一轮的开始时刻, 用于计算该轮尝试耗时。
+	lastOutputPublish time.Time        // 最近一次输出字符数的节流发布时刻, 把逐块累加收敛为至多 2Hz 的状态推送。
 }
 
 // AttemptRecord 一轮上游尝试的轨迹记录, 面板据此渲染请求的时间线。
@@ -132,6 +136,13 @@ type AttemptRecord struct {
 
 const streamBuffer = 16 // 单个状态流连接的非阻塞消息缓冲容量。
 const maxFinished = 200 // 进程内最多保留的已结束请求数量, 需覆盖错误页要展示的最近二十次错误。
+
+// outputCharsPublishInterval 是流式进行中输出字符数的节流发布间隔, 与前端日志卡片的
+// 500ms 刷新周期对齐: 逐块累加只做一次 cheap 的自增与时间比较, 状态发布按此间隔收敛。
+// 每次发布都要把整个 RequestState 克隆并序列化后推给全部状态流订阅者, 若逐块触发会把
+// 高吞吐流式的块频(可达每秒上百块)放大成等量的全量快照推送, 却不对应任何观测增量——
+// 前端 500ms 才读一次 now, 2Hz 的发布已覆盖「实时」观感。
+const outputCharsPublishInterval = 500 * time.Millisecond
 
 const errBriefLimit = 256     // 错误摘要的最大保留字节数, 超长按 UTF-8 边界截断。
 const maxAttempts = 200       // 单个请求最多保留的尝试轨迹条数, 超出后丢弃最旧记录。
@@ -217,6 +228,7 @@ func (r RequestState) MarshalJSON() ([]byte, error) {
 		Status               Status          `json:"status"`
 		StartedAt            time.Time       `json:"started_at"`
 		FirstTokenAt         time.Time       `json:"first_token_at,omitempty"`
+		OutputChars          int64           `json:"output_chars,omitempty"`
 		Duration             int64           `json:"duration"` // legacy: nanoseconds
 		DurationMS           int64           `json:"duration_ms"`
 		Model                string          `json:"model"`
@@ -251,7 +263,7 @@ func (r RequestState) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(requestStateJSON{
 		ID: r.ID, Status: r.Status, StartedAt: r.StartedAt,
-		FirstTokenAt: r.FirstTokenAt, Duration: nanoseconds,
+		FirstTokenAt: r.FirstTokenAt, OutputChars: r.OutputChars, Duration: nanoseconds,
 		DurationMS: milliseconds, Model: r.Model, ClientIP: r.ClientIP, APIKey: maskAPIKey(r.APIKey),
 		KeyName: r.KeyName, Usage: r.Usage, UsageEstimated: r.UsageEstimated, Round: r.Round,
 		TargetChannel: r.TargetChannel, TargetModel: r.TargetModel, KeyLabel: r.KeyLabel,
@@ -491,6 +503,23 @@ func (r *RequestState) markCommitted() {
 		r.Attempts[len(r.Attempts)-1].FirstTokenMS = now.Sub(r.roundStartedAt).Milliseconds()
 	}
 	publishRequestLocked(r)
+}
+
+// noteOutputChars 累计本请求已转发给客户端的输出字符数, 并按 outputCharsPublishInterval 节流
+// 发布状态, 使流式进行中的日志详情能实时展示输出速度(c/s)。逐块调用只做一次 cheap 的
+// 自增与时间比较, 真正把状态推给订阅者的动作至多每 500ms 一次, 避免逐块发布风暴。
+// n 为本次转发事件 payload 的 UTF-8 字符数(近似, 含结构化帧的 JSON 开销); 调用方不得持有全局锁。
+func (r *RequestState) noteOutputChars(n int) {
+	if n <= 0 {
+		return
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	r.OutputChars += int64(n)
+	if time.Since(r.lastOutputPublish) >= outputCharsPublishInterval {
+		r.lastOutputPublish = time.Now()
+		publishRequestLocked(r)
+	}
 }
 
 // markSucceeded 以成功终态定稿请求。

@@ -378,3 +378,63 @@ func TestRequestStateJSONAttemptsNeverNull(t *testing.T) {
 		t.Fatalf("非 nil attempts 序列化/反序列化不符: %+v", got.Attempts)
 	}
 }
+
+// TestRequestStateJSONIncludesOutputChars 验证 output_chars 序列化: 流式累加后随状态流下发,
+// 为 0 时因 omitempty 缺席, 前端据此在流式进行中实时折算输出速度(c/s)。
+func TestRequestStateJSONIncludesOutputChars(t *testing.T) {
+	populated := RequestState{
+		ID:          400,
+		Status:      StatusCommitted,
+		StartedAt:   time.Unix(100, 0).UTC(),
+		Model:       "demo",
+		ClientIP:    "203.0.113.80",
+		OutputChars: 123,
+		Attempts:    []AttemptRecord{},
+	}
+	encoded, err := json.Marshal(populated)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got struct {
+		OutputChars int64 `json:"output_chars"`
+	}
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.OutputChars != 123 {
+		t.Fatalf("output_chars = %d, want 123", got.OutputChars)
+	}
+
+	zero := RequestState{
+		ID:        401,
+		Status:    StatusRunning,
+		StartedAt: time.Unix(200, 0).UTC(),
+		Model:     "demo",
+		ClientIP:  "203.0.113.81",
+		Attempts:  []AttemptRecord{},
+	}
+	encodedZero, err := json.Marshal(zero)
+	if err != nil {
+		t.Fatalf("marshal zero: %v", err)
+	}
+	if strings.Contains(string(encodedZero), "output_chars") {
+		t.Fatalf("output_chars 为 0 时应因 omitempty 缺席: %s", encodedZero)
+	}
+}
+
+// TestNoteOutputCharsAccumulates 验证 noteOutputChars 把逐块 payload 字符数累加进 OutputChars,
+// 且忽略非正数入参; 流式转发循环据此维持累计输出量供前端折算实时 c/s。
+func TestNoteOutputCharsAccumulates(t *testing.T) {
+	state := &RequestState{ID: 99, Status: StatusCommitted}
+	state.noteOutputChars(5)
+	state.noteOutputChars(3)
+	state.noteOutputChars(0) // 非正数被忽略
+	state.noteOutputChars(-2)
+
+	mu.Lock()
+	got := state.OutputChars
+	mu.Unlock()
+	if got != 8 {
+		t.Fatalf("OutputChars = %d, want 8", got)
+	}
+}

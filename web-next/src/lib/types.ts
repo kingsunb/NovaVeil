@@ -520,6 +520,8 @@ export interface RequestState {
   /** 后端同时提供 legacy duration（纳秒）与 duration_ms（毫秒）；旧服务可能只给 duration。 */
   duration?: number;
   duration_ms?: number;
+  /** 累计已转发输出字符数（流式进行中由后端节流累加，近似 payload UTF-8 字符），用于实时折算输出速度 c/s。 */
+  output_chars?: number;
   model: string;
   client_ip: string;
   /** 仅为脱敏尾缀（例如 ...ABCD），绝不是完整 API Key。 */
