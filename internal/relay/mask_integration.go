@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"bytes"
 	"sort"
 	"strings"
 	"time"
@@ -49,13 +48,14 @@ func applyRequestMask(body []byte, sessionKey string, groupMaskEnabled bool) ([]
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	masked := []byte(res.Masked)
-	// 未命中任何敏感信息: 请求体未变, 占位符未插入, 响应不会含占位符, 还原为 no-op。
-	// 返回 nil 映射使调用方跳过脱敏标记与还原器, 日志不对此请求展示"已脱敏"。
-	if bytes.Equal(masked, body) {
-		return masked, nil, nil, nil
+	// 判定「是否真的脱敏」以命中明细为准, 而非字节是否变化: JSON 请求体经 mapJSONStringValues
+	// 重序列化, 即使零命中也可能改变字节(去空格、HTML 转义等), 若按 bytes.Equal 比较会误标
+	// 「已脱敏」却无任何命中明细, 并悄悄改写请求体格式(文档 07)。
+	// 零命中时原样透传原始字节, 映射表与命中明细均为 nil, 调用方据此跳过脱敏标记与还原器。
+	if len(res.Matches) == 0 {
+		return body, nil, nil, nil
 	}
-	return masked, res.Mapping, res.Matches, nil
+	return []byte(res.Masked), res.Mapping, res.Matches, nil
 }
 
 // 命中明细裁剪上限(文档 07 §3.1 第 5 点硬约束, design §2.3.1)。

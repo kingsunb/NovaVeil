@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -265,6 +266,31 @@ func TestApplyRequestMaskContract(t *testing.T) {
 		}
 		if matches != nil {
 			t.Errorf("无命中时命中明细应为 nil, got: %v", matches)
+		}
+	})
+
+	t.Run("zero-hit non-compact JSON returns original bytes and nil mapping", func(t *testing.T) {
+		// 修复回归: JSON 请求体即使零命中, mapJSONStringValues 重序列化也会改变字节
+		// (去空格、HTML 转义), 旧实现按 bytes.Equal 判定会误标「已脱敏」且命中明细为空,
+		// 并悄悄改写请求体格式。
+		for i, raw := range []string{
+			`{"model": "gpt-4", "messages": [{"role": "user", "content": "今天天气真好"}]}`,
+			`{"content":"<tag> & 今天天气真好"}`,
+		} {
+			body := []byte(raw)
+			masked, mapping, matches, err := applyRequestMask(body, fmt.Sprintf("sess-zero-hit-json-%d", i), true)
+			if err != nil {
+				t.Fatalf("case %d applyRequestMask: %v", i, err)
+			}
+			if mapping != nil {
+				t.Errorf("case %d 零命中 JSON 不应返回映射表(避免误标已脱敏), masked=%s", i, masked)
+			}
+			if !bytes.Equal(masked, body) {
+				t.Errorf("case %d 零命中 JSON 应原样返回原始字节, got:\n  in : %s\n  out: %s", i, body, masked)
+			}
+			if matches != nil {
+				t.Errorf("case %d 零命中 JSON 命中明细应为 nil, got: %v", i, matches)
+			}
 		}
 	})
 
