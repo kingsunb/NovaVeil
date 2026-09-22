@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -88,6 +89,61 @@ func TestFormatChannelExportIncludesBuiltinAndKeyless(t *testing.T) {
 	} {
 		if !strings.Contains(text, part) {
 			t.Fatalf("export missing %q\n%s", part, text)
+		}
+	}
+}
+
+func TestProbeErrorHumanMapsUpstreamStatus(t *testing.T) {
+	cases := []struct {
+		name    string
+		err     error
+		hasWant string // 结果必须包含的中文语义前缀; 空表示期望原样返回。
+	}{
+		{
+			name:    "helper 401",
+			err:     errors.New(`upstream returned HTTP 401: {"error":"invalid_api_key"}`),
+			hasWant: "上游返回 401（没有该密钥/未授权），原始错误：",
+		},
+		{
+			name:    "relay responded 403",
+			err:     errors.New("upstream responded 403 Forbidden: denied"),
+			hasWant: "上游返回 403（无访问权限），原始错误：",
+		},
+		{
+			name:    "httpclient with status 429",
+			err:     errors.New("POST - https://upstream/v1/chat/completions with status 429 Too Many Requests: quota exceeded"),
+			hasWant: "上游返回 429（触发上游限流），原始错误：",
+		},
+		{
+			name:    "5xx 区间兜底",
+			err:     errors.New("upstream returned HTTP 502: bad gateway"),
+			hasWant: "上游返回 502（上游服务错误），原始错误：",
+		},
+		{
+			name:    "无状态码中文原样",
+			err:     errors.New("渠道未配置任何密钥"),
+			hasWant: "",
+		},
+		{
+			name:    "网络错误不误判",
+			err:     errors.New("dial tcp: lookup api.example.com: no such host"),
+			hasWant: "",
+		},
+	}
+	for _, tc := range cases {
+		got := probeErrorHuman(tc.err)
+		if tc.hasWant == "" {
+			if got != tc.err.Error() {
+				t.Fatalf("%s: got %q, want original %q", tc.name, got, tc.err.Error())
+			}
+			continue
+		}
+		if !strings.HasPrefix(got, tc.hasWant) {
+			t.Fatalf("%s: got %q, want prefix %q", tc.name, got, tc.hasWant)
+		}
+		// 原始错误必须完整保留在末尾, 便于管理员查上游原文。
+		if !strings.HasSuffix(got, tc.err.Error()) {
+			t.Fatalf("%s: raw error not preserved at tail: %q", tc.name, got)
 		}
 	}
 }

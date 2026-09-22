@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -213,7 +215,7 @@ func fetchModel(c *gin.Context) {
 		}
 		models, err := helper.FetchModels(c.Request.Context(), stored)
 		if err != nil {
-			resp.Error(c, http.StatusInternalServerError, err.Error())
+			resp.ErrorExposed(c, http.StatusInternalServerError, probeErrorHuman(err))
 			return
 		}
 		resp.Success(c, models)
@@ -248,10 +250,59 @@ func fetchModel(c *gin.Context) {
 	}
 	models, err := helper.FetchModels(c.Request.Context(), request)
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		resp.ErrorExposed(c, http.StatusInternalServerError, probeErrorHuman(err))
 		return
 	}
 	resp.Success(c, models)
+}
+
+// upstreamHTTPStatusRe 匹配探测错误文案中的上游 HTTP 状态码, 覆盖 helper 的
+// "upstream returned HTTP %d"、relay 的 "upstream responded %s"(response.Status,
+// 形如 "401 Unauthorized") 与 httpclient 的 "with status %d" 三种形态。其余数字
+// (错误体 snippet、字节数等) 不匹配这些固定前缀, 避免误判。
+var upstreamHTTPStatusRe = regexp.MustCompile(`(?:HTTP |responded |status )([0-9]{3})`)
+
+// httpStatusLabels 把常见上游状态码映射为面向管理员的中文语义, 用于探测失败提示。
+var httpStatusLabels = map[string]string{
+	"400": "上游返回 400（请求参数错误）",
+	"401": "上游返回 401（没有该密钥/未授权）",
+	"402": "上游返回 402（账户欠费或需付费）",
+	"403": "上游返回 403（无访问权限）",
+	"404": "上游返回 404（地址或接口不存在，请检查 BaseURL）",
+	"408": "上游返回 408（上游请求超时）",
+	"409": "上游返回 409（请求冲突）",
+	"429": "上游返回 429（触发上游限流）",
+}
+
+// httpStatusLabel 把三位状态码字符串转成人类可读前缀; 未知码按区间兜底(4xx/5xx)。
+func httpStatusLabel(code string) string {
+	if label, ok := httpStatusLabels[code]; ok {
+		return label
+	}
+	n, err := strconv.Atoi(code)
+	if err != nil {
+		return "上游返回错误"
+	}
+	switch {
+	case n >= 500:
+		return fmt.Sprintf("上游返回 %d（上游服务错误）", n)
+	case n >= 400:
+		return fmt.Sprintf("上游返回 %d（上游客户端错误）", n)
+	default:
+		return fmt.Sprintf("上游返回 %d", n)
+	}
+}
+
+// probeErrorHuman 把管理端探测失败的错误转成「中文语义 + 原始错误」的可读文案,
+// 供拉取模型/测试连通/逐 Key 测试回显给管理员。识别到上游 HTTP 状态码时按
+// httpStatusLabel 生成中文前缀并拼接原始错误; 识别不到时原样返回(多数此类错误
+// 本身已是中文, 如「渠道未配置任何密钥」「全部密钥测试失败」)。
+func probeErrorHuman(err error) string {
+	msg := err.Error()
+	if m := upstreamHTTPStatusRe.FindStringSubmatch(msg); m != nil {
+		return fmt.Sprintf("%s，原始错误：%s", httpStatusLabel(m[1]), msg)
+	}
+	return msg
 }
 
 // testChannel 以一条测试消息验证渠道上的单个模型是否可用; 可选 key_id 指定用哪把已保存密钥测试,
@@ -286,7 +337,7 @@ func testChannel(c *gin.Context) {
 	defer cancel()
 	result, err := relay.TestChannel(ctx, request.ID, request.Model, request.Message, request.KeyID)
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		resp.ErrorExposed(c, http.StatusInternalServerError, probeErrorHuman(err))
 		return
 	}
 	resp.Success(c, result)
@@ -308,7 +359,7 @@ func testChannelKeys(c *gin.Context) {
 	defer cancel()
 	results, err := relay.TestChannelKeys(ctx, request.ID, request.Model, request.Message)
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		resp.ErrorExposed(c, http.StatusInternalServerError, probeErrorHuman(err))
 		return
 	}
 	resp.Success(c, results)

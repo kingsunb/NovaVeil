@@ -36,6 +36,20 @@ func Error(c *gin.Context, code int, err string) {
 	})
 }
 
+// ErrorExposed 与 Error 一样写 5xx 日志并回 JSON, 但保留真实 err 文案原样回给
+// 客户端。仅供管理员会话内的主动探测端点使用(拉取模型 / 测试连通 / 逐 Key 测试):
+// 这些端点把上游 HTTP 状态码与错误片段回显给管理员排障, 本身不出现在普通 API
+// 客户端路径; 通用路径仍走 Error 兜底, 避免向非管理员泄露内部与上游细节。
+func ErrorExposed(c *gin.Context, code int, err string) {
+	if code >= http.StatusInternalServerError {
+		log.Errorf("http %d: %s", code, err)
+	}
+	c.AbortWithStatusJSON(code, ResponseStruct{
+		Code:    code,
+		Message: err,
+	})
+}
+
 // NoStore 禁止中间缓存保存敏感响应(密钥导出、明文查看、整库备份)。
 func NoStore(c *gin.Context) {
 	c.Header("Cache-Control", "no-store, private")

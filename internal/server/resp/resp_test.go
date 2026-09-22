@@ -39,3 +39,20 @@ func TestErrorKeepsClientMessages(t *testing.T) {
 		t.Fatalf("message = %q", body.Message)
 	}
 }
+
+func TestErrorExposedKeepsInternalMessages(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	ErrorExposed(c, http.StatusInternalServerError, "upstream returned HTTP 401: invalid api key")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("code = %d", w.Code)
+	}
+	var body ResponseStruct
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Message != "upstream returned HTTP 401: invalid api key" {
+		t.Fatalf("message = %q, want raw upstream detail", body.Message)
+	}
+}
