@@ -11,7 +11,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
@@ -227,5 +229,86 @@ func TestKeylessConversionEndToEnd(t *testing.T) {
 	authorization, _ = upstream.snapshot()
 	if len(authorization) != 2 || authorization[1] != "Bearer sk-keyed-conversion" {
 		t.Fatalf("含密钥渠道转换仍应带头, 实际 Authorization 序列 %v", authorization)
+	}
+}
+
+// TestKeylessAuthRejectionFailsFastAcrossMembers 验证无密钥渠道被上游 401/403 拒绝时:
+// 渠道没有任何凭据可轮换, 重试同一成员或等待冷却都不可能改变结果, 故应与确定性
+// 400/404/422 一样每成员只试一次、全失败后立即终止并返回统一"暂无可用渠道"
+// (重试间隔配 5 秒放大旧行为按 member_max_attempts 空转重试的代价)。
+func TestKeylessAuthRejectionFailsFastAcrossMembers(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int
+	}{
+		{"401", http.StatusUnauthorized},
+		{"403", http.StatusForbidden},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			setupFailoverTest(t)
+
+			authErrBody := `{"error":{"message":"auth invalid","type":"invalid_request_error"}}`
+			var hitsA, hitsB atomic.Int64
+			newAuthUpstream := func(counter *atomic.Int64) *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					counter.Add(1)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(tt.status)
+					_, _ = w.Write([]byte(authErrBody))
+				}))
+			}
+			serverA := newAuthUpstream(&hitsA)
+			defer serverA.Close()
+			serverB := newAuthUpstream(&hitsB)
+			defer serverB.Close()
+
+			config := refSkipConfig()
+			modelNameA := integrationUniqueName("it-keyless-auth-model-a")
+			modelNameB := integrationUniqueName("it-keyless-auth-model-b")
+			chA := createKeylessChannel(t, "it-keyless-auth-ch-a", serverA.URL, modelNameA, model.ChannelProviderOpenAI)
+			chB := createKeylessChannel(t, "it-keyless-auth-ch-b", serverB.URL, modelNameB, model.ChannelProviderOpenAI)
+			group := createIntegrationGroup(t, "it-keyless-auth-g", config,
+				integrationLeafItem(t, chA, modelNameA),
+				integrationLeafItem(t, chB, modelNameB))
+
+			engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+			body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, group.Name)
+
+			expectedID := nextRequestID()
+			begin := time.Now()
+			recorder := postRelayJSON(t, engine, path, body, "", nil)
+			elapsed := time.Since(begin)
+
+			// 每成员只试一次: 不进入 member_max_attempts 重试循环(且 401/403 无 400 那样的清洗重试)。
+			if hitsA.Load() != 1 || hitsB.Load() != 1 {
+				t.Fatalf("无密钥 %s 应每成员只试一次(不重试), 实际 A=%d B=%d", tt.name, hitsA.Load(), hitsB.Load())
+			}
+			if elapsed >= 8*time.Second {
+				t.Fatalf("无密钥 %s 应快速终止, 实际耗时 %v(疑似冷却-等待循环)", tt.name, elapsed)
+			}
+			// 下游统一契约: 全部成员不可用只返回 400+"暂无可用渠道", 上游详情仅保留在内部状态。
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("应把统一 400 交还下游, 实际 %d: %s", recorder.Code, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Body.String(), "暂无可用渠道") {
+				t.Fatalf("下游应收到统一文案\"暂无可用渠道\", 实际: %s", recorder.Body.String())
+			}
+			if strings.Contains(recorder.Body.String(), "auth invalid") {
+				t.Fatalf("上游错误详情不得泄漏给下游: %s", recorder.Body.String())
+			}
+			// 整体失败终态 + 每成员各一条 4xx 失败轨迹。
+			state := requestStateOf(t, expectedID)
+			if state.Status != StatusFailed {
+				t.Fatalf("请求应以失败终态结束, 实际 %s(%s)", state.Status, state.Error)
+			}
+			if len(state.Attempts) != 2 {
+				t.Fatalf("应恰好两条尝试轨迹(每成员一次), 实际 %d 条", len(state.Attempts))
+			}
+			for i, attempt := range state.Attempts {
+				if attempt.Outcome != AttemptFailed || attempt.ErrClass != ErrClassUpstream4xx {
+					t.Fatalf("第 %d 条轨迹应为 4xx 失败, 实际 %s/%s", i+1, attempt.Outcome, attempt.ErrClass)
+				}
+			}
+		})
 	}
 }

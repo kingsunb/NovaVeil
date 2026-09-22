@@ -576,11 +576,12 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					continue
 				}
 				request.releaseRoundLifecycle()
-				// 确定性请求错误(400/404/422): 重试同一成员或等待冷却都不可能改变结果。
+				// 确定性请求错误(400/404/422, 以及无密钥渠道的 401/403): 重试同一成员或等待冷却都不可能改变结果。
 				// 该成员照常计入失败并武装冷却, 立即换下一优先级; 当全部启用成员都各失败
 				// 一次后终止请求, 把明确的错误交还下游——避免无意义的冷却-探测循环烧掉
 				// 轮次与时长预算(实测 Codex developer 角色被上游拒绝后空转 30 轮的案例)。
-				if code, ok := UpstreamStatusCode(err); ok && (code == http.StatusBadRequest || code == http.StatusNotFound || code == http.StatusUnprocessableEntity) {
+				if code, ok := UpstreamStatusCode(err); ok && (code == http.StatusBadRequest || code == http.StatusNotFound || code == http.StatusUnprocessableEntity ||
+					(selectedKey.Key == "" && (code == http.StatusUnauthorized || code == http.StatusForbidden))) {
 					request.releaseRoundLifecycle()
 					releaseRefChainHops(hops[:len(hops)-1])
 					// 同一成员反复出现确定性 4xx 只记一次, 集合按成员去重后与成员总数比较。
