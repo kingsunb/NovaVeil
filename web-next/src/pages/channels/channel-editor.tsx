@@ -474,6 +474,9 @@ export function ChannelEditor({
   const [keyTests, setKeyTests] = useState<ChannelKeyTestResult[] | null>(null);
   const [keyTestRunning, setKeyTestRunning] = useState(false);
   const [keyTestUsedModel, setKeyTestUsedModel] = useState("");
+  // 按密钥测试使用的模型：空串 = 默认第一个模型（兼容旧行为），非空为
+  // 渠道模型列表中的某个模型名。
+  const [keyTestModel, setKeyTestModel] = useState("");
 
   // savedKeyOptions 已保存（带后端 id）的密钥选择项，标签口径与后端
   // channelKeyLabel 一致（#序号(备注/ID)）；新建未保存的行没有稳定 id，
@@ -507,10 +510,11 @@ export function ChannelEditor({
   };
 
   // handleKeyTest 一键核验全部密钥：后端对每把密钥各发一条测试消息（默认用
-  // 渠道第一个模型），逐 Key 返回有效性；单个密钥失败不影响其余密钥的判定。
+  // 用户选中的模型，未选择时回落到渠道第一个模型），逐 Key 返回有效性；
+  // 单个密钥失败不影响其余密钥的判定。
   const handleKeyTest = async () => {
     if (isNew || keyTestRunning) return;
-    const model = draft.models[0]?.name;
+    const model = keyTestModel || draft.models[0]?.name;
     if (!model) {
       toast.warning("请先为渠道添加模型");
       return;
@@ -542,6 +546,7 @@ export function ChannelEditor({
     setTestingModels(new Set());
     setCheckedTestModels(new Set());
     setKeyTests(null);
+    setKeyTestModel("");
   }, [channelKey]);
 
   // 模型列表变化时清掉已不存在的勾选, 保证「测试所选 (n)」的计数真实。
@@ -552,6 +557,13 @@ export function ChannelEditor({
       return next.size === prev.size ? prev : next;
     });
   }, [draft.models]);
+
+  // 按密钥测试选中的模型被删时回退到默认（第一个模型）。
+  useEffect(() => {
+    if (keyTestModel && !draft.models.some((m) => m.name === keyTestModel)) {
+      setKeyTestModel("");
+    }
+  }, [draft.models, keyTestModel]);
 
   // 组件卸载后中止批量测试：剩余排队项不再发往上游（每个都是真实计费请求）。
   // setup 侧复位以兼容 StrictMode 的卸载-重挂载。
@@ -809,6 +821,8 @@ export function ChannelEditor({
                       keyTests={keyTests}
                       keyTestRunning={keyTestRunning}
                       keyTestUsedModel={keyTestUsedModel}
+                      keyTestModel={keyTestModel}
+                      onKeyTestModelChange={setKeyTestModel}
                       onKeyTest={handleKeyTest}
                     />
                   )}
@@ -1338,6 +1352,8 @@ function ModelsTab({
   keyTests,
   keyTestRunning,
   keyTestUsedModel,
+  keyTestModel,
+  onKeyTestModelChange,
   onKeyTest,
 }: {
   draft: Draft;
@@ -1362,10 +1378,20 @@ function ModelsTab({
   keyTests: ChannelKeyTestResult[] | null;
   keyTestRunning: boolean;
   keyTestUsedModel: string;
+  keyTestModel: string;
+  onKeyTestModelChange: (value: string) => void;
   onKeyTest: () => void;
 }) {
   // 手风琴：当前展开配置的模型名；一次只展开一行，保持列表可扫读。
   const [expandedModel, setExpandedModel] = useState<string | null>(null);
+  // 模型列表搜索过滤：只影响展示，不动勾选/上移/下移/移除（那些基于全量 draft.models 与原始索引）。
+  const [modelSearch, setModelSearch] = useState("");
+  const modelQuery = modelSearch.trim().toLowerCase();
+  const visibleModels = modelQuery
+    ? draft.models
+        .map((m, i) => ({ m, i }))
+        .filter(({ m }) => m.name.toLowerCase().includes(modelQuery))
+    : draft.models.map((m, i) => ({ m, i }));
 
   function add() {
     const m = newModel.trim();
@@ -1456,6 +1482,21 @@ function ModelsTab({
               ))}
             </Select>
           )}
+          {draft.models.length >= 2 && (
+            <Select
+              value={keyTestModel}
+              onChange={(e) => onKeyTestModelChange(e.target.value)}
+              aria-label="按密钥测试使用的模型"
+              className="h-7 text-xs"
+            >
+              <option value="">默认（第一个模型）</option>
+              {draft.models.map((m) => (
+                <option key={m.name} value={m.name}>
+                  {m.name}
+                </option>
+              ))}
+            </Select>
+          )}
           <Button
             variant="secondary"
             size="sm"
@@ -1518,6 +1559,20 @@ function ModelsTab({
           添加
         </Button>
       </div>
+
+      {draft.models.length > 0 && (
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-muted" aria-hidden />
+          <Input
+            value={modelSearch}
+            onChange={(e) => setModelSearch(e.target.value)}
+            placeholder="搜索模型名称…"
+            autoComplete="off"
+            aria-label="搜索模型名称"
+            className="h-8 pl-8 text-sm"
+          />
+        </div>
+      )}
 
       <ul className="divide-y divide-border rounded-md border border-border">
         {draft.models.length === 0 ? (
@@ -1595,7 +1650,12 @@ function ModelsTab({
                 测试所选 ({checkedTestModels.size})
               </Button>
             </li>
-            {draft.models.map((m, i) => {
+            {modelQuery && visibleModels.length === 0 ? (
+              <li className="px-3 py-6 text-center text-xs text-ink-muted">
+                没有匹配「{modelSearch}」的模型
+              </li>
+            ) : (
+            visibleModels.map(({ m, i }) => {
               const result = modelTestResults[m.name];
               const testing = testingModels.has(m.name);
               const expanded = expandedModel === m.name;
@@ -1811,7 +1871,7 @@ function ModelsTab({
               </li>
               );
             })
-            }
+            )}
           </>
         )}
       </ul>

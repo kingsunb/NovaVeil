@@ -101,6 +101,27 @@ function mockFetch(opts: {
         ),
       );
     }
+    if (url.includes("/channel/test_keys")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            code: 200,
+            message: "success",
+            data: [
+              {
+                key_id: "k1",
+                ok: true,
+                label: "#1",
+                elapsed_ms: 120,
+                content: "pong",
+                error: "",
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    }
     if (url.includes("/channel/test")) {
       const seq = (fetchMock.mock.calls.length - 1) % (opts.testResults?.length || 1);
       const r = opts.testResults?.[seq] ?? { model: "gpt-4o", elapsed_ms: 120 };
@@ -385,9 +406,11 @@ describe("<ChannelsPage />", () => {
     const dialog = screen.getByRole("dialog");
     const dialogView = within(dialog);
     expect(
-      dialogView.getByText("claude-3.5-sonnet", { exact: true }),
+      dialogView.getByText("claude-3.5-sonnet", { exact: true, selector: "span" }),
     ).toBeInTheDocument();
-    expect(dialogView.getByText("gpt-4o", { exact: true })).toBeInTheDocument();
+    expect(
+      dialogView.getByText("gpt-4o", { exact: true, selector: "span" }),
+    ).toBeInTheDocument();
   });
 
   it("测试连通：仅 id（后端兜底模型）", async () => {
@@ -447,6 +470,96 @@ describe("<ChannelsPage />", () => {
     expect(card).toBeTruthy();
     // 卡片信息面板中显示密钥数量
     expect(card!.textContent).toContain("1 密钥");
+  });
+
+  it("按密钥测试：可选模型，默认第一个，改用所选模型发请求", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetch({ list: [sampleChannel] });
+    render(<ChannelsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("openai-prod"));
+    await user.click(screen.getByText("openai-prod"));
+    await waitFor(() => screen.getByRole("dialog"));
+
+    // 切到「模型」Tab
+    await user.click(screen.getByRole("button", { name: /模型 \(2\)/ }));
+
+    // 多模型时出现「测试用模型」选择器，默认空 = 第一个模型
+    const modelSelect = (await screen.findByRole("combobox", {
+      name: "按密钥测试使用的模型",
+    })) as HTMLSelectElement;
+    expect(modelSelect.value).toBe("");
+    expect(Array.from(modelSelect.options).map((o) => o.value)).toEqual([
+      "",
+      "gpt-4o",
+      "gpt-4o-mini",
+    ]);
+
+    // 选择第二个模型后点「按密钥测试」
+    await user.selectOptions(modelSelect, "gpt-4o-mini");
+    await user.click(screen.getByRole("button", { name: /按密钥测试 \(1\)/ }));
+
+    // 请求体携带所选模型名
+    await waitFor(() => {
+      const calls = fetchMock.mock.calls.filter(([url]) =>
+        String(url).includes("/channel/test_keys"),
+      );
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+      const body = JSON.parse(calls[calls.length - 1][1]?.body as string) as {
+        model?: string;
+      };
+      expect(body.model).toBe("gpt-4o-mini");
+    });
+
+    // 结果标题展示所用模型名
+    await waitFor(() =>
+      expect(
+        screen.getByText(/逐密钥测试结果 · 模型 gpt-4o-mini/),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it("模型列表搜索：按名称过滤，仅显示匹配项", async () => {
+    const user = userEvent.setup();
+    mockList([sampleChannel]);
+    render(<ChannelsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("openai-prod"));
+    await user.click(screen.getByText("openai-prod"));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: /模型 \(2\)/ }));
+
+    // 默认两个模型都在列表（用 span 命中模型行，避开「测试选模型」选择器的 option）
+    expect(
+      within(dialog).getByText("gpt-4o", { selector: "span" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("gpt-4o-mini", { selector: "span" }),
+    ).toBeInTheDocument();
+
+    // 搜索只保留匹配项
+    const search = within(dialog).getByLabelText("搜索模型名称");
+    await user.type(search, "mini");
+    expect(
+      within(dialog).queryByText("gpt-4o", { selector: "span" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByText("gpt-4o-mini", { selector: "span" }),
+    ).toBeInTheDocument();
+
+    // 无匹配时给提示
+    await user.clear(search);
+    await user.type(search, "不存在的模型");
+    expect(
+      within(dialog).getByText(/没有匹配「不存在的模型」/),
+    ).toBeInTheDocument();
+
+    // 清空恢复全部
+    await user.clear(search);
+    expect(
+      within(dialog).getByText("gpt-4o", { selector: "span" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("gpt-4o-mini", { selector: "span" }),
+    ).toBeInTheDocument();
   });
 
   it("批量添加密钥：一行一个，追加到列表并随保存提交", async () => {
@@ -883,7 +996,9 @@ describe("<ChannelsPage /> 渠道优先级行内编辑", () => {
     const dialog = await screen.findByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: /模型 \(/ }));
 
-    expect(within(dialog).getByText("gpt-4o")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("gpt-4o", { selector: "span" }),
+    ).toBeInTheDocument();
     expect(within(dialog).queryByLabelText(/上游协议/)).not.toBeInTheDocument();
     expect(within(dialog).queryByText("按渠道")).not.toBeInTheDocument();
     expect(within(dialog).queryByText("不支持")).not.toBeInTheDocument();
