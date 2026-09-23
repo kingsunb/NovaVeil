@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -432,6 +432,65 @@ describe("分组卡片冷却/亲和实时倒计时", () => {
     // 亲和只属于 current_item_id（成员 2），成员 1 不显示
     expect(screen.queryByText(/冷却 \d/)).not.toBeInTheDocument();
     expect(screen.getByText("紧急兜底")).toBeInTheDocument();
+  });
+});
+
+describe("分组编辑：成员冷却展示与清冷却", () => {
+  function fireRuntime(payload: Record<string, unknown>) {
+    act(() => {
+      FakeEventSource.instances[0]?.fireEvent("runtime", payload);
+    });
+  }
+
+  it("编辑对话框显示成员冷却 chip，清冷却按钮触发清除请求", async () => {
+    const user = userEvent.setup();
+    const calls: Array<{ url: string }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        calls.push({ url });
+        if (url.includes("/group/list")) return Promise.resolve(jsonOk([sampleGroup]));
+        if (url.includes("/channel/list")) return Promise.resolve(jsonOk([sampleChannel]));
+        if (url.includes("/group/cooldown/clear/"))
+          return Promise.resolve(jsonOk({ member_items: 1, key_cooldowns: 0, rate_windows: 0 }));
+        return Promise.resolve(jsonOk(null));
+      }),
+    );
+
+    render(<GroupsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("gpt-4o-prod"));
+
+    // 打开编辑已有分组
+    await user.click(screen.getByRole("button", { name: /编辑/ }));
+    const dialog = await screen.findByRole("dialog");
+
+    // 推成员 1 冷却（键为字符串化的成员 id）
+    fireRuntime({
+      group_id: 10,
+      current_item_id: 0,
+      probe_item_id: 0,
+      affinity_until: 0,
+      cooldowns: { "1": Date.now() + 30_000 },
+      levels: {},
+      half_opens: {},
+      post_commit_strikes: {},
+      emergency_item_id: 0,
+      emergency_active: 0,
+    });
+
+    await waitFor(() =>
+      expect(within(dialog).getByText(/冷却 29s|冷却 30s/)).toBeInTheDocument(),
+    );
+
+    // 编辑对话框内点击「清冷却」触发 /group/cooldown/clear/{id}
+    const clearBtn = within(dialog).getByRole("button", {
+      name: /清除 gpt-4o-prod 的冷却/,
+    });
+    await user.click(clearBtn);
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.url.includes("/group/cooldown/clear/10"))).toBe(true),
+    );
   });
 });
 

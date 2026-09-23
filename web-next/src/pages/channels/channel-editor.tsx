@@ -1613,10 +1613,12 @@ function ModelsTab({
                     aria-label={`选中 ${m.name}`}
                   />
                   <div className="flex min-w-0 flex-1 items-center gap-2">
-                    <Pill tone={m.source === "auto" ? "neutral" : "info"}>
-                      {m.source}
-                    </Pill>
-                    <span className="mono truncate text-sm text-ink">{m.name}</span>
+                    <span
+                      className="mono truncate text-sm text-ink"
+                      title={m.source === "auto" ? "自动同步" : "手动添加"}
+                    >
+                      {m.name}
+                    </span>
                     {draft.opencode_compat ? (
                       <UpstreamProtocolLabel protocol={m.upstream_protocol} />
                     ) : null}

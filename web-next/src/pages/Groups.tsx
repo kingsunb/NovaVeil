@@ -478,6 +478,11 @@ export default function GroupsPage() {
           setEditing(null);
           qc.invalidateQueries({ queryKey: ["groups"] });
         }}
+        routeState={
+          editing && editing !== "new" ? runtime.get(editing.id) : undefined
+        }
+        onClearCooldown={clearCooldownMut.mutate}
+        clearingCooldown={clearCooldownMut.isPending}
       />
 
       <Dialog
@@ -516,10 +521,16 @@ function GroupEditor({
   group,
   onClose,
   onSaved,
+  routeState,
+  onClearCooldown,
+  clearingCooldown,
 }: {
   group: Group | "new" | null;
   onClose: () => void;
   onSaved: () => void;
+  routeState?: GroupRouteState;
+  onClearCooldown?: (id: number) => void;
+  clearingCooldown?: boolean;
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
@@ -1031,6 +1042,22 @@ function GroupEditor({
                   <span className="text-[11px] text-ink-subtle">
                     {mode === "failover" ? "按顺序故障转移" : "手动指定当前成员"}
                   </span>
+                  {group && group !== "new" && onClearCooldown && (
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => onClearCooldown(group.id)}
+                        loading={clearingCooldown}
+                        title="清除所有成员的冷却状态"
+                        aria-label={`清除 ${name} 的冷却`}
+                      >
+                        <Snowflake className="h-3.5 w-3.5" aria-hidden />
+                        清冷却
+                      </Button>
+                    </div>
+                  )}
                 </div>
 
                 <ul className="space-y-1.5" role="list">
@@ -1086,6 +1113,9 @@ function GroupEditor({
                           <span className="mono flex-1 truncate text-sm text-ink">
                             {label}
                           </span>
+                          {it.id !== 0 && routeState && (
+                            <MemberRuntimeChips state={routeState} itemId={it.id} />
+                          )}
                           {channelDisabled && (
                             <Pill tone="danger" className="text-[10px]">
                               已停用
