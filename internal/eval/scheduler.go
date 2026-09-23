@@ -281,6 +281,7 @@ func (s *Scheduler) executeTask(task model.ModelEvalQueueTask) bool {
 		return true
 	}
 	started := time.Now()
+	modelDeleted := false
 	record := model.ModelEval{
 		ModelEvalSummary: model.ModelEvalSummary{
 			ChannelID:      task.ChannelID,
@@ -318,6 +319,19 @@ func (s *Scheduler) executeTask(task model.ModelEvalQueueTask) bool {
 					record.Error = strings.ReplaceAll(record.Error, key.Key, "[REDACTED]")
 				}
 			}
+			// 免费渠道确定性失败(401/403/404)累计达阈值即自动删除该模型: 凭据失效/
+			// 模型不存在这类失败重试无意义, 直接清理避免在历次评估中反复报错。
+			if channel.IsFree && isFatalEvalStatus(testErr) {
+				cleanCtx, cleanCancel := context.WithTimeout(context.WithoutCancel(s.ctx), evalSaveTimeout)
+				deleted, fatalErr := op.ChannelModelRecordFatalEvalFailure(cleanCtx, task.ChannelModelID)
+				cleanCancel()
+				if fatalErr != nil {
+					log.Warnf("eval fatal failure cleanup: %v", fatalErr)
+				} else if deleted {
+					modelDeleted = true
+					record.Error += "（该免费模型累计确定性失败达到阈值，已自动删除）"
+				}
+			}
 		}
 	} else {
 		record.Content = result.Content
@@ -338,26 +352,30 @@ func (s *Scheduler) executeTask(task model.ModelEvalQueueTask) bool {
 		}
 		return false
 	}
-	if _, err := op.ModelEvalPruneTarget(saveCtx, record.ChannelID, record.ModelName); err != nil {
-		log.Warnf("eval prune target: %v", err)
-	}
-	rank := &model.ModelEvalRank{
-		ChannelID:        record.ChannelID,
-		ChannelModelID:   record.ChannelModelID,
-		ChannelName:      record.ChannelName,
-		ChannelType:      record.ChannelType,
-		ModelName:        record.ModelName,
-		Outcome:          record.Outcome,
-		Error:            record.Error,
-		Content:          record.Content,
-		ContentTruncated: record.ContentTruncated,
-		PromptTokens:     record.PromptTokens,
-		CompletionTokens: record.CompletionTokens,
-		LatencyMS:        record.LatencyMS,
-		SourceEvalID:     record.ID,
-	}
-	if err := op.ModelEvalRankUpsert(saveCtx, rank); err != nil {
-		log.Warnf("eval rank upsert: %v", err)
+	// 模型已因累计确定性失败被删除: 不再写针它的排序条目(会留下 channel_model_id 悬空的
+	// 孤儿 rank), 也不裁剪其历史; 评估历史本身已在上面落库, 作为最后一次失败的审计留痕。
+	if !modelDeleted {
+		if _, err := op.ModelEvalPruneTarget(saveCtx, record.ChannelID, record.ModelName); err != nil {
+			log.Warnf("eval prune target: %v", err)
+		}
+		rank := &model.ModelEvalRank{
+			ChannelID:        record.ChannelID,
+			ChannelModelID:   record.ChannelModelID,
+			ChannelName:      record.ChannelName,
+			ChannelType:      record.ChannelType,
+			ModelName:        record.ModelName,
+			Outcome:          record.Outcome,
+			Error:            record.Error,
+			Content:          record.Content,
+			ContentTruncated: record.ContentTruncated,
+			PromptTokens:     record.PromptTokens,
+			CompletionTokens: record.CompletionTokens,
+			LatencyMS:        record.LatencyMS,
+			SourceEvalID:     record.ID,
+		}
+		if err := op.ModelEvalRankUpsert(saveCtx, rank); err != nil {
+			log.Warnf("eval rank upsert: %v", err)
+		}
 	}
 	if err := op.ModelEvalQueueMarkDone(saveCtx, task.ID, record.ID, record.Error); err != nil {
 		log.Warnf("eval queue mark done: %v", err)
