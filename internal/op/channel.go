@@ -281,9 +281,7 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		selectFields = append(selectFields, "custom_header")
 		updates.CustomHeader = *req.CustomHeader
 	}
-	// 列表接口回传的精确 "****" 是展示掩码, 不是新代理地址。跳过该字段以保留已存代理,
-	// 避免把哨兵加密后写成真实凭据。空串仍表示清除代理。
-	if req.ChannelProxy != nil && *req.ChannelProxy != redactedSecret {
+	if req.ChannelProxy != nil {
 		selectFields = append(selectFields, "channel_proxy")
 		updates.ChannelProxy = req.ChannelProxy
 	}

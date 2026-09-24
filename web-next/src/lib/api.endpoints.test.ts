@@ -121,26 +121,6 @@ describe("api.getAPIKeySecret", () => {
   });
 });
 
-describe("api.getChannelProxy", () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it("POST /channel/proxy/:id 取回明文，非字符串回空", async () => {
-    const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
-      if (String(url).includes("/channel/proxy/7")) {
-        return Promise.resolve(ok({ channel_proxy: "http://user:secret@10.0.0.1:7890" }));
-      }
-      return Promise.resolve(ok({ channel_proxy: 1 }));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    await expect(api.getChannelProxy(7)).resolves.toBe(
-      "http://user:secret@10.0.0.1:7890",
-    );
-    expect(String(fetchMock.mock.calls[0][0])).toContain("/channel/proxy/7");
-    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
-    await expect(api.getChannelProxy(8)).resolves.toBe("");
-  });
-});
-
 describe("api.getChannelKeys", () => {
   afterEach(() => vi.unstubAllGlobals());
 

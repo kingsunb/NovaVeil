@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/kingsunb/NovaVeil/internal/model"
@@ -48,37 +46,14 @@ func TestChannelAdminSummaryRedactsSecrets(t *testing.T) {
 	}
 }
 
-func TestChannelAdminSummaryMasksProxyUserinfo(t *testing.T) {
+func TestChannelAdminSummaryKeepsProxyPlaintext(t *testing.T) {
 	proxy := "http://alice:s3cret-pass@127.0.0.1:7890"
 	channel := model.Channel{Name: "proxied", ChannelProxy: &proxy}
 	summary := channelAdminSummary(channel)
-	if summary.ChannelProxy == nil || *summary.ChannelProxy != "****" {
-		t.Fatalf("list proxy = %v, want ****", summary.ChannelProxy)
+	if summary.ChannelProxy == nil || *summary.ChannelProxy != proxy {
+		t.Fatalf("list proxy = %v, want plaintext %q", summary.ChannelProxy, proxy)
 	}
 	if channel.ChannelProxy == nil || *channel.ChannelProxy != proxy {
 		t.Fatal("summary mutated the source proxy")
-	}
-	if summary.ChannelProxy == channel.ChannelProxy {
-		t.Fatal("masked proxy aliases the source pointer")
-	}
-	encoded, err := json.Marshal(summary)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	text := string(encoded)
-	for _, leak := range []string{"alice", "s3cret-pass", "127.0.0.1:7890"} {
-		if strings.Contains(text, leak) {
-			t.Fatalf("list JSON leaked %q: %s", leak, text)
-		}
-	}
-}
-
-func TestMaskChannelProxyForListKeepsEmpty(t *testing.T) {
-	if maskChannelProxyForList(nil) != nil {
-		t.Fatal("nil proxy should stay nil")
-	}
-	blank := ""
-	if got := maskChannelProxyForList(&blank); got == nil || *got != "" {
-		t.Fatalf("blank proxy = %v", got)
 	}
 }

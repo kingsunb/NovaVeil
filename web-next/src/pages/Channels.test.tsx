@@ -55,21 +55,8 @@ function mockFetch(opts: {
   }>;
   deleteOk?: boolean;
   importResult?: { success: number; failed: number; errors: string[] };
-  proxySecret?: string;
 } = {}) {
   const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
-    if (url.includes("/channel/proxy/")) {
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            code: 200,
-            message: "success",
-            data: { channel_proxy: opts.proxySecret ?? "" },
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
-      );
-    }
     if (url.includes("/channel/import")) {
       return Promise.resolve(
         new Response(
@@ -616,15 +603,14 @@ describe("<ChannelsPage />", () => {
     });
   });
 
-  it("渠道代理列表掩码可按眼睛揭示，未修改的 **** 不作为新代理提交", async () => {
+  it("渠道代理在管理员界面直接显示完整地址，保存时原样提交", async () => {
     const user = userEvent.setup();
     const qc = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
     const secret = "http://user:proxy-secret@10.1.2.3:7890";
     const fetchMock = mockFetch({
-      list: [{ ...sampleChannel, channel_proxy: "****", proxy: true }],
-      proxySecret: secret,
+      list: [{ ...sampleChannel, channel_proxy: secret, proxy: true }],
     });
     render(<ChannelsPage />, {
       wrapper: ({ children }: { children: React.ReactNode }) => (
@@ -634,27 +620,16 @@ describe("<ChannelsPage />", () => {
       ),
     });
     await waitFor(() => screen.getByText("openai-prod"));
-    expect(screen.getByText("****")).toBeInTheDocument();
+    expect(screen.getByText(secret)).toBeInTheDocument();
     await user.click(screen.getByText("openai-prod"));
     const dialog = await screen.findByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "高级" }));
     const proxyInput = within(dialog).getByLabelText("渠道代理") as HTMLInputElement;
-    expect(proxyInput.value).toBe("****");
-
-    await user.click(within(dialog).getByRole("button", { name: "显示代理" }));
-    await waitFor(() => expect(proxyInput.value).toBe(secret));
-    const held = qc.getQueryCache().getAll().some((query) =>
-      JSON.stringify(query.state.data ?? "").includes(secret),
-    );
-    expect(held).toBe(false);
+    expect(proxyInput.value).toBe(secret);
     expect(
-      qc.getMutationCache().getAll().some((mutation) =>
-        JSON.stringify(mutation.state.data ?? "").includes(secret),
-      ),
-    ).toBe(false);
+      within(dialog).queryByRole("button", { name: "显示代理" }),
+    ).not.toBeInTheDocument();
 
-    await user.click(within(dialog).getByRole("button", { name: "隐藏代理" }));
-    expect(proxyInput.value).toBe("****");
     await user.click(within(dialog).getByRole("button", { name: /^保存$/ }));
     await waitFor(() => {
       const updateCalls = fetchMock.mock.calls.filter(([url]) =>
@@ -662,8 +637,7 @@ describe("<ChannelsPage />", () => {
       );
       expect(updateCalls.length).toBeGreaterThanOrEqual(1);
       const body = JSON.parse(String(updateCalls.at(-1)?.[1]?.body)) as Record<string, unknown>;
-      expect(body).not.toHaveProperty("channel_proxy");
-      expect(JSON.stringify(body)).not.toContain(secret);
+      expect(body.channel_proxy).toBe(secret);
     });
   });
 

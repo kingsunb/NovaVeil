@@ -9,7 +9,7 @@ Status: implemented
 ## 决定
 
 - 渠道保存用一次性 ticket 取出草稿。`mutation.state.variables` 只保留数字，不保留 `keys[].key`。创建 API Key 的请求体放在提交瞬间的 ref 里，mutation 返回值去掉 `api_key`；明文只经 `onCreated` 进入「仅此一次」对话框的组件 state。全库导入的 `File` 同样不进 variables。
-- 非空 `channel_proxy` 在列表里只显示 `****`。编辑器点眼睛时 `POST /channel/proxy/:id`，明文只留在高级页组件 state，不进 React Query。保存时字段仍是 `****` 就省略该字段，不当成新代理；复制渠道同样不把 `****` 写进新渠道。空串仍表示清除。
+- 非空 `channel_proxy` 在列表里只显示 `****`。编辑器点眼睛时 `POST /channel/proxy/:id`，明文只留在高级页组件 state，不进 React Query。保存时字段仍是 `****` 就省略该字段，不当成新代理；复制渠道同样不把 `****` 写进新渠道。空串仍表示清除。（后续决定反转：渠道代理在管理台直接显示明文，移除眼睛揭示与 `****` 哨兵，见 [管理台直接显示渠道代理明文](../simplification/2026-09-24-show-channel-proxy-plaintext-in-admin-ui.md)。）
 - `safeLegacyHref` 用 `URL` 解析。只放行 `http`、`https`、`mailto`，以及相对 `http://localhost` 解析后仍同源的 `/`、`./`、`../` 路径。原始值里的反斜杠或空白一律回退 `/legacy`。这收紧 [legacy-path 链接协议白名单](./2026-09-21-legacy-path-href-protocol-allowlist.md)，不恢复把 flags 原值直接写入 `href`。
 - 全库 JSON 导入沿用归档清空的 `ConfirmButton`：选文件后先说明会覆盖渠道、分组、密钥和设置，再点两次才调用导入。不使用原生 `confirm`，也不新做对话框。
 - 写之前 `cancelQueries` 对应列表：自定义模型启停/删除、API Key 删除/创建/更新、渠道文本导入取消 `["channels"]` 或 `["keys"]`。评估队列上移/停止、日志全停/恢复在 `setQueryData` 之前再取消一次对应 queryKey。渠道删除、分组保存、渠道与自定义模型主保存原有的 cancel 保持不动。

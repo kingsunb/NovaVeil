@@ -298,8 +298,6 @@ export default function ChannelsPage() {
         ...rest,
         name: newName,
         enabled: false,
-        // 列表里的非空代理是 ****，不能当成新渠道的代理地址写入。
-        channel_proxy: c.channel_proxy === "****" ? "" : c.channel_proxy,
         keys: c.keys.map((k) => {
           const { original_id: _oid, ...keyRest } = k;
           return { ...keyRest, id: "" };

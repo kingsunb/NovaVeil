@@ -352,11 +352,11 @@ func TestChannelCreateAllowsPrivateChannelProxy(t *testing.T) {
 	}
 }
 
-func TestChannelUpdateKeepsProxyWhenListMaskEchoed(t *testing.T) {
+func TestChannelUpdateWritesProxyPlaintext(t *testing.T) {
 	ctx := context.Background()
 	proxy := "http://bob:keep-me@192.168.8.8:1080"
 	channel := model.Channel{
-		Name:         "proxy-mask-echo",
+		Name:         "proxy-plain-update",
 		Type:         model.ChannelProviderOpenAI,
 		Enabled:      true,
 		BaseURL:      "https://example.invalid",
@@ -369,17 +369,17 @@ func TestChannelUpdateKeepsProxyWhenListMaskEchoed(t *testing.T) {
 		db.GetDB().Delete(&model.Channel{}, channel.ID)
 		channelCache.Del(channel.ID)
 	})
-	mask := "****"
 	name := channel.Name
+	next := "http://carol:new-pass@10.9.9.9:3128"
 	updated, err := ChannelUpdate(&model.ChannelUpdateRequest{
 		ID:           channel.ID,
 		Name:         &name,
-		ChannelProxy: &mask,
+		ChannelProxy: &next,
 	}, ctx)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if updated.ChannelProxy == nil || *updated.ChannelProxy != proxy {
-		t.Fatalf("echoed mask overwrote proxy: %v", updated.ChannelProxy)
+	if updated.ChannelProxy == nil || *updated.ChannelProxy != next {
+		t.Fatalf("proxy = %v, want %q", updated.ChannelProxy, next)
 	}
 }
