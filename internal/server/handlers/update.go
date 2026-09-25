@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -15,32 +14,9 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/server/middleware"
 	"github.com/kingsunb/NovaVeil/internal/server/resp"
 	"github.com/kingsunb/NovaVeil/internal/server/router"
-	"github.com/kingsunb/NovaVeil/internal/update"
 )
 
 func init() {
-	router.NewGroupRouter("/api/v1/update").
-		Use(middleware.Auth()).
-		AddRoute(
-			router.NewRoute("", http.MethodGet).
-				Handle(latest),
-		).
-		AddRoute(
-			router.NewRoute("/now-version", http.MethodGet).
-				Handle(getNowVersion),
-		).
-		AddRoute(
-			router.NewRoute("/build-info", http.MethodGet).
-				Handle(getBuildInfo),
-		).
-		AddRoute(
-			router.NewRoute("/token-trends", http.MethodGet).
-				Handle(getTokenTrends),
-		).
-		AddRoute(
-			router.NewRoute("", http.MethodPost).
-				Handle(updateFunc),
-		)
 	router.NewGroupRouter("/api/v1/stats").
 		Use(middleware.Auth()).
 		AddRoute(
@@ -63,15 +39,6 @@ func init() {
 			router.NewRoute("/usage-heatmap", http.MethodGet).
 				Handle(getUsageHeatmap),
 		)
-}
-
-func latest(c *gin.Context) {
-	latestInfo, err := update.GetLatestInfo()
-	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	resp.Success(c, *latestInfo)
 }
 
 func getNowVersion(c *gin.Context) {
@@ -198,19 +165,6 @@ func getTokenTrends(c *gin.Context) {
 		log.Warnf("usage trend stats unavailable: %v", err)
 	}
 	resp.Success(c, gin.H{"points": points, "available": available})
-}
-
-func updateFunc(c *gin.Context) {
-	err := update.UpdateCore()
-	if err != nil {
-		if errors.Is(err, update.ErrSelfUpdateDisabled) {
-			resp.Error(c, http.StatusForbidden, err.Error())
-			return
-		}
-		resp.Error(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	resp.Success(c, "update success")
 }
 
 // getUsageDetail 返回指定时间窗口的详细指标: /usage-detail?range=24h|7d|30d|1y|3y|forever。

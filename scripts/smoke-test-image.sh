@@ -32,7 +32,6 @@ fi
     --tmpfs /tmp:size=64m,mode=1777,noexec,nosuid,nodev \
     --cap-drop ALL \
     --security-opt no-new-privileges:true \
-    -e NOVAVEIL_DISABLE_SELF_UPDATE=true \
     -p 127.0.0.1::8080 \
     -v "${VOLUME}:/app/data" \
     "${IMAGE}" >/dev/null

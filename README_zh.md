@@ -190,7 +190,6 @@ http://localhost:5174
 | `NOVAVEIL_LOG_LEVEL` | `log.level` |
 | `NOVAVEIL_SECURITY_COOKIE_SECURE` | `security.cookie_secure` |
 | `NOVAVEIL_SERVER_TRUSTED_PROXIES` | `server.trusted_proxies`（逗号分隔；非空时覆盖配置文件里的列表） |
-| `NOVAVEIL_GITHUB_PAT` | 用于获取最新版本时的速率限制(可选) |
 
 
 ## 📖 功能说明

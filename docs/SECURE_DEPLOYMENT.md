@@ -139,8 +139,8 @@ scripts/verify-release-archive.sh novaveil-linux-amd64.zip SHA256SUMS
 SHA-256 detects download corruption and a mismatched release asset, but it does not
 authenticate the publisher when both files are replaced by an attacker. Release
 asset signing/Sigstore verification is not implemented; this is a remaining risk.
-The built-in updater now requires and verifies the same Release `SHA256SUMS`; Docker
-images disable in-container self-update and must be upgraded by replacing the pinned image.
+The built-in self-updater has been removed entirely; all deployments upgrade by
+replacing the pinned image (Docker) or the verified archive (standalone).
 
 ## Channel proxy and upstream BaseURL
 

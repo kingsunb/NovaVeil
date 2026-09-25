@@ -189,7 +189,6 @@ Every option can be overridden via environment variables using the `NOVAVEIL_` p
 | `NOVAVEIL_LOG_LEVEL` | `log.level` |
 | `NOVAVEIL_SECURITY_COOKIE_SECURE` | `security.cookie_secure` |
 | `NOVAVEIL_SERVER_TRUSTED_PROXIES` | `server.trusted_proxies` (comma-separated; replaces the file list when non-empty) |
-| `NOVAVEIL_GITHUB_PAT` | GitHub PAT for update checks rate limit (optional) |
 
 
 ## 📖 Guides

@@ -32,7 +32,7 @@ var ErrRelayBodyTooLarge = errors.New("request body too large")
 
 // relayBodyBudget 是可取消的进程级请求体字节预算。
 // 超额拒绝与客户端取消都不占用额度; 额度用尽不是上游故障, 不进入成员冷却,
-// 与渠道并发槽位满(channellimit)一样只拒绝本次准入。不另建指标系统。
+// 与渠道并发槽位满(channellimit, ErrClassChannelBusy)一样只拒绝本次准入。不另建指标系统。
 var relayBodyBudget = newRelayBodyBudget(defaultRelayBodyBudgetBytes)
 
 type relayBodyBudgetState struct {

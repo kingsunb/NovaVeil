@@ -201,8 +201,8 @@ go run main.go start
 
 ## 六、升级与回滚
 
-独立环境升级即「重新构建 + 替换二进制 + 重启」。内置自更新会在下载 Release 归档后
-校验 `SHA256SUMS` 再替换；若新版本反复启动失败，下次启动自动回滚到 `.old`。
+独立环境升级即「重新构建 + 替换二进制 + 重启」。内置自更新已移除（Docker 部署以镜像升级为准），
+升级前可用 `scripts/verify-release-archive.sh` 校验 Release 归档的 `SHA256SUMS`。
 
 ```bash
 # 手动升级（与 3.1 日常循环相同，data/ 保持不变）

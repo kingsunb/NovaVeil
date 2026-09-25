@@ -32,7 +32,7 @@
 
 ## 设计想法
 
-- **落库密文、导出明文**：库被拖走时不泄漏凭据（静态加密），但备份必须能离机还原——把"明文备份"定位为管理员自担的凭据文件处理义务，文档反复强调备份文件视同生产凭据。见决策记录 [2026-09-21-credential-at-rest-encryption-and-export-redaction](../../.agents/notes/implemented/bug-fix/2026-09-21-credential-at-rest-encryption-and-export-redaction.md)。
+- **落库密文、导出明文（已拍板：预期行为，不修）**：库被拖走时不泄漏凭据（静态加密），但备份必须能离机还原——把"明文备份"定位为管理员自担的凭据文件处理义务，文档反复强调备份文件视同生产凭据。2026-09 审计再次列为 high 后明确维持该取舍：导出文件必须 0600 加密保存是部署义务，产品不为导出口径加密或强制口令。见决策记录 [2026-09-21-credential-at-rest-encryption-and-export-redaction](../../.agents/notes/implemented/bug-fix/2026-09-21-credential-at-rest-encryption-and-export-redaction.md)。
 - **导入拒绝精确 `****`**：掩码哨兵一旦被当成真值写回，对应的渠道密钥就永久损毁——哨兵拒绝是数据完整性防线，不是脱敏功能。
 - **编号迁移而非全包 AutoMigrate**：历史 schema 变更包含 AutoMigrate 表达不了的数据修正（清重、列改型），编号 + 幂等判重让升级路径可审计可重跑。
 

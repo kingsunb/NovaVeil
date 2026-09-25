@@ -16,7 +16,6 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/seal"
 	"github.com/kingsunb/NovaVeil/internal/server"
 	"github.com/kingsunb/NovaVeil/internal/task"
-	"github.com/kingsunb/NovaVeil/internal/update"
 	"github.com/kingsunb/NovaVeil/internal/utils/shutdown"
 	"github.com/spf13/cobra"
 )
@@ -43,10 +42,6 @@ var startCmd = &cobra.Command{
 	// RunE 而非 Run: 启动任一环节失败必须把错误交回 cobra → Execute → os.Exit(1),
 	// 否则进程以退出码 0 结束, Docker restart: on-failure 与 systemd Restart=on-failure 都不会拉起。
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// 自更新回滚检查: 若上次更新后新版本反复启动失败, 回滚到 .old。
-		// 必须在任何初始化之前调用 — 回滚时直接 re-exec, 不返回。
-		update.CheckPendingUpdate()
-
 		shutdown.Init(log.Default())
 		if err := db.InitDB(conf.AppConfig.Database.Type, conf.AppConfig.Database.Path, conf.IsDebug()); err != nil {
 			log.Errorf("database init error: %v", err)
@@ -100,9 +95,6 @@ var startCmd = &cobra.Command{
 			log.Errorf("server start error: %v", err)
 			return fmt.Errorf("服务启动失败: %w", err)
 		}
-		// 服务器成功监听后清除更新待验证标记: 在延迟窗口内崩溃会被
-		// 下次启动的 CheckPendingUpdate 检测到并自动回滚。
-		update.ClearUpdateMarker()
 		// Register in reverse execution order. Shutdown executes strict LIFO:
 		// 1) cancel in-flight HTTP contexts + gracefully drain/force-close ingress,
 		// 2) cancel task lifecycle + wait for background task goroutines,

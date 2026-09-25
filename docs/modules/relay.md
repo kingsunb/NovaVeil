@@ -39,7 +39,7 @@
 
 ### 全链路可视化与请求状态
 
-`state.go` 的 RequestState 记录每轮 startRound / finishRound（含渠道 / Key / 代理 / 协议标签与每次尝试轨迹），`OpenRouteStream` 以 SSE 向管理台推送路由状态快照与增量；失败正文截到 64 KiB，API Key 只存尾 4 位。
+`state.go` 的 RequestState 记录每轮 startRound / finishRound（含渠道 / Key / 代理 / 协议标签与每次尝试轨迹），`OpenRouteStream` 以 SSE 向管理台推送路由状态快照与增量；失败正文截到 64 KiB，API Key 只存尾 4 位。终态请求体与响应体常驻内存的是 64 KiB 预览；**会话留档（`data/conversations/*.jsonl`，0600）存全量终态报文**：请求侧为脱敏后的占位符版，响应侧为还原占位符→原文后的版本（已拍板：预期行为，不修，见 [mask.md](mask.md) 已知边界）。
 
 ## 设计想法
 

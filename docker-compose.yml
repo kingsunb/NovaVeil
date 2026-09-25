@@ -68,7 +68,6 @@ services:
       NOVAVEIL_SERVER_HOST: 0.0.0.0
       NOVAVEIL_SERVER_PORT: "8080"
       NOVAVEIL_LOG_LEVEL: info
-      NOVAVEIL_DISABLE_SELF_UPDATE: "true"
       # 反代终止 TLS 时启用 Secure Cookie (其他场景保持 false 以免登录被锁)。
       # NOVAVEIL_SECURITY_COOKIE_SECURE: "true"
 

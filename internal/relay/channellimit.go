@@ -22,6 +22,8 @@ import (
 )
 
 // errChannelConcurrencyFull 渠道并发槽位已满且 1 秒等待超时。
+// 属本地准入拒绝而非上游故障: 调用方(handler)在失败记账前以 ErrClassChannelBusy
+// 短路, 不计入成员业务失败连击, 也不进入成员冷却或清除会话粘合。
 var errChannelConcurrencyFull = errors.New("channel concurrency limit reached")
 
 // channelRPMWindow 滑动窗口长度; 变量以便测试注入短窗口。

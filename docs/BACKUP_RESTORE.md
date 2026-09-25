@@ -31,7 +31,11 @@ POST /api/v1/setting/import
 
 The POST endpoint accepts the exported JSON body or a multipart field named `file`.
 Store exports encrypted and with mode `0600`; they are credentials, not ordinary
-configuration files.
+configuration files. The plaintext keys in exports are an intentional, accepted
+design decision — they will not be changed: an encrypted export would defeat the
+offline-restore purpose, and the export endpoint already enforces POST + NoStore +
+an audit-log IP warning. The security boundary is the operator's handling of the
+export file, not the export format.
 
 ## Full SQLite disaster-recovery backup
 

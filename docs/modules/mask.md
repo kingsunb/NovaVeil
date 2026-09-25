@@ -20,6 +20,8 @@
 ## 已知边界
 
 - 脱敏与转发的耦合点集中在 `relay/mask_integration.go`，开启脱敏会给每个请求增加一次全文扫描与还原的开销；性能敏感的分组应按分组级开关关闭。
+- **还原后的明文响应落入会话留档与请求状态（已拍板：预期行为，不修）**：脱敏的承诺边界是「命中的原文不上游」，不是「原文在本地零落盘」。非流式 `restoreNonStream`（`handler.go`）与流式逐事件 `restoreStreamEvent` 聚合出的**还原后**响应体，经 `markSucceeded` → `CaptureConversation` 全量写入会话留档 `data/conversations/*.jsonl`（`ConversationRecord.Response`；请求侧 `RawRequest` 恒为占位符版）；请求终态状态里的响应体同样存还原版（进程内预览 64 KiB 截断）。多轮会话中上游回显上下文时，命中原文会按预期出现在留档与状态里；留档受 0600 权限、保留天数、目录硬预算与磁盘水位四重约束。2026-09 审计复核后维持该取舍：留档是管理员本机审计面，与日志详情可见性同域。
+- **命中原文入 error_logs（已拍板：预期行为，不修）**：错误日志的命中明细存 `label + original + placeholder`，原文为命中片段（单条 ≤256B、128 条/日志、总量 32KB，超限截断置 `mask_matches_truncated`），可见性边界与日志详情/错误日志既有管理员可见性一致，`normalizeMaskMatches` 有界归一、不 redact 原文（redact 会破坏「展示命中原文」的目的）。2026-09 审计复核后维持：这是 [07-日志详情命中明细](../脱敏开发/07-日志详情命中明细.md) 的显式设计决策，非缺陷。
 
 ## 深入阅读
 

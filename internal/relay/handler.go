@@ -177,6 +177,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		exclude := 0                                   // 本请求已放弃的成员 ID, 重扫时跳过以免再次选中。
 		refSkips := 0                                  // 本请求内结构性跳过的引用计数, 超过成员总数说明全部引用均不可用。
 		nonRetryable := make(map[int]bool)             // 出现过确定性 4xx(400/404/422)的成员集合, 全部成员都出现时终止请求。
+		busyRejected := make(map[int]bool)             // 并发槽位满被本地准入拒绝的成员集合: 每成员满载一次即换下一优先级, 全部满载时终止请求。
 		rounds := 0                                    // 本请求已消耗的尝试轮次, 含引用链结构性跳过等一切循环路径。
 		startedAt := time.Now()                        // 请求进入转发循环的时刻, 用于整体安全截止时间判定。
 		relayConfig := model.DefaultGroupRelayConfig() // 最近一次成功读取的分组 Relay 配置, 分组暂不可得时以默认值兜底。
@@ -561,6 +562,25 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					earlyEofRetried[item.ID] = true
 					request.releaseRoundLifecycle()
 					releaseRefChainHops(hops)
+					continue
+				}
+				// 渠道并发槽位满载的本地准入拒绝: acquire 等待 1 秒后仍无空位, 未发起任何
+				// 上游调用。这不是上游故障, 不进入失败记账与成员冷却, 也不清会话粘合——
+				// 对齐请求体预算 413 的准入语义(bodylimit): 只拒绝本次准入, 不毒化成员健康度。
+				// 立即换下一优先级成员; 每个成员满载一次即记录, 全部成员都满载时按
+				// 503+Retry-After 终止请求, 让客户端稍后重试而非空耗轮次。
+				if errors.Is(err, errChannelConcurrencyFull) {
+					busyRejected[item.ID] = true
+					request.releaseRoundLifecycle()
+					// 整链无结论释放(含叶子): 与清洗重试路径同语义, 防止候选占用滞留钉死整组。
+					releaseRefChainHops(hops)
+					if len(busyRejected) >= len(group.Items) {
+						request.markFailed(errAllChannelsBusy, "", nil)
+						recordErrorLog(request)
+						rejectRequest(c, inbound, errAllChannelsBusy)
+						return
+					}
+					exclude = item.ID
 					continue
 				}
 				// 上游 400: 可能因请求体包含上游不兼容的非标准字段(如 stop 字符串、developer 角色)。
@@ -1144,6 +1164,11 @@ var errNoAvailableChannels = errors.New("暂无可用渠道")
 // 使用与 errNoAvailableChannels 相同的 rejectRequest 路径返回 503, 避免对客户端协议层的额外协议变更。
 var errAllRequestsStopped = errors.New("服务器过载，请稍候")
 
+// errAllChannelsBusy 全部成员的并发槽位都满载时面向下游的统一终态错误。
+// 满载是本地准入拒绝而非上游故障, 返回 503(+Retry-After) 让下游 SDK 按可重试处理;
+// 成员健康度不受影响(不冷却不清粘合), 槽位释放后重试即可命中。
+var errAllChannelsBusy = errors.New("渠道并发已满，请稍候重试")
+
 // errRoundsExceeded 是路由层轮次耗尽的哨兵错误: 所有成员均已试过且无可用结论,
 // 触发全局尝试上限。属于路由层耗尽而非渠道错误, 归类 rounds_exhausted, 不落库持久化。
 var errRoundsExceeded = errors.New("请求尝试轮次超限")
@@ -1257,7 +1282,7 @@ func recordErrorLog(request *RequestState) {
 // 其余请求级错误(协议/参数问题)同为 400, 下游按不可重试的确定性失败处理。
 func rejectRequest(c *gin.Context, inbound transformer.Inbound, err error) {
 	status := http.StatusBadRequest
-	if errors.Is(err, errAllRequestsStopped) {
+	if errors.Is(err, errAllRequestsStopped) || errors.Is(err, errAllChannelsBusy) {
 		status = http.StatusServiceUnavailable
 		c.Header("Retry-After", "5")
 	}

@@ -49,6 +49,7 @@ const (
 	ErrClassUpstream5xx     ErrClass = "upstream_5xx"     // 上游返回 5xx 状态码。
 	ErrClassUpstreamNetwork ErrClass = "upstream_network" // 网络/代理/DNS/TLS 等基础设施层错误, 按 MemberInfraMaxRetries 独立计数, 达到后走正常冷却通道。
 	ErrClassUpstream        ErrClass = "upstream_error"   // 其余上游侧错误。
+	ErrClassChannelBusy     ErrClass = "channel_busy"     // 渠道并发槽位满载的本地准入拒绝: 未发起上游调用, 非上游故障, 不计入成员失败与冷却。
 	ErrClassRoundsExhausted ErrClass = "rounds_exhausted" // 路由层耗尽（轮次/时长超限），非渠道错误，不落库持久化。
 )
 
@@ -730,6 +731,9 @@ func classifyRound(err error, parentCtx, roundCtx context.Context) ErrClass {
 		}
 		if errors.Is(err, errNoAnswerStop) {
 			return ErrClassNoAnswer
+		}
+		if errors.Is(err, errChannelConcurrencyFull) {
+			return ErrClassChannelBusy
 		}
 		if errors.Is(err, errStreamEarlyEof) {
 			return ErrClassEarlyEof

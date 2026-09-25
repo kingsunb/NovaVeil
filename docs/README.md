@@ -34,7 +34,6 @@
 | [modules/storage-secrets.md](modules/storage-secrets.md) | 数据层：三方言、迁移、seal 静态加密、备份导入导出 |
 | [modules/eval.md](modules/eval.md) | 模型评估：队列、租约、崩溃恢复、互斥 |
 | [modules/task-limits.md](modules/task-limits.md) | 后台任务、模型同步、并发与 RPM 限流 |
-| [modules/update.md](modules/update.md) | 自更新：校验、回滚、开关语义 |
 | [modules/web-next.md](modules/web-next.md) | 前端控制台：结构、鉴权前端面、凭据生命周期、测试体系 |
 | [modules/build-ci.md](modules/build-ci.md) | 构建链、Docker、CI 工作流、供应链 |
 

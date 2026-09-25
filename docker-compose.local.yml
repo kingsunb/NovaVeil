@@ -48,7 +48,6 @@ services:
       NOVAVEIL_SERVER_HOST: 0.0.0.0
       NOVAVEIL_SERVER_PORT: "8080"
       NOVAVEIL_LOG_LEVEL: debug
-      NOVAVEIL_DISABLE_SELF_UPDATE: "true"
 
     ports:
       - "${NOVAVEIL_BIND:-127.0.0.1}:18088:8080"
