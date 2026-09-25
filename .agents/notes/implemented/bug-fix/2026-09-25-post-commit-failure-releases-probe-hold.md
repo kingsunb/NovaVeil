@@ -32,4 +32,4 @@ Status: implemented
 ## 验证
 
 - `internal/relay/probe_hold_release_test.go`：`TestPostCommitClientGoneReleasesProbeHold` 断言 clientGone 定稿后 `ProbeItemID==0`、`HalfOpens` 为空、`EmergencyActive==0`。
-- 全量 `go test -race -count=1 -timeout=20m ./...` 通过；CI 的 `-race` 门禁见 [CI 启用 -race 并修复三处真实数据竞态](../testing/2026-09-25-enable-race-detector-in-ci.md)。
+- 全量 `go test -race -count=1 -timeout=20m ./...` 通过；本批已修三处实测竞态（hits→atomic.Int32、task.go runStopMu、server.go httpSrvMu）。CI 启用 `-race` 的 workflow 改动因 PAT 缺 workflow scope 暂缓，单独提交待推送（见 commit 0edd1df）。
