@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/charmbracelet/log"
 )
 
 // VersionPrefix 是密文字符串的版本前缀; 无前缀值一律视为存量明文。
@@ -172,6 +174,10 @@ func resolveKey(key, keyFile string) ([]byte, error) {
 	if err := os.Chmod(keyFile, 0o600); err != nil {
 		return nil, fmt.Errorf("设置加密密钥文件权限失败: %w", err)
 	}
+	// 静默换新密钥会让存量 nv1: 密文全部不可解。告警把"首次部署"与"密钥丢失后重启"
+	// 区分开: 新装看到属正常; 已有数据的实例看到必须立即从备份恢复密钥文件,
+	// 旧凭据否则不可解且当前没有轮换/re-seal 工具可救。
+	log.Warnf("seal: 加密密钥文件缺失, 已生成新密钥 %s(权限 0600)。首次部署属正常; 若本实例已有 nv1: 密文数据, 旧凭据将无法解密, 请立即从备份恢复密钥文件", keyFile)
 	return raw[:], nil
 }
 

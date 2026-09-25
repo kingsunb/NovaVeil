@@ -20,9 +20,12 @@ import (
 
 var (
 	// httpSrv 使用指针, 避免 http.Server 内含 sync/atomic.noCopy 被值拷贝
-	// (go vet 报 "copies lock value"), 并允许测试中原子替换服务器实例
-	// 而不与并发 Serve 协程产生数据竞争。
+	// (go vet 报 "copies lock value"), 并允许测试中替换服务器实例。
 	httpSrv *http.Server
+	// httpSrvMu 保护 httpSrv 指针本身的并发读写: 测试在 t.Cleanup 里恢复指针, 与
+	// Serve goroutine 的读取、Shutdown/Close 的调用并发时, 裸指针赋值构成数据竞争。
+	// 所有访问先在锁内快照再在锁外操作; 不持锁调用 Serve/Shutdown/Close 以免阻塞停机。
+	httpSrvMu sync.Mutex
 
 	// baseCtx/baseCancel 为所有 HTTP 请求提供共享根 context。
 	// CancelInFlight 取消该 context 后, 每个活动请求的 context 立即进入 Done,
@@ -69,6 +72,7 @@ func Start() error {
 	// 头部慢发(Slowloris)需要 ReadHeaderTimeout 显式限制; 闲置长连接需要 IdleTimeout 主动回收。
 	// 流式转发(LLM SSE)的写出时长由请求上下文与客户端连接控制, 不在这里设 WriteTimeout, 避免
 	// 误截长流。MaxHeaderBytes 收紧到 1MB 防止异常大的 header 撑爆内存。
+	httpSrvMu.Lock()
 	httpSrv = &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", conf.AppConfig.Server.Host, conf.AppConfig.Server.Port),
 		Handler:           r,
@@ -77,6 +81,7 @@ func Start() error {
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
+	httpSrvMu.Unlock()
 
 	// 为所有请求注入共享根 context: CancelInFlight 取消后, 每个活动请求的
 	// context 立即进入 Done, handler 可据此尽快收尾, 而非被动等待 Shutdown 超时。
@@ -84,19 +89,22 @@ func Start() error {
 	baseCtx, baseCancel = context.WithCancel(context.Background())
 	ctxForBase := baseCtx
 	baseCtxMu.Unlock()
-	httpSrv.BaseContext = func(_ net.Listener) context.Context {
+	httpSrvMu.Lock()
+	srv := httpSrv
+	httpSrvMu.Unlock()
+	srv.BaseContext = func(_ net.Listener) context.Context {
 		return ctxForBase
 	}
 	// 同步 bind: 端口占用/地址非法时把错误交回 cmd, 进程以非 0 退出,
 	// Docker restart=on-failure 与 systemd 才能按失败拉起; serve 阶段的
 	// 错误仍在 goroutine 里记日志, 不阻塞 Start 返回。
-	ln, err := net.Listen("tcp", httpSrv.Addr)
+	ln, err := net.Listen("tcp", srv.Addr)
 	if err != nil {
 		router.ResetRoutes()
-		return fmt.Errorf("listen %s: %w", httpSrv.Addr, err)
+		return fmt.Errorf("listen %s: %w", srv.Addr, err)
 	}
 	go func() {
-		if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Errorf("http server serve error: %v", err)
 		}
 	}()
@@ -119,12 +127,15 @@ func CancelInFlight() {
 // 若 deadline 超时, 立即调用 Close 强制中断所有残余连接作为兜底,
 // 避免长 SSE/慢任务在后续 flush/DB close 阶段继续写入。
 func Shutdown(ctx context.Context) error {
-	err := httpSrv.Shutdown(ctx)
+	httpSrvMu.Lock()
+	srv := httpSrv
+	httpSrvMu.Unlock()
+	err := srv.Shutdown(ctx)
 	// 重置路由注册标志，允许后续重新 Start（graceful restart / 测试隔离）。
 	router.ResetRoutes()
 	if err != nil {
 		// 超时或取消: 强制关闭所有连接, 不让残余 handler 在 DB 关闭后继续处理。
-		_ = httpSrv.Close()
+		_ = srv.Close()
 		return err
 	}
 	return nil
@@ -132,7 +143,10 @@ func Shutdown(ctx context.Context) error {
 
 // Close 立即中断所有连接. 仅用于 Shutdown 已失败或被取消后的兜底; 优先走 Shutdown。
 func Close() error {
-	return httpSrv.Close()
+	httpSrvMu.Lock()
+	srv := httpSrv
+	httpSrvMu.Unlock()
+	return srv.Close()
 }
 
 // configureTrustedProxies 按配置设置可信代理 CIDR/IP 列表。

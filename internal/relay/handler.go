@@ -949,6 +949,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					request.markFailed(finalErr, string(responseBody), result.usage)
 					recordErrorLog(request)
 				}
+				// 提交后的失败按整链无结论归还占用: 叶子可能是半开恢复候选(ProbeItemID)或紧急兜底成员,
+				// 不归还则候选占用与紧急并发额度滞留, pickGroupItem 永久返回空, 整组钉死到重启。
+				// recordPostCommitFailure 只管连击记账不碰占用状态; 与上方 stopRequested 分支及
+				// RPM 等待取消、400 清洗重试等兄弟路径的释放语义对齐。
+				releaseRefChainHops(hops)
 				return
 			}
 			// 流已经完整交付且聚合成功, 这时才确认成员恢复并续上粘合。

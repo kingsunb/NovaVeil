@@ -109,6 +109,15 @@ and, when non-empty, replaces the file list. An empty list ignores
 `X-Forwarded-For`, so login rate limits see the proxy address. Change the
 configuration; do not edit application code.
 
+Behind a reverse proxy with no trusted proxy configured, every client shares the
+proxy address: the login rate limit and the admin token bucket (when enabled)
+collapse into a single bucket keyed to the proxy IP, so one client can lock out
+the entire site. Deploying behind a proxy therefore requires listing the proxy
+CIDR in `server.trusted_proxies`. Separately, any inbound `X-Forwarded-Proto: https`
+header marks the auth cookie `Secure` regardless of `trusted_proxies`; the flag only
+becomes stricter this way and is never relaxed, and restricting that header to
+trusted proxies remains an open ROADMAP item.
+
 `security.cookie_secure` defaults to false (`NOVAVEIL_SECURITY_COOKIE_SECURE`).
 The auth cookie is also marked Secure when the request itself is TLS. A proxy that
 terminates TLS presents plain HTTP to the process, so set the flag there. Leave it

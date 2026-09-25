@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,9 +24,10 @@ func TestStopRequestDuringRetryWaitEndToEnd(t *testing.T) {
 	setupFailoverTest(t)
 
 	// 假上游始终返回 500, 使每轮都失败并进入退避等待。
-	var hits int
+	// hits 由上游 handler goroutine 写、测试主 goroutine 轮询读, 必须原子访问(race 检测下裸 int 报 DATA RACE)。
+	var hits atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		hits.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"error":{"message":"upstream broken"}}`))
@@ -62,12 +64,12 @@ func TestStopRequestDuringRetryWaitEndToEnd(t *testing.T) {
 	// 等待首轮上游调用发生, 确认请求已进入退避等待。
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if hits >= 1 {
+		if hits.Load() >= 1 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if hits < 1 {
+	if hits.Load() < 1 {
 		t.Fatal("上游未被调用, 请求未正常启动")
 	}
 
@@ -98,7 +100,7 @@ func TestStopRequestDuringRetryWaitEndToEnd(t *testing.T) {
 	}
 
 	// 只应发生首轮 1 次上游调用, 终止后不应继续重试。
-	if hits != 1 {
-		t.Fatalf("终止后不应继续重试, 实际上游调用 %d 次", hits)
+	if hits.Load() != 1 {
+		t.Fatalf("终止后不应继续重试, 实际上游调用 %d 次", hits.Load())
 	}
 }

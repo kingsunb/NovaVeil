@@ -326,7 +326,7 @@ experimental_bearer_token = "sk-NovaVeil-..."
 - 默认直连部署不信任任何代理头（`X-Forwarded-For` 不可伪造绕过限速）。置于反向代理之后时，设置 `server.trusted_proxies`（或逗号分隔的 `NOVAVEIL_SERVER_TRUSTED_PROXIES`）为代理的 CIDR 或 IP。不要为此修改应用代码
 - Docker 升级必须通过 `NOVAVEIL_IMAGE` 使用经过审查的版本或 digest；只读 rootfs 会有意阻止容器内替换二进制
 - 镜像固定、HTTPS、目录权限、资源限制与更新校验见 [安全部署](docs/SECURE_DEPLOYMENT.md)
-- `Build, test, and audit` 会对每个平台 Docker archive 单独做漏洞扫描，并通过 `dev-publish` environment 控制多架构 manifest 的发布。发布 job **绝不重新 build** 镜像，只 `docker load` 刚才已扫描的 archive，与 `IMAGE_IDS.tsv` 逐镜像核对 ID，然后以 `image@sha256:...` 不可变引用推送。任何 HIGH/CRITICAL 漏洞都会让该次构建失败。
+- 完整审计链（逐平台 Docker archive 的 Trivy HIGH/CRITICAL 门禁、CycloneDX SBOM、归档校验、smoke 测试）只在手动触发的 `Build, test, and audit` workflow 里，该 workflow 只产出审计 artifact、不推送镜像——供正式 release job 预留的 `PUBLISH.sha256` 尚未接线。push main 触发的 `docker-publish` 只做 test / vet / 前端 typecheck 门禁，随后 buildx 直接把多架构镜像推到 GHCR 的 `:latest` / `:sha-<short>` 可变 tag：没有逐平台漏洞扫描、SBOM 或 dev-publish environment。生产部署必须 pin `image@sha256:...` digest；镜像归档无签名（Sigstore 未实现）是已知 remaining risk。
 - 首次发布需要一次运营操作：在 **仓库 Settings → Actions → General → Workflow permissions** 中勾选 `Read and write permissions`；在 kingsunb/novaveil 的 **Package settings** 中允许 workflow 写该包。否则 GitHub 会在发布步骤返回 `denied: permission_denied: write_package`，即使构建已通过。
 - 应用导出、数据库完整备份与恢复演练见 [备份与恢复](docs/BACKUP_RESTORE.md)
 - 无 Docker 的源码构建与运行见 [独立环境部署](docs/STANDALONE_DEPLOYMENT.md)

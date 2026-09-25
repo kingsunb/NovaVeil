@@ -45,10 +45,10 @@ Go 1.26.7 / Node 22.19 / pnpm 11.21 在 CI 硬编码；本地开发用 `GOTOOLCH
 
 ## 已知边界
 
-- CI 的 `go test` **不跑 `-race`**，且仓库测试代码存在 3 处真实数据竞态（测试变量 / 测试助手 resetLifecycle / shutdown flaky）——启用 `-race` 前需先修测试卫生；产品代码的竞态检测覆盖为零。
+- CI 的 `go test` 以 `-race` 运行（超时 20m）：新增竞态须修复而不是移除该开关。
 - `docker-publish` 推 `:latest` / `:sha-<short>` 可变 tag 且 `provenance:false`（无构建出处证明）；生产必须 pin digest。
 - 协议转换核心依赖 `looplj/axonhub/llm` 未打 tag 的 pseudo-version（go.sum 锁哈希，防篡改不防上游策略变化）；`tmaxmax/go-sse` 经 replace 指向 looplj fork（上游缺 Stream API），供应链集中度偏高。
-- `web-router` 的 nginx 基础镜像未 pin digest（注释待 registry-lookup）；healthcheck 用 curl 而官方 nginx alpine 无 curl。
+- `web-router` 的 nginx 基础镜像已按 digest 固定；升级时须与 `web-next/Dockerfile` 的 runtime 阶段同步并核对 digest。
 - `.gitignore` 的 `pnpm-lock.yaml` 规则实际命中已跟踪的 `web-next/pnpm-lock.yaml`（对已跟踪文件无效）——这是一个潜在陷阱：若 lockfile 一旦脱离跟踪会被静默忽略。
 - web-next 的 Dockerfile 内 pnpm 版本与 CI 需对齐时以 CI（11.21+）为准。
 

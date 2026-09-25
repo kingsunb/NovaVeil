@@ -3,13 +3,30 @@ package relay
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/kingsunb/NovaVeil/internal/model"
 )
 
 // errChannelModelUnavailable 表示成员无法定位到渠道模型(引用成员或模型刚被删除), 不能发起合成探测。
 var errChannelModelUnavailable = errors.New("channel model unavailable")
+
+// runProbeSafely 执行一次合成探测并兜住 panic, 是探测 goroutine 的唯一 recover 防线:
+// 探测实现(含渠道回调)抛出的 panic 一律转为错误返回并记录栈。两处调用场景都依赖"必有结论"——
+// 批量探测的收集器按候选数死等 results, 缺一个结果整个恢复流程悬挂;
+// 异步探测的 goroutine 无上层 recover, panic 直接击穿网关进程, 且成员会钉死在 HALF_OPEN 被选路永久跳过。
+func runProbeSafely(ctx context.Context, channel model.Channel, modelName string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("probe panic: %v", r)
+			log.Errorf("relay probe panicked: %v\n%s", r, debug.Stack())
+		}
+	}()
+	return probeChannelFunc(ctx, channel, modelName)
+}
 
 // claimHalfOpenLocked 探测占用的唯一判定入口: 仅当成员处于 OPEN 且冷却已到期且未被任何路径占用时,
 // 才原子将其置入 HalfOpens。请求触发异步探测、后台定时探测与恢复流程全部经由此处判定,
@@ -82,7 +99,7 @@ func runAsyncProbe(group model.Group, item model.GroupItem) {
 	}
 	if err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
-		err = probeChannelFunc(ctx, channel, channelModel.Name)
+		err = runProbeSafely(ctx, channel, channelModel.Name)
 		cancel()
 	}
 

@@ -108,16 +108,27 @@ func TestCancelInFlightCancelsBaseContext(t *testing.T) {
 	}
 }
 
+// swapHTTPServer 在锁内置换全局 httpSrv 并返回旧值, 供测试的 t.Cleanup 恢复。
+// httpSrv 指针的读写必须持 httpSrvMu: Serve goroutine、Shutdown/Close 与本测试的
+// 恢复路径并发访问同一指针, 裸赋值在 -race 下报 DATA RACE。锁外返回值仅供恢复用。
+func swapHTTPServer(srv *http.Server) (old *http.Server) {
+	httpSrvMu.Lock()
+	defer httpSrvMu.Unlock()
+	old = httpSrv
+	httpSrv = srv
+	return old
+}
+
 // TestShutdownForceCloseOnTimeout 验证 Shutdown 超时后调用 Close 强制中断所有连接:
 // 阻塞 handler 使 Shutdown 无法在 deadline 内完成, Shutdown 应返回 error 并强制关闭。
 func TestShutdownForceCloseOnTimeout(t *testing.T) {
 	// 保存包级状态, 测试后恢复。
 	// httpSrv 是 *http.Server 指针, 保存/恢复指针不会拷贝 struct 内部状态。
-	oldSrv := httpSrv
+	oldSrv := swapHTTPServer(&http.Server{Handler: nil})
 	oldBaseCtx := baseCtx
 	oldBaseCancel := baseCancel
 	t.Cleanup(func() {
-		httpSrv = oldSrv
+		swapHTTPServer(oldSrv)
 		baseCtxMu.Lock()
 		baseCtx = oldBaseCtx
 		baseCancel = oldBaseCancel
@@ -142,12 +153,13 @@ func TestShutdownForceCloseOnTimeout(t *testing.T) {
 	ctxForBase := baseCtx
 	baseCtxMu.Unlock()
 
-	httpSrv = &http.Server{
+	srv := &http.Server{
 		Handler:     mux,
 		BaseContext: func(_ net.Listener) context.Context { return ctxForBase },
 	}
-	go func() { _ = httpSrv.Serve(ln) }()
-	t.Cleanup(func() { _ = httpSrv.Close() })
+	swapHTTPServer(srv)
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
 
 	// 发起一个会阻塞的请求。
 	go func() {
@@ -175,11 +187,11 @@ func TestShutdownForceCloseOnTimeout(t *testing.T) {
 // CancelInFlight 先于 Shutdown 调用, handler 因 ctx.Done() 主动收尾,
 // Shutdown 在 deadline 内成功完成(无需强制 Close)。
 func TestShutdownOrderingCancelBeforeDrain(t *testing.T) {
-	oldSrv := httpSrv
+	oldSrv := swapHTTPServer(&http.Server{Handler: nil})
 	oldBaseCtx := baseCtx
 	oldBaseCancel := baseCancel
 	t.Cleanup(func() {
-		httpSrv = oldSrv
+		swapHTTPServer(oldSrv)
 		baseCtxMu.Lock()
 		baseCtx = oldBaseCtx
 		baseCancel = oldBaseCancel
@@ -206,12 +218,13 @@ func TestShutdownOrderingCancelBeforeDrain(t *testing.T) {
 	ctxForBase := baseCtx
 	baseCtxMu.Unlock()
 
-	httpSrv = &http.Server{
+	srv := &http.Server{
 		Handler:     mux,
 		BaseContext: func(_ net.Listener) context.Context { return ctxForBase },
 	}
-	go func() { _ = httpSrv.Serve(ln) }()
-	t.Cleanup(func() { _ = httpSrv.Close() })
+	swapHTTPServer(srv)
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
 
 	// 发起一个长 SSE 请求(在 goroutine 中, handler 阻塞到 context 取消后才响应)。
 	respCh := make(chan *http.Response, 1)

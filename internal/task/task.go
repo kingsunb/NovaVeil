@@ -42,6 +42,10 @@ var (
 	runningStopped bool
 
 	// runStopCh 在 StopAll 时关闭, 使 RUN() 能解除阻塞并返回。
+	// runStopMu 保护 runStopCh/runStopOnce 的并发访问: 测试的 resetLifecycle 在 t.Cleanup 中
+	// 重建这两个值, 与 StopAll 的读取关闭构成数据竞争(-race 可复现)。RUN/StopAll 均先在
+	// 锁内快照再在锁外等待/关闭, 避免持锁等通道死锁。
+	runStopMu   sync.Mutex
 	runStopCh   chan struct{}
 	runStopOnce sync.Once
 )
@@ -63,10 +67,12 @@ func LifecycleContext() context.Context {
 // resetLifecycle 重建生命周期 context, 供测试在 StopAll 后重置状态。仅用于测试。
 func resetLifecycle() {
 	lifecycleCtxMu.Lock()
-	defer lifecycleCtxMu.Unlock()
 	lifecycleCtx, lifecycleCancel = context.WithCancel(context.Background())
+	lifecycleCtxMu.Unlock()
+	runStopMu.Lock()
 	runStopCh = make(chan struct{})
 	runStopOnce = sync.Once{}
+	runStopMu.Unlock()
 	runningWGMu.Lock()
 	runningStopped = false
 	runningWGMu.Unlock()
@@ -135,8 +141,11 @@ func RUN() {
 	}
 	tasksMu.RUnlock()
 
-	// 阻塞主协程, 直到 StopAll 关闭 runStopCh
-	<-runStopCh
+	// 阻塞主协程, 直到 StopAll 关闭 runStopCh。锁内快照再锁外等待, 避免持锁等通道死锁。
+	runStopMu.Lock()
+	stopCh := runStopCh
+	runStopMu.Unlock()
+	<-stopCh
 }
 
 // StopAll 停止所有定时任务: 先取消生命周期 context 让运行中的任务感知停机,
@@ -171,8 +180,12 @@ func StopAll() error {
 	// 等待所有正在执行的任务 goroutine 结束, 确保没有任务在 DB 关闭后继续写入。
 	runningWG.Wait()
 
-	// 解除 RUN() 的阻塞, 使主协程能够优雅返回。
+	// 解除 RUN() 的阻塞, 使主协程能够优雅返回。once-close 在 runStopMu 临界区内完成,
+	// 与测试 resetLifecycle 的重建互斥, 不构成数据竞争; 闭包内只关闭 channel,
+	// 不嵌套任何锁, 持锁执行无死锁风险。
+	runStopMu.Lock()
 	runStopOnce.Do(func() { close(runStopCh) })
+	runStopMu.Unlock()
 	return nil
 }
 

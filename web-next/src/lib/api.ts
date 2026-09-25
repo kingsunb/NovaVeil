@@ -62,8 +62,12 @@ import { openSSE } from "./sse";
 
 const BASE = "/api/v1";
 
+/**
+ * 后端信封的运行时形状是 {code, message, data}，但 code 从不被校验——成败纯按
+ * HTTP 状态码判断（2xx 成功路径只取 data，非 2xx 错误路径只取 message），类型
+ * 不声明未读取的字段。
+ */
 interface Envelope<T> {
-  code: number;
   message: string;
   data: T;
 }

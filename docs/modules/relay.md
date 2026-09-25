@@ -51,10 +51,8 @@
 
 ## 已知边界与缺陷
 
-- **【未修复·高】提交后失败路径泄漏探测占用**：`handler.go` 中 `firstErr` / `polluted` / `frameFailure` 的定稿路径只调 `recordPostCommitFailure` 后直接 return，不调 `releaseRefChainHops(hops)`（兄弟路径 RPM 等待取消与 400 清洗重试都显式释放并注明"不归还则整组钉死到重启"）。半开恢复候选胜出的请求一旦提交后失败，`ProbeItemID` 永久滞留，此后该分组选路永远返回空——仅删成员 / 删组 / 重启可恢复；同一路径还泄漏紧急兜底并发额度，3 次后紧急兜底失效。该缺陷已在独立测试中动态复现；修复方式是在该 return 前补 `releaseRefChainHops(hops)` 并补回归测试。
 - 主循环集中在 `handler.go`（1325 行），选路 / 熔断 / 脱敏 / 协议 / 超时 / panic 兜底交织在一个循环里，是最大的维护热点。
-- 请求体峰值内存放大：`raw.Body` 与 RequestState 内的 string 双份常驻，脱敏替换产生第三份，每轮 sjson 整份复制均未计入预算；预算按 2 份计，大 body 高并发下峰值可达预算 1.5 倍。
-- 探测 goroutine 无 recover，panic 会击穿整个进程；测试有并发场景但 CI 不跑 `-race`（见 [build-ci.md](build-ci.md)）。
+- 请求体峰值内存放大：`raw.Body` 与 RequestState 内的 string 双份常驻，脱敏替换产生第三份，每轮 sjson 整份复制均未计入预算；预算按 2 份口径计，大 body 高并发下峰值可达预算 1.5 倍——按实际 3 份拷贝修正预算口径列为 ROADMAP 未来项。
 
 ## 深入阅读
 

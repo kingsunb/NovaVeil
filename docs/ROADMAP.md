@@ -83,9 +83,16 @@
 - [x] 移动抽屉有焦点圈定和恢复。脱敏空态复用 `EmptyState`。强制改密页和回退提示使用 `BrandMark`。总览把统计失败和「暂无用量」分开。
 - [x] 可选 `router.nginx.conf` 的本地 location 重复安全头。`style-src` 的 `unsafe-inline` 仍保留。
 - [ ] Cookie 是否只在可信代理之后才承认 `X-Forwarded-Proto`，要改代码。当前任意该头都会把 Cookie 设得更严，不会放宽客户端 IP。未配置 `trusted_proxies` 时，反代后的登录限速桶会塌成代理地址。
-- [ ] 提交后流失败路径泄漏探测占用与紧急兜底额度：半开恢复候选胜出的请求在 `firstErr`/`polluted`/`frameFailure` 定稿后直接 return，不归还占用，`ProbeItemID` 永久滞留导致整组选路钉死（仅删成员/删组/重启可恢复），紧急额度 3 次后耗尽。已在独立测试动态复现，修复是在该路径补 `releaseRefChainHops(hops)` 并加回归测试；详见 [modules/relay.md](modules/relay.md) 已知边界。
+- [x] 半开恢复候选的提交后失败已归还探测占用与紧急兜底额度，回归测试 `TestPostCommitClientGoneReleasesProbeHold`；探测 goroutine panic 兜底、测试竞态修复与 CI `-race` 同批落地。
 
-明确不做，除非另开一项并写明客户端：Gemini 入站、Rerank 互转、订阅 OAuth、Responses WebSocket、提示词软亲和、水平扩展、models.dev 自动计价。gpt-load 里值得以后单独立项、但排在本页四批之后的，是凭据加模型的短冷却、API Key 协议白名单、`previous_response_id` 钉扎，以及上游没回成本时的手动单价。
+**审计遗留·未来项**：
+
+- [ ] seal 轮换 / re-seal 工具。
+- [ ] `seal` 与 `db/migrate` 包单测。
+- [ ] Chat SSE 解析器单测。
+- [ ] 请求体内存预算按实际 3 份拷贝修正口径。
+
+明确不做，除非另开一项并写明客户端：Gemini 入站、Rerank 互转、订阅 OAuth、Responses WebSocket、提示词软亲和、水平扩展、多实例部署 / 迁移互斥、models.dev 自动计价。gpt-load 里值得以后单独立项、但排在本页四批之后的，是凭据加模型的短冷却、API Key 协议白名单、`previous_response_id` 钉扎，以及上游没回成本时的手动单价。
 
 ## 7. 完成门槛
 

@@ -33,9 +33,9 @@ React 19 + Vite 8 + TypeScript 6 的管理台，React Query 5 管服务端状态
 
 ## 已知边界
 
-- Chat（手写 SSE 解析）、Mask（脱敏配置）、channel-editor（2303 行）三个页面**零单测**，Chat 也无 e2e。
+- Chat（手写 SSE 解析）、Mask（脱敏配置）、channel-editor（2303 行）三个页面**零单测**，Chat 也无 e2e——Chat SSE 解析器单测列为 ROADMAP 未来项。
 - 无 i18n 体系，文案硬编码中文——与 AGENTS.md「UI 文案走 locale」的约定不符，约定文本未随 0.2.0 前端重写同步；做国际化前需先决定改约定还是改实现。
-- 信封 `code` 字段从不校验，仅靠 HTTP 状态（当前后端契约下无实害）；SSE「连上即断」场景 onopen 会重置退避为固定 1s 重连。
+- SSE「连上即断」场景 onopen 会重置退避为固定 1s 重连。
 - 巨型组件：channel-editor 2303 行、Settings 2108、Groups 1882、Logs 1679，回归保护靠手写用例密度。
 
 ## 深入阅读
