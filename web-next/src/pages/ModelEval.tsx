@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { FlaskConical, ListChecks, ListOrdered, Play, Plus, SlidersHorizontal, Tag } from "lucide-react";
+import { FlaskConical, ListChecks, ListOrdered, Play, SlidersHorizontal, Tag } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { EVAL_PROMPT, type EvalStatsSummary, type EvalTarget } from "@/lib/model-eval";
@@ -183,7 +183,6 @@ export default function ModelEvalPage() {
     <div className="min-w-0 space-y-4 pb-4">
       <PageToolbar
         leading={<div className="flex items-center gap-2"><FlaskConical className="h-5 w-5 text-primary-text" aria-hidden /><h1 className="text-lg font-semibold tracking-tight text-ink">模型评估</h1></div>}
-        trailing={view === "history" ? <Button type="button" size="sm" onClick={() => changeView("current")}><Plus className="h-3.5 w-3.5" aria-hidden />新评估</Button> : undefined}
       />
       <p className="text-xs leading-relaxed text-ink-muted">用同一道 SVG 动画题比较模型表现，按渠道保存每次结果，支持回看、重测和按质量排序。</p>
 
