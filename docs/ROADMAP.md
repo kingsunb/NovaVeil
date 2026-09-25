@@ -2,7 +2,7 @@
 
 > 更新：2026-09-22。基线：`b38e340`（已与 `origin/main` 快进对齐）。本轮核对源码和本地参考仓库，没有跑测试或 Compose。
 > 本文是跨模块优先级。OpenCode 三项的实施细节分别在专项计划里，这里不复制任务清单。
-> 2026-09-16 及更早的路线图条目已被本页取代。`docs/audits/` 里的报告仍是形成当时的快照，不因为本页更新而改写。
+> 2026-09-16 及更早的路线图条目已被本页取代。历史审计快照已从 docs/ 移除，仍开放的问题记录在各主模块文档的「已知边界」（[modules/](modules/)）。
 
 ## 1. 状态口径
 
@@ -68,8 +68,8 @@
 
 | 计划 | 状态 |
 |---|---|
-| [按模型、按档的原生协议](OPENCODE_NATIVE_PROTOCOL_PLAN.md) | 已落地。`upstream_protocol` 为空则按渠道类型。六个出厂免费模型是 `chat`。官方 Go 渠道出厂无模型。思考档位仍按渠道类型注入。 |
-| [合法 ses_ 与 prompt_cache_key](OPENCODE_SESSION_CACHE_KEY_PLAN.md) | 已落地。合法 `ses_` 原样上送。`prompt_cache_key` 只在 Chat/Responses 转换后回写。 |
+| [按模型、按档的原生协议](modules/relay.md) | 已落地。`upstream_protocol` 为空则按渠道类型。六个出厂免费模型是 `chat`。官方 Go 渠道出厂无模型。思考档位仍按渠道类型注入。 |
+| [合法 ses_ 与 prompt_cache_key](modules/relay.md) | 已落地。合法 `ses_` 原样上送。`prompt_cache_key` 只在 Chat/Responses 转换后回写。 |
 | [能力快照](OPENCODE_MODEL_CAPABILITY_PLAN.md) | 未做。不单独打目录，不计价。 |
 
 ## 6. 第四批：文档、界面和低优先级代码
@@ -83,6 +83,7 @@
 - [x] 移动抽屉有焦点圈定和恢复。脱敏空态复用 `EmptyState`。强制改密页和回退提示使用 `BrandMark`。总览把统计失败和「暂无用量」分开。
 - [x] 可选 `router.nginx.conf` 的本地 location 重复安全头。`style-src` 的 `unsafe-inline` 仍保留。
 - [ ] Cookie 是否只在可信代理之后才承认 `X-Forwarded-Proto`，要改代码。当前任意该头都会把 Cookie 设得更严，不会放宽客户端 IP。未配置 `trusted_proxies` 时，反代后的登录限速桶会塌成代理地址。
+- [ ] 提交后流失败路径泄漏探测占用与紧急兜底额度：半开恢复候选胜出的请求在 `firstErr`/`polluted`/`frameFailure` 定稿后直接 return，不归还占用，`ProbeItemID` 永久滞留导致整组选路钉死（仅删成员/删组/重启可恢复），紧急额度 3 次后耗尽。已在独立测试动态复现，修复是在该路径补 `releaseRefChainHops(hops)` 并加回归测试；详见 [modules/relay.md](modules/relay.md) 已知边界。
 
 明确不做，除非另开一项并写明客户端：Gemini 入站、Rerank 互转、订阅 OAuth、Responses WebSocket、提示词软亲和、水平扩展、models.dev 自动计价。gpt-load 里值得以后单独立项、但排在本页四批之后的，是凭据加模型的短冷却、API Key 协议白名单、`previous_response_id` 钉扎，以及上游没回成本时的手动单价。
 

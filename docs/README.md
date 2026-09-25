@@ -2,12 +2,13 @@
 
 ## 从这里开始
 
-- **当前项目规划**：[ROADMAP.md](ROADMAP.md)。OpenCode 协议和会话头已在工作区落地；能力快照仍未做。历史审计报告不因路线图更新而改写。
+- **主模块实现**：见下方「主模块实现」一节，按模块读「怎么做的」与「设计想法」。
+- **当前项目规划**：[ROADMAP.md](ROADMAP.md)。OpenCode 协议和会话头已落地；能力快照仍未做。
 - **功能记录**：[FEATURES.md](FEATURES.md)，查看需求与修复背景；其中历史条目不替代当前工作区状态或发布记录。
 - **部署运维**：参见下表中的部署、备份与安全指南。
 - **专项实施**：前端生产改进以 [FOLLOW_UP.md](frontend-redesign/FOLLOW_UP.md) 为入口；脱敏当前进度以 [脱敏开发总览](脱敏开发/README.md) 为入口。
 
-源码中已有实现、测试源码存在、CI 通过和线上验收是不同状态。以下规划不能作为发布或验收证明；保留的审计报告维持其形成时的上下文。
+源码中已有实现、测试源码存在、CI 通过和线上验收是不同状态。以下规划不能作为发布或验收证明。
 
 | 文档 | 说明 |
 |------|------|
@@ -15,13 +16,27 @@
 | [SECURE_DEPLOYMENT.md](SECURE_DEPLOYMENT.md) | 安全部署指南（TLS、防火墙、硬化） |
 | [BACKUP_RESTORE.md](BACKUP_RESTORE.md) | 备份与恢复操作手册 |
 | [CHANNEL_PASSTHROUGH.md](CHANNEL_PASSTHROUGH.md) | 渠道 PassThrough 透传机制设计文档 |
-| [OPENCODE_NATIVE_PROTOCOL_PLAN.md](OPENCODE_NATIVE_PROTOCOL_PLAN.md) | OpenCode 按模型记录原生协议（工作区已落地，未提交） |
-| [OPENCODE_SESSION_CACHE_KEY_PLAN.md](OPENCODE_SESSION_CACHE_KEY_PLAN.md) | OpenCode 合法 ses_ 原样上送，并保留 prompt_cache_key（工作区已落地，未提交） |
 | [OPENCODE_MODEL_CAPABILITY_PLAN.md](OPENCODE_MODEL_CAPABILITY_PLAN.md) | OpenCode 同步能力快照，不带计价（仍未实施） |
 | [DEVELOPMENT_routing.md](DEVELOPMENT_routing.md) | 请求路由与故障转移开发文档 |
 | [STABILITY_UX_BASELINE.md](STABILITY_UX_BASELINE.md) | 稳定性与 UX 验收基线 |
 | [FEATURES.md](FEATURES.md) | 功能需求清单（REQ/BUG 记录与设计意图） |
 | [FREELLMAPI_PROVIDERS.md](FREELLMAPI_PROVIDERS.md) | FreeLLMAPI 免费 LLM 供应商清单（48 个供应商，含适配器与配额信息） |
+
+## 主模块实现
+
+按主模块组织的实现说明：每个模块讲「怎么做的」与「设计想法」，已知边界与深入阅读一并列出。事实与代码不一致时以代码为准；当初为什么这么定、否决过什么见各链接的 Agent Note。
+
+| 模块文档 | 覆盖范围 |
+|------|------|
+| [modules/relay.md](modules/relay.md) | 转发引擎：请求生命周期、三态熔断、会话粘合、协议互转、透传、全链路可视化 |
+| [modules/server-auth.md](modules/server-auth.md) | HTTP 服务、JWT Cookie / API Key 鉴权、登录限速、SSE |
+| [modules/mask.md](modules/mask.md) | 请求脱敏：三层开关、规则引擎、流式还原、会话隔离 |
+| [modules/storage-secrets.md](modules/storage-secrets.md) | 数据层：三方言、迁移、seal 静态加密、备份导入导出 |
+| [modules/eval.md](modules/eval.md) | 模型评估：队列、租约、崩溃恢复、互斥 |
+| [modules/task-limits.md](modules/task-limits.md) | 后台任务、模型同步、并发与 RPM 限流 |
+| [modules/update.md](modules/update.md) | 自更新：校验、回滚、开关语义 |
+| [modules/web-next.md](modules/web-next.md) | 前端控制台：结构、鉴权前端面、凭据生命周期、测试体系 |
+| [modules/build-ci.md](modules/build-ci.md) | 构建链、Docker、CI 工作流、供应链 |
 
 ## 脱敏开发（实现说明与后续规划）
 
@@ -49,9 +64,4 @@ maskit 源码借鉴与思路参考（原 05/06）已从 docs/ 移除，历史参
 
 ## 审计报告
 
-| 文档 | 说明 |
-|------|------|
-| [audits/2026-09-18-full-audit.md](audits/2026-09-18-full-audit.md) | 2026-09-18/19 全面审计（基线实测 + 5 路深度审计 + 61 条历史问题核对） |
-| [audits/AUDIT_ISSUES_2026-09-13.md](audits/AUDIT_ISSUES_2026-09-13.md) | 2026-09-13 静态审阅快照（历史问题清单来源；状态须对照最新全面审计复核） |
-
-早前年份的归档审计报告已从 docs/ 移除，历史问题已并入 2026-09-18 全面审计第 8 节核对。
+历史审计快照（2026-09-13 起的问题清单、全面审计、跟进审计、验证与修复摘要）已从 docs/ 移除：全部条目的闭环状态已并入各主模块文档的「已知边界」与 Agent Notes，历史原文见 git 历史。

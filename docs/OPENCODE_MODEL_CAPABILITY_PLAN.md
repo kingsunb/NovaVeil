@@ -2,7 +2,7 @@
 
 > 状态：待实施。更新日期：2026-09-21。本文是实施计划，不是已落地行为。
 > 当前事实：`internal/task/sync.go` 只把 `/v1/models` 的模型名写成 `ChannelModel`；`ChannelModelLimit` 只有管理员配置的 `max_output` 和 `thinking_level`，由 `applyChannelModelLimits` 写进上游请求。
-> 与 [按模型协议计划](OPENCODE_NATIVE_PROTOCOL_PLAN.md) 共用同一次公开目录读取，但能力字段不决定协议，协议字段也不写入能力。两份计划可以分批落地；先落地的一方拥有这次 HTTP 读取，后落地的一方复用，不对同一目录打两次。
+> 与按模型协议方案（已落地，现记录于 [modules/relay.md](modules/relay.md)）共用同一次公开目录读取，但能力字段不决定协议，协议字段也不写入能力。协议方案先落地并拥有这次 HTTP 读取，本项落地时复用，不对同一目录打两次。
 
 ## 1. 问题
 
