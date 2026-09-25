@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-import {
-  UpstreamProtocolLabel,
-  upstreamProtocolLabel,
-} from "./upstream-protocol";
+import { UpstreamProtocolLabel } from "./upstream-protocol";
+import { upstreamProtocolLabel } from "./upstream-protocol-label";
 
 describe("upstreamProtocolLabel", () => {
   it("已知协议用周围已有的协议名", () => {
