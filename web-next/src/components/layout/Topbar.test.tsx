@@ -12,11 +12,11 @@ vi.mock("@/store/auth", () => ({
   useAuth: () => ({ username: "admin", logout }),
 }));
 
-function renderTopbar() {
+function renderTopbar(initialEntry = "/channels") {
   const onOpenCommand = vi.fn();
   const onOpenNavigation = vi.fn();
   render(
-    <MemoryRouter initialEntries={["/channels"]}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Topbar onOpenCommand={onOpenCommand} onOpenNavigation={onOpenNavigation} />
     </MemoryRouter>,
   );
@@ -24,6 +24,14 @@ function renderTopbar() {
 }
 
 beforeEach(() => vi.clearAllMocks());
+
+describe("Topbar 模型评估标题", () => {
+  it.each(["/model-eval", "/model-eval?view=history"])("%s 在公共顶栏显示标题与说明", (initialEntry) => {
+    renderTopbar(initialEntry);
+    expect(screen.getByRole("heading", { name: "模型评估" })).toBeInTheDocument();
+    expect(screen.getByText("用同一道 SVG 动画题比较模型表现")).toBeInTheDocument();
+  });
+});
 
 describe("Topbar command entry", () => {
   it("exposes an accessible button and shortcut with compact mobile styling", () => {

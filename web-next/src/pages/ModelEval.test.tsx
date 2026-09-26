@@ -7,13 +7,13 @@ import ModelEvalPage from "./ModelEval";
 import { sampleChannel } from "@/test/fixtures/channels";
 import type { Channel } from "@/lib/types";
 
-function Wrapper({ children }: { children: React.ReactNode }) {
+function Wrapper({ children, initialEntry = "/model-eval" }: { children: React.ReactNode; initialEntry?: string }) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return (
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={["/?view=current"]}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         {children}
       </MemoryRouter>
     </QueryClientProvider>
@@ -27,7 +27,7 @@ beforeEach(() => {
   );
 });
 
-/** 仅拦截「当前评估」视图所需接口，其余兜底空数据。 */
+/** 拦截评估视图所需接口，其余兜底空数据。 */
 function mockEvalApis(channels: Channel[], stats: Array<{ channel_id: number; model_name: string; total_count: number; success_count: number }> = []) {
   vi.stubGlobal("fetch", vi.fn((url: string) => {
     if (url.includes("/channel/list")) {
@@ -41,6 +41,14 @@ function mockEvalApis(channels: Channel[], stats: Array<{ channel_id: number; mo
     if (url.includes("/model-eval/stats")) {
       return Promise.resolve(
         new Response(JSON.stringify({ code: 200, message: "success", data: { items: stats } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    }
+    if (url.includes("/model-eval/list?")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ code: 200, message: "success", data: { items: [], total: 0 } }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -65,6 +73,46 @@ function channelWith(name: string, id: number, sort: number): Channel {
     models: [{ id: id * 100, channel_id: id, name: `${name}-model`, source: "auto" }],
   };
 }
+
+describe("<ModelEvalPage /> 视图入口", () => {
+  it.each([
+    "/model-eval",
+    "/model-eval?view=",
+    "/model-eval?view=unknown",
+    "/model-eval?view=current",
+  ])("%s 打开当前评估", async (initialEntry) => {
+    mockEvalApis([channelWith("channel", 1, 10)]);
+    render(<Wrapper initialEntry={initialEntry}><ModelEvalPage /></Wrapper>);
+
+    expect(screen.getByRole("button", { name: "当前评估", pressed: true })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "选择模型" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "评估历史" })).not.toBeInTheDocument();
+  });
+
+  it("历史链接保留渠道和模型筛选，并可切回当前评估", async () => {
+    mockEvalApis([channelWith("channel", 1, 10)]);
+    render(
+      <Wrapper initialEntry="/model-eval?view=history&channel=1&model=channel-model">
+        <ModelEvalPage />
+      </Wrapper>,
+    );
+    const user = userEvent.setup();
+
+    expect(screen.getByRole("button", { name: "评估历史", pressed: true })).toBeInTheDocument();
+    expect(await screen.findByText("没有匹配的评估记录")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "渠道范围" })).toHaveValue("1");
+    expect(screen.getByText("channel-model")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "当前评估" }));
+    expect(screen.getByRole("button", { name: "当前评估", pressed: true })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "选择模型" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "渠道范围" })).toHaveValue("1");
+
+    await user.click(screen.getByRole("button", { name: "评估历史" }));
+    expect(screen.getByRole("button", { name: "评估历史", pressed: true })).toBeInTheDocument();
+    expect(screen.getByText("channel-model")).toBeInTheDocument();
+  });
+});
 
 describe("<ModelEvalPage /> 当前评估渠道排序", () => {
   it("渠道按 sort 降序排列（优先级高在上），与渠道列表自定义排序一致", async () => {

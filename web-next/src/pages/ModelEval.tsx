@@ -36,7 +36,7 @@ export default function ModelEvalPage() {
   const channelId = Number.isSafeInteger(rawChannelId) && rawChannelId > 0 ? rawChannelId : 0;
   const modelName = params.get("model") ?? "";
   const viewParam = params.get("view");
-  const view: EvalView = viewParam === "current" || viewParam === "ranking" || viewParam === "queue" || viewParam === "history" ? (viewParam as EvalView) : "history";
+  const view: EvalView = viewParam === "current" || viewParam === "ranking" || viewParam === "queue" || viewParam === "history" ? viewParam : "current";
   const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: api.listChannels });
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [detailId, setDetailId] = useState<number | null>(null);
@@ -180,47 +180,46 @@ export default function ModelEvalPage() {
   const busy = enqueueMut.isPending;
 
   return (
-    <div className="min-w-0 space-y-4 pb-4">
+    <div className="min-w-0 space-y-4">
       <PageToolbar
-        leading={<div className="flex items-center gap-2"><FlaskConical className="h-5 w-5 text-primary-text" aria-hidden /><h1 className="text-lg font-semibold tracking-tight text-ink">模型评估</h1></div>}
+        leading={
+          <SegmentedControl
+            aria-label="评估视图"
+            value={view}
+            onChange={changeView}
+            className="max-w-full flex-wrap"
+            options={[
+              { value: "current", label: "当前评估" },
+              { value: "ranking", label: "评估排序" },
+              { value: "queue", label: "评估队列" },
+              { value: "history", label: "评估历史" },
+            ]}
+          />
+        }
+        trailing={
+          <label className="flex min-w-0 max-w-full items-center gap-2 text-xs text-ink-muted">
+            <span className="shrink-0">渠道范围</span>
+            <Select
+              aria-label="渠道范围"
+              className="min-w-0 max-w-[min(65vw,20rem)] text-xs"
+              value={channelId}
+              disabled={busy}
+              onChange={(event) => {
+                const next = new URLSearchParams(params);
+                if (event.target.value === "0") next.delete("channel");
+                else next.set("channel", event.target.value);
+                next.delete("model");
+                setSelectedIds(new Set());
+                setParams(next, { replace: true });
+              }}
+            >
+              <option value={0}>全部渠道</option>
+              {(channelsQuery.data ?? []).map((channel) => <option key={channel.id} value={channel.id}>{channel.name}{channel.enabled ? "" : "（已停用）"}</option>)}
+              {channelId > 0 && !channelsQuery.data?.some((channel) => channel.id === channelId) && <option value={channelId}>渠道 #{channelId}</option>}
+            </Select>
+          </label>
+        }
       />
-      <p className="text-xs leading-relaxed text-ink-muted">用同一道 SVG 动画题比较模型表现，按渠道保存每次结果，支持回看、重测和按质量排序。</p>
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <SegmentedControl
-          aria-label="评估视图"
-          value={view}
-          onChange={changeView}
-          size="md"
-          options={[
-            { value: "current", label: "当前评估" },
-            { value: "ranking", label: "评估排序" },
-            { value: "queue", label: "评估队列" },
-            { value: "history", label: "评估历史" },
-          ]}
-        />
-        <label className="flex min-w-0 max-w-full items-center gap-2 text-xs text-ink-muted">
-          <span className="shrink-0">渠道范围</span>
-          <Select
-            aria-label="渠道范围"
-            className="min-w-0 max-w-[min(65vw,20rem)]"
-            value={channelId}
-            disabled={busy}
-            onChange={(event) => {
-              const next = new URLSearchParams(params);
-              if (event.target.value === "0") next.delete("channel");
-              else next.set("channel", event.target.value);
-              next.delete("model");
-              setSelectedIds(new Set());
-              setParams(next, { replace: true });
-            }}
-          >
-            <option value={0}>全部渠道</option>
-            {(channelsQuery.data ?? []).map((channel) => <option key={channel.id} value={channel.id}>{channel.name}{channel.enabled ? "" : "（已停用）"}</option>)}
-            {channelId > 0 && !channelsQuery.data?.some((channel) => channel.id === channelId) && <option value={channelId}>渠道 #{channelId}</option>}
-          </Select>
-        </label>
-      </div>
 
       {channelsQuery.isError && <QueryErrorBanner onRetry={() => void channelsQuery.refetch()} />}
 
