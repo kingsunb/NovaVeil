@@ -255,7 +255,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					if max := group.RelayConfig.AllCooldownRetryMaxSeconds; max > 0 && interval > max {
 						interval = max
 					}
-					if !request.wait(ctx, interval) {
+					if !request.wait(ctx, float64(interval)) {
 						return
 					}
 					continue
@@ -263,7 +263,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 本请求已无可选成员: 先清除引用跳过标记再等待, 让等待结束后的重扫
 				// 能重新评估此前被结构性跳过的引用, 目标分组恢复后即可自动回流。
 				exclude = 0
-				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
+				if !request.wait(ctx, routeRecheckIntervalSeconds(group.RelayConfig)) {
 					return
 				}
 				continue
@@ -288,7 +288,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					// 超限退避前同样整链无结论归还: 失败链沿途可能持有紧急额度或探测占用,
 					// 泄漏会累积耗尽紧急并发并虚增 SSE 汇总, 与下方非超限分支的释放语义一致。
 					releaseRefChainHops(hops)
-					if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
+					if !request.wait(ctx, routeRecheckIntervalSeconds(group.RelayConfig)) {
 						return
 					}
 					continue
@@ -320,7 +320,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				releaseRefChainHops(hops)
 				clearSessionStickyByItem(group.ID, item.ID)
 				exclude = 0
-				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
+				if !request.wait(ctx, routeRecheckIntervalSeconds(group.RelayConfig)) {
 					return
 				}
 				continue
@@ -336,7 +336,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				releaseRefChainHops(hops)
 				clearSessionStickyByItem(group.ID, item.ID)
 				exclude = 0
-				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
+				if !request.wait(ctx, routeRecheckIntervalSeconds(group.RelayConfig)) {
 					return
 				}
 				continue
@@ -347,7 +347,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				releaseRefChainHops(hops)
 				clearSessionStickyByItem(group.ID, item.ID)
 				exclude = 0
-				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
+				if !request.wait(ctx, routeRecheckIntervalSeconds(group.RelayConfig)) {
 					return
 				}
 				continue
@@ -1006,6 +1006,15 @@ func commitRouteOutcome(hops []refHop, scopeKey string) {
 // errMemberResponseTimeout 是本轮上下文被成员级响应超时计时器中止时的取消原因,
 // 用于把超时与客户端取消(context.Canceled)及人工中止区分开。
 var errMemberResponseTimeout = errors.New("member response timeout")
+
+// routeRecheckIntervalSeconds 返回无可派发目标时重新选路的退避秒数。
+// 成员重试间隔为 0 时仍按默认间隔退避, 避免空分组或失效引用紧循环耗尽请求轮次。
+func routeRecheckIntervalSeconds(config model.GroupRelayConfig) float64 {
+	if config.MemberRetryIntervalSeconds > 0 {
+		return config.MemberRetryIntervalSeconds
+	}
+	return model.DefaultGroupRelayConfig().MemberRetryIntervalSeconds
+}
 
 // maxRequestRounds 返回单个请求允许消耗的最大尝试轮次, 配置缺失或非法时回退默认配置,
 // 与 NormalizeGroupRelayConfig 形成双保险。

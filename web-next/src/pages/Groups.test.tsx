@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router-dom";
 import GroupsPage from "./Groups";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { sampleChannel, sampleGroup } from "@/test/fixtures/channels";
+import type { GroupRelayConfig } from "@/lib/types";
 
 const STORAGE_KEY = "nv-auth";
 
@@ -101,6 +102,7 @@ describe("GroupEditor relay_config 默认值契约", () => {
     expect(maxRounds.value).toBe("600");
     const cooldown = screen.getByLabelText(/^冷却时间/) as HTMLInputElement;
     expect(cooldown.value).toBe("60");
+    expect(screen.getByLabelText(/^重试间隔/)).toHaveValue(2);
     // 路由策略页有 会话粘合 / 后台定时探测 / 协议透传偏好 / 启用脱敏 四个开关；粘合默认开
     const switches = screen.getAllByRole("switch");
     expect(switches.length).toBe(4);
@@ -124,6 +126,55 @@ describe("GroupEditor relay_config 默认值契约", () => {
     expect(maxRounds.value).toBe("60");
     const switches = screen.getAllByRole("switch");
     expect(switches[0]).toHaveAttribute("aria-checked", "false");
+  });
+});
+
+describe.each(["新建", "编辑"])("%s分组的重试间隔", (action) => {
+  it.each([0, 0.01, 0.5, 2.5, 10])("保存并重新编辑时保留 %s 秒", async (seconds) => {
+    const user = userEvent.setup();
+    let groups = action === "新建" ? [] : [sampleGroup];
+    const savedConfigs: GroupRelayConfig[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url.includes("/group/list")) return Promise.resolve(jsonOk(groups));
+        if (url.includes("/channel/list")) return Promise.resolve(jsonOk([sampleChannel]));
+        if (url.includes("/group/create") || url.includes("/group/update")) {
+          const body = JSON.parse(String(init?.body)) as { relay_config: GroupRelayConfig };
+          savedConfigs.push(body.relay_config);
+          const saved = { ...sampleGroup, relay_config: body.relay_config, items: [] };
+          groups = [saved];
+          return Promise.resolve(jsonOk(saved));
+        }
+        return Promise.resolve(jsonOk(null));
+      }),
+    );
+    render(<GroupsPage />, { wrapper: Wrapper });
+
+    if (action === "新建") {
+      await user.click(screen.getByRole("button", { name: "新建分组" }));
+      await user.type(screen.getByLabelText(/^名称/), sampleGroup.name);
+    } else {
+      await screen.findByText(sampleGroup.name);
+      await user.click(screen.getByRole("button", { name: /编辑/ }));
+    }
+    await user.click(screen.getByRole("button", { name: "路由策略" }));
+    const interval = screen.getByLabelText(/^重试间隔/);
+    expect(interval).toHaveAttribute("min", "0");
+    expect(interval).toHaveAttribute("step", "any");
+    fireEvent.change(interval, { target: { value: String(seconds) } });
+    expect(interval).toHaveValue(seconds);
+    expect(interval).toBeValid();
+    await user.click(screen.getByRole("button", { name: /^保存$/ }));
+
+    await waitFor(() => {
+      expect(savedConfigs).toHaveLength(1);
+      expect(savedConfigs[0].member_retry_interval_seconds).toBe(seconds);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /编辑/ }));
+    await user.click(screen.getByRole("button", { name: "路由策略" }));
+    expect(screen.getByLabelText(/^重试间隔/)).toHaveValue(seconds);
   });
 });
 

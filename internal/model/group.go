@@ -10,18 +10,18 @@ const (
 
 // 分组 Relay 的持久化配置，数据库中以 JSON 存储。
 type GroupRelayConfig struct {
-	MemberMaxAttempts                     int `json:"member_max_attempts" binding:"omitempty,min=1"`                        // 单个成员包含首次请求的总尝试次数，仅在故障转移模式生效。
-	MemberInfraMaxRetries                 int `json:"member_infra_max_retries" binding:"omitempty,min=0"`                   // 单个成员连续发生基础设施层错误(SOCKS/DNS/TLS/连接重置)的最大重试次数,达到后走正常冷却通道;0 表示与 MemberMaxAttempts 相同。
-	MemberRetryIntervalSeconds            int `json:"member_retry_interval_seconds" binding:"omitempty,min=1"`              // 同一成员相邻两次尝试之间的等待秒数。
-	MemberNonStreamResponseTimeoutSeconds int `json:"member_non_stream_response_timeout_seconds" binding:"omitempty,min=1"` // 单个成员返回完整非流式响应的超时秒数。
-	MemberStreamFirstEventTimeoutSeconds  int `json:"member_stream_first_event_timeout_seconds" binding:"omitempty,min=1"`  // 单个成员返回首个有效流事件的超时秒数。
-	MemberStreamIdleTimeoutSeconds        int `json:"member_stream_idle_timeout_seconds" binding:"omitempty,min=0"`         // 流式转发期相邻事件间的空闲超时秒数, 超时终止流并按失败定稿; 0 表示不限时。
-	MemberStreamMaxBytes                  int `json:"member_stream_max_bytes" binding:"omitempty,min=0"`                    // 单次流式转发累计事件字节数上限, 超过按失败定稿; 0 表示不限。
-	MemberStreamMaxEvents                 int `json:"member_stream_max_events" binding:"omitempty,min=0"`                   // 单次流式转发累计事件数上限, 超过按失败定稿; 0 表示不限。
-	MemberCooldownSeconds                 int `json:"member_cooldown_seconds" binding:"omitempty,min=1"`                    // 单个成员耗尽尝试后被跳过的秒数，仅在故障转移模式生效。
-	MemberAffinitySeconds                 int `json:"member_affinity_seconds" binding:"omitempty,min=0"`                    // 成员亲和时间:故障切换成功后继续保持当前成员的秒数;当前成员失败会立即结束亲和,0 表示不保持。
-	MaxRequestRounds                      int `json:"max_request_rounds" binding:"omitempty,min=1"`                         // 单个请求允许消耗的最大尝试轮次(含引用链结构性跳过),超过后请求以失败收尾,防止异常配置把请求钉成无限循环。
-	MaxRequestSeconds                     int `json:"max_request_seconds" binding:"omitempty,min=0"`                        // 单个请求的整体时长上限秒数,超过后不再发起新一轮尝试;0 表示不限时。
+	MemberMaxAttempts                     int     `json:"member_max_attempts" binding:"omitempty,min=1"`                        // 单个成员包含首次请求的总尝试次数，仅在故障转移模式生效。
+	MemberInfraMaxRetries                 int     `json:"member_infra_max_retries" binding:"omitempty,min=0"`                   // 单个成员连续发生基础设施层错误(SOCKS/DNS/TLS/连接重置)的最大重试次数,达到后走正常冷却通道;0 表示与 MemberMaxAttempts 相同。
+	MemberRetryIntervalSeconds            float64 `json:"member_retry_interval_seconds" binding:"omitempty,min=0"`              // 同一成员相邻两次尝试之间的等待秒数, 支持小数, 0 表示不等待直接重试。
+	MemberNonStreamResponseTimeoutSeconds int     `json:"member_non_stream_response_timeout_seconds" binding:"omitempty,min=1"` // 单个成员返回完整非流式响应的超时秒数。
+	MemberStreamFirstEventTimeoutSeconds  int     `json:"member_stream_first_event_timeout_seconds" binding:"omitempty,min=1"`  // 单个成员返回首个有效流事件的超时秒数。
+	MemberStreamIdleTimeoutSeconds        int     `json:"member_stream_idle_timeout_seconds" binding:"omitempty,min=0"`         // 流式转发期相邻事件间的空闲超时秒数, 超时终止流并按失败定稿; 0 表示不限时。
+	MemberStreamMaxBytes                  int     `json:"member_stream_max_bytes" binding:"omitempty,min=0"`                    // 单次流式转发累计事件字节数上限, 超过按失败定稿; 0 表示不限。
+	MemberStreamMaxEvents                 int     `json:"member_stream_max_events" binding:"omitempty,min=0"`                   // 单次流式转发累计事件数上限, 超过按失败定稿; 0 表示不限。
+	MemberCooldownSeconds                 int     `json:"member_cooldown_seconds" binding:"omitempty,min=1"`                    // 单个成员耗尽尝试后被跳过的秒数，仅在故障转移模式生效。
+	MemberAffinitySeconds                 int     `json:"member_affinity_seconds" binding:"omitempty,min=0"`                    // 成员亲和时间:故障切换成功后继续保持当前成员的秒数;当前成员失败会立即结束亲和,0 表示不保持。
+	MaxRequestRounds                      int     `json:"max_request_rounds" binding:"omitempty,min=1"`                         // 单个请求允许消耗的最大尝试轮次(含引用链结构性跳过),超过后请求以失败收尾,防止异常配置把请求钉成无限循环。
+	MaxRequestSeconds                     int     `json:"max_request_seconds" binding:"omitempty,min=0"`                        // 单个请求的整体时长上限秒数,超过后不再发起新一轮尝试;0 表示不限时。
 
 	SessionStickyEnabled           bool    `json:"session_sticky_enabled"`                                      // 是否启用会话粘合:同一会话的请求在粘合有效期内固定使用同一成员。
 	SessionStickySeconds           int     `json:"session_sticky_seconds" binding:"omitempty,min=1"`            // 会话粘合时长秒数,粘合成员每次业务成功后滑动续期。
@@ -80,7 +80,8 @@ func NormalizeGroupRelayConfig(config *GroupRelayConfig) {
 	if config.MemberInfraMaxRetries < 0 {
 		config.MemberInfraMaxRetries = defaults.MemberInfraMaxRetries
 	}
-	if config.MemberRetryIntervalSeconds < 1 {
+	// 0 是合法的"立即重试"取值, 只把负值回填默认。
+	if config.MemberRetryIntervalSeconds < 0 {
 		config.MemberRetryIntervalSeconds = defaults.MemberRetryIntervalSeconds
 	}
 	if config.MemberNonStreamResponseTimeoutSeconds < 1 {

@@ -473,9 +473,10 @@ func Interrupt(id uint64, round int) bool {
 	return true
 }
 
-// wait 在重新选择目标之前退避 seconds 秒; 客户端在退避期间断开或管理端终止请求时以取消终态定稿并返回 false。
-func (r *RequestState) wait(ctx context.Context, seconds int) bool {
-	timer := time.NewTimer(time.Duration(seconds) * time.Second)
+// wait 在重新选择目标之前退避 seconds 秒, 支持小数秒与 0 秒立即重试;
+// 客户端在退避期间断开或管理端终止请求时以取消终态定稿并返回 false。
+func (r *RequestState) wait(ctx context.Context, seconds float64) bool {
+	timer := time.NewTimer(time.Duration(seconds * float64(time.Second)))
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():

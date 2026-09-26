@@ -218,6 +218,7 @@ export type GroupMode = "manual" | "failover";
 export interface GroupRelayConfig {
   member_max_attempts: number;
   member_infra_max_retries: number;
+  /** 成员重试间隔秒数，支持非负小数；0 表示不等待直接重试。 */
   member_retry_interval_seconds: number;
   member_non_stream_response_timeout_seconds: number;
   member_stream_first_event_timeout_seconds: number;

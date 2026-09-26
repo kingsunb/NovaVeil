@@ -200,9 +200,19 @@ func TestRefSkipMutualCycleImmediateSwitch(t *testing.T) {
 // 防护语义: 跳过次数超过成员总数后退避一个间隔再重新评估, 等待期间 ctx 取消即结束。
 // 断言: 解析查询次数有界(非紧循环)、总耗时受控、请求以取消收尾且从未写出内容。
 func TestRefSkipAllBrokenNoHotSpin(t *testing.T) {
+	for _, seconds := range []float64{5, 0} {
+		t.Run(fmt.Sprintf("%gs", seconds), func(t *testing.T) {
+			testRefSkipAllBrokenNoHotSpin(t, seconds)
+		})
+	}
+}
+
+func testRefSkipAllBrokenNoHotSpin(t *testing.T, seconds float64) {
+	t.Helper()
 	setupFailoverTest(t)
 
 	config := refSkipConfig()
+	config.MemberRetryIntervalSeconds = seconds
 	ghostA := createIntegrationGroup(t, "it-refskip-ghost-a-g", config)
 	ghostB := createIntegrationGroup(t, "it-refskip-ghost-b-g", config)
 	auto := createIntegrationGroup(t, "it-refskip-allbad-g", config,

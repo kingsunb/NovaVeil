@@ -46,7 +46,7 @@ func migrateV7GroupRouting(db *gorm.DB) error {
 	for _, group := range groups {
 		config := model.DefaultGroupRelayConfig()
 		if group.RetryInterval >= 1 {
-			config.MemberRetryIntervalSeconds = group.RetryInterval
+			config.MemberRetryIntervalSeconds = float64(group.RetryInterval)
 		}
 		payload, err := json.Marshal(config)
 		if err != nil {

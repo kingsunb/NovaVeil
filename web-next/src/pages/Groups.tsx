@@ -1210,12 +1210,13 @@ function GroupEditor({
               >
                 <Input
                   type="number"
-                  min={1}
+                  min={0}
+                  step="any"
                   value={relayConfig.member_retry_interval_seconds}
                   onChange={(e) =>
                     updateRelay(
                       "member_retry_interval_seconds",
-                      Math.max(1, Number(e.target.value) || 1),
+                      Math.max(0, Number(e.target.value) || 0),
                     )
                   }
                 />
