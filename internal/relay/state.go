@@ -712,6 +712,11 @@ func ClassifyError(err error) ErrClass {
 	if errors.Is(err, errRoundsExceeded) || errors.Is(err, errDeadlineExceeded) {
 		return ErrClassRoundsExhausted
 	}
+	// 渠道并发槽位满载是本地准入拒绝而非上游故障: 终态(全部成员满载 errAllChannelsBusy)
+	// 与轮次级(单成员满载 errChannelConcurrencyFull)都归 channel_busy, 不计入成员失败与冷却。
+	if errors.Is(err, errChannelConcurrencyFull) || errors.Is(err, errAllChannelsBusy) {
+		return ErrClassChannelBusy
+	}
 	if isInfrastructureError(err) {
 		return ErrClassUpstreamNetwork
 	}

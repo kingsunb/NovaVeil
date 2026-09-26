@@ -8,6 +8,7 @@ package relay
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -151,6 +152,146 @@ func TestAllChannelsBusyRejectsWith503(t *testing.T) {
 	}
 	if level := snapshot.Levels[itemID]; level != 0 {
 		t.Fatalf("满载成员不应累计失败等级, 实际 %d", level)
+	}
+}
+
+// TestAllChannelsBusyWithDisabledMemberStill503 验证"全部满载"分母不把禁用成员计入:
+// 分组唯一可用成员满载时, 即使同组还挂着禁用渠道成员, 也应立即按 503 终止,
+// 而非因为 len(group.Items) 虚高而空转烧轮次(禁用成员永不会进入 busyRejected)。
+func TestAllChannelsBusyWithDisabledMemberStill503(t *testing.T) {
+	setupFailoverTest(t)
+	resetChannelLimits()
+
+	var hits atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write(chatCompletionBody("chatcmpl", "never", 1, 1))
+	}))
+	defer upstream.Close()
+
+	busyChannel := createIntegrationChannel(t, "it-busy-disabled-a", model.ChannelProviderOpenAI, upstream.URL, "it-model-busy-a")
+	disabledChannel := createIntegrationChannel(t, "it-busy-disabled-b", model.ChannelProviderOpenAI, upstream.URL, "it-model-disabled-b")
+	limitChannelConcurrency(t, busyChannel.ID, 1)
+	holdChannelConcurrencySlot(t, busyChannel.ID)
+
+	disabled := false
+	if _, err := op.ChannelUpdate(&model.ChannelUpdateRequest{ID: disabledChannel.ID, Enabled: &disabled}, context.Background()); err != nil {
+		t.Fatalf("禁用渠道 %d 失败: %v", disabledChannel.ID, err)
+	}
+
+	group := createIntegrationGroup(t, "it-busy-disabled-g",
+		model.GroupRelayConfig{
+			MemberMaxAttempts:                     3,
+			MemberRetryIntervalSeconds:            1,
+			MemberCooldownSeconds:                 60,
+			MemberNonStreamResponseTimeoutSeconds: 5,
+		},
+		integrationLeafItem(t, busyChannel, "it-model-busy-a"),
+		integrationLeafItem(t, disabledChannel, "it-model-disabled-b"))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := `{"model":"` + group.Name + `","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("唯一可用成员满载时应按 503 拒绝(禁用成员不计分母), 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("满载成员上游不应被调用, 实际 %d 次", got)
+	}
+}
+
+// TestBusyReferenceDoesNotPrematurely503 验证引用场景下"全部满载"分母改数可达叶子后,
+// 引用目标满载不会因为叶子分组的 group.Items 过小而提前 503: 顶层低优直连成员仍应被尝试并交付。
+func TestBusyReferenceDoesNotPrematurely503(t *testing.T) {
+	setupFailoverTest(t)
+	resetChannelLimits()
+
+	var subHits, lowHits atomic.Int64
+	subUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		subHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(chatCompletionBody("chatcmpl-sub-busy", "should-not-serve", 1, 1))
+	}))
+	defer subUpstream.Close()
+	lowUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lowHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(chatCompletionBody("chatcmpl-low-ok", "ok-from-low-direct", 2, 2))
+	}))
+	defer lowUpstream.Close()
+
+	subChannel := createIntegrationChannel(t, "it-busy-ref-sub-ch", model.ChannelProviderOpenAI, subUpstream.URL, "it-busy-ref-sub-model")
+	lowChannel := createIntegrationChannel(t, "it-busy-ref-low-ch", model.ChannelProviderOpenAI, lowUpstream.URL, "it-busy-ref-low-model")
+	limitChannelConcurrency(t, subChannel.ID, 1)
+	holdChannelConcurrencySlot(t, subChannel.ID)
+
+	config := model.GroupRelayConfig{
+		MemberMaxAttempts:                     3,
+		MemberRetryIntervalSeconds:            1,
+		MemberCooldownSeconds:                 60,
+		MemberNonStreamResponseTimeoutSeconds: 5,
+	}
+	sub := createIntegrationGroup(t, "it-busy-ref-sub-g", config, integrationLeafItem(t, subChannel, "it-busy-ref-sub-model"))
+	auto := createIntegrationGroup(t, "it-busy-ref-auto-g", config,
+		integrationRefItem(sub.Name),
+		integrationLeafItem(t, lowChannel, "it-busy-ref-low-model"))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, auto.Name)
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "ok-from-low-direct") {
+		t.Fatalf("引用目标满载时应切换到顶层低优直连成员而非过早 503, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := subHits.Load(); got != 0 {
+		t.Fatalf("满载的引用目标上游不应被调用, 实际 %d 次", got)
+	}
+	if got := lowHits.Load(); got != 1 {
+		t.Fatalf("低优直连成员应恰好承载一次, 实际 %d 次", got)
+	}
+}
+
+// TestAllChannelsBusyAcrossReferenceChain503 验证跨引用链的全部成员满载时仍按 503 终止:
+// 分母沿引用链展开数可达叶子, 引用目标叶子与顶层直连叶子都满载一次后凑满触发终止。
+func TestAllChannelsBusyAcrossReferenceChain503(t *testing.T) {
+	setupFailoverTest(t)
+	resetChannelLimits()
+
+	var hits atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write(chatCompletionBody("chatcmpl", "never", 1, 1))
+	}))
+	defer upstream.Close()
+
+	subChannel := createIntegrationChannel(t, "it-busy-refall-sub-ch", model.ChannelProviderOpenAI, upstream.URL, "it-busy-refall-sub-model")
+	lowChannel := createIntegrationChannel(t, "it-busy-refall-low-ch", model.ChannelProviderOpenAI, upstream.URL, "it-busy-refall-low-model")
+	limitChannelConcurrency(t, subChannel.ID, 1)
+	holdChannelConcurrencySlot(t, subChannel.ID)
+	limitChannelConcurrency(t, lowChannel.ID, 1)
+	holdChannelConcurrencySlot(t, lowChannel.ID)
+
+	config := model.GroupRelayConfig{
+		MemberMaxAttempts:                     3,
+		MemberRetryIntervalSeconds:            1,
+		MemberCooldownSeconds:                 60,
+		MemberNonStreamResponseTimeoutSeconds: 5,
+	}
+	sub := createIntegrationGroup(t, "it-busy-refall-sub-g", config, integrationLeafItem(t, subChannel, "it-busy-refall-sub-model"))
+	auto := createIntegrationGroup(t, "it-busy-refall-auto-g", config,
+		integrationRefItem(sub.Name),
+		integrationLeafItem(t, lowChannel, "it-busy-refall-low-model"))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, auto.Name)
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("跨引用链全部成员满载时仍应按 503 拒绝, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("满载成员上游不应被调用, 实际 %d 次", got)
 	}
 }
 

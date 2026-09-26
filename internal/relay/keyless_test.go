@@ -312,3 +312,162 @@ func TestKeylessAuthRejectionFailsFastAcrossMembers(t *testing.T) {
 		})
 	}
 }
+
+// TestDeterministic4xxWithDisabledMemberFailsFast 验证确定性 4xx 的"全部成员失败即终止"
+// 分母不把禁用成员计入: 分组唯一可用成员被 401 拒绝时, 即使同组还挂着禁用渠道成员,
+// 也应立即按统一 400 快速失败, 而非因为 len(group.Items) 虚高而空转烧轮次。
+func TestDeterministic4xxWithDisabledMemberFailsFast(t *testing.T) {
+	setupFailoverTest(t)
+
+	authErrBody := `{"error":{"message":"auth invalid","type":"invalid_request_error"}}`
+	var hits atomic.Int64
+	authUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(authErrBody))
+	}))
+	defer authUpstream.Close()
+	var disabledHits atomic.Int64
+	disabledUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		disabledHits.Add(1)
+		_, _ = w.Write(chatCompletionBody("chatcmpl-disabled", "should-not-serve", 1, 1))
+	}))
+	defer disabledUpstream.Close()
+
+	config := refSkipConfig()
+	modelNameA := integrationUniqueName("it-det4xx-disabled-model-a")
+	modelNameB := integrationUniqueName("it-det4xx-disabled-model-b")
+	chA := createKeylessChannel(t, "it-det4xx-disabled-ch-a", authUpstream.URL, modelNameA, model.ChannelProviderOpenAI)
+	chB := createIntegrationChannel(t, "it-det4xx-disabled-ch-b", model.ChannelProviderOpenAI, disabledUpstream.URL, modelNameB)
+
+	disabled := false
+	if _, err := op.ChannelUpdate(&model.ChannelUpdateRequest{ID: chB.ID, Enabled: &disabled}, context.Background()); err != nil {
+		t.Fatalf("禁用渠道 %d 失败: %v", chB.ID, err)
+	}
+
+	group := createIntegrationGroup(t, "it-det4xx-disabled-g", config,
+		integrationLeafItem(t, chA, modelNameA),
+		integrationLeafItem(t, chB, modelNameB))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, group.Name)
+	begin := time.Now()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+	elapsed := time.Since(begin)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("唯一可用成员确定性 4xx 时应按 400 快速失败(禁用成员不计分母), 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "暂无可用渠道") {
+		t.Fatalf("下游应收到统一文案\"暂无可用渠道\", 实际: %s", recorder.Body.String())
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("确定性 4xx 成员应只试一次, 实际 %d 次", got)
+	}
+	if got := disabledHits.Load(); got != 0 {
+		t.Fatalf("禁用渠道不应被调用, 实际 %d 次", got)
+	}
+	if elapsed >= 6*time.Second {
+		t.Fatalf("应快速终止(禁用成员虚高分母会导致空转), 实际耗时 %v", elapsed)
+	}
+}
+
+// TestDeterministic4xxReferenceDoesNotPrematurelyFail 验证引用场景下确定性 4xx 的
+// 分母改数可达叶子后, 引用目标被 401 拒绝不会因为叶子分组的 group.Items 过小而提前 400:
+// 顶层低优直连健康成员仍应被尝试并交付。
+func TestDeterministic4xxReferenceDoesNotPrematurelyFail(t *testing.T) {
+	setupFailoverTest(t)
+
+	authErrBody := `{"error":{"message":"auth invalid","type":"invalid_request_error"}}`
+	var subHits, lowHits atomic.Int64
+	subUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		subHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(authErrBody))
+	}))
+	defer subUpstream.Close()
+	lowUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lowHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(chatCompletionBody("chatcmpl-low-ok", "ok-from-low-direct", 2, 2))
+	}))
+	defer lowUpstream.Close()
+
+	config := refSkipConfig()
+	subModel := integrationUniqueName("it-det4xx-ref-sub-model")
+	lowModel := integrationUniqueName("it-det4xx-ref-low-model")
+	subChannel := createKeylessChannel(t, "it-det4xx-ref-sub-ch", subUpstream.URL, subModel, model.ChannelProviderOpenAI)
+	lowChannel := createIntegrationChannel(t, "it-det4xx-ref-low-ch", model.ChannelProviderOpenAI, lowUpstream.URL, lowModel)
+
+	sub := createIntegrationGroup(t, "it-det4xx-ref-sub-g", config, integrationLeafItem(t, subChannel, subModel))
+	auto := createIntegrationGroup(t, "it-det4xx-ref-auto-g", config,
+		integrationRefItem(sub.Name),
+		integrationLeafItem(t, lowChannel, lowModel))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, auto.Name)
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "ok-from-low-direct") {
+		t.Fatalf("引用目标确定性 4xx 时应切换到顶层直连成员而非过早 400, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := subHits.Load(); got != 1 {
+		t.Fatalf("引用目标应只试一次(确定性 4xx), 实际 %d 次", got)
+	}
+	if got := lowHits.Load(); got != 1 {
+		t.Fatalf("低优直连成员应恰好承载一次, 实际 %d 次", got)
+	}
+}
+
+// TestDeterministic4xxAcrossReferenceChainFailsFast 验证跨引用链的全部成员确定性 4xx 时
+// 仍按统一 400 终止: 分母沿引用链展开数可达叶子, 引用目标叶子与顶层直连叶子都 401 一次后凑满触发终止。
+func TestDeterministic4xxAcrossReferenceChainFailsFast(t *testing.T) {
+	setupFailoverTest(t)
+
+	authErrBody := `{"error":{"message":"auth invalid","type":"invalid_request_error"}}`
+	var subHits, lowHits atomic.Int64
+	newAuthUpstream := func(counter *atomic.Int64, id string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			counter.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(authErrBody))
+		}))
+	}
+	subUpstream := newAuthUpstream(&subHits, "sub")
+	defer subUpstream.Close()
+	lowUpstream := newAuthUpstream(&lowHits, "low")
+	defer lowUpstream.Close()
+
+	config := refSkipConfig()
+	subModel := integrationUniqueName("it-det4xx-refall-sub-model")
+	lowModel := integrationUniqueName("it-det4xx-refall-low-model")
+	subChannel := createKeylessChannel(t, "it-det4xx-refall-sub-ch", subUpstream.URL, subModel, model.ChannelProviderOpenAI)
+	lowChannel := createKeylessChannel(t, "it-det4xx-refall-low-ch", lowUpstream.URL, lowModel, model.ChannelProviderOpenAI)
+
+	sub := createIntegrationGroup(t, "it-det4xx-refall-sub-g", config, integrationLeafItem(t, subChannel, subModel))
+	auto := createIntegrationGroup(t, "it-det4xx-refall-auto-g", config,
+		integrationRefItem(sub.Name),
+		integrationLeafItem(t, lowChannel, lowModel))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, auto.Name)
+	begin := time.Now()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+	elapsed := time.Since(begin)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("跨引用链全部成员确定性 4xx 时仍应按统一 400 拒绝, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := subHits.Load(); got != 1 {
+		t.Fatalf("引用目标应只试一次, 实际 %d 次", got)
+	}
+	if got := lowHits.Load(); got != 1 {
+		t.Fatalf("顶层直连成员应只试一次, 实际 %d 次", got)
+	}
+	if elapsed >= 8*time.Second {
+		t.Fatalf("应快速终止而非空转烧轮次, 实际耗时 %v", elapsed)
+	}
+}

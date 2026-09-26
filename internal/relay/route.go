@@ -69,6 +69,40 @@ func channelDisabledForRouting(item model.GroupItem) bool {
 	return !channel.Enabled
 }
 
+// routableLeafCount 统计从指定分组可达、且真的会触及渠道并发准入(可能命中 errChannelConcurrencyFull)
+// 的叶子渠道成员数量, 作为"全部成员满载"判定的分母。只计入非引用、渠道未禁用的成员:
+// 引用成员只是跨分组跳板, 会被引用链解析进别的分组, 本身不参与并发准入;
+// 禁用渠道成员在选路阶段即被跳过, 二者都不可能进入 busyRejected——
+// 若计入分母会虚高, 使"全部满载"永远凑不满而空转烧轮次; 引用可跨组, 因此计数沿引用链展开。
+// 冷却成员仍计入: 冷却到期后会被重试并可能满载, 计入可避免过早按 503 终止。
+// 沿引用链展开时以 visited 按分组 ID 去重截断环形/复引用, 与转发解析的防环口径一致。
+func routableLeafCount(top model.Group) int {
+	return routableLeafCountFrom(top, make(map[int]bool))
+}
+
+func routableLeafCountFrom(g model.Group, visited map[int]bool) int {
+	if visited[g.ID] {
+		return 0
+	}
+	visited[g.ID] = true
+	n := 0
+	for _, item := range g.Items {
+		if item.IsGroupRef() {
+			ref, err := groupLookupFunc(item.RefGroupName)
+			if err != nil {
+				continue // 目标分组不可得: 该引用不可达, 不落到任何叶子。
+			}
+			n += routableLeafCountFrom(ref, visited)
+			continue
+		}
+		if channelDisabledForRouting(item) {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
 // pickGroupItem 按分组模式选择本轮目标成员, 没有可用成员时返回零值; group.Items 已按 Priority 升序排列。
 // exclude 为本请求已放弃的成员 ID, 重扫时跳过。被禁用渠道的成员在手动/亲和/常规扫描与紧急兜底
 // 各入口一律跳过, 派发层另有兜底检查覆盖粘合等残余旁路; 缺少密钥不在此判断, 由调用方作为一轮失败上报。

@@ -83,6 +83,12 @@ func TestClassifyErrorSentinels(t *testing.T) {
 	if got := ClassifyError(errors.New("mystery")); got != ErrClassUpstream {
 		t.Fatalf("未知错误应归 upstream_error, 实际 %q", got)
 	}
+	if got := ClassifyError(errChannelConcurrencyFull); got != ErrClassChannelBusy {
+		t.Fatalf("单成员并发满载应归 channel_busy, 实际 %q", got)
+	}
+	if got := ClassifyError(fmt.Errorf("wrapped: %w", errAllChannelsBusy)); got != ErrClassChannelBusy {
+		t.Fatalf("全部成员并发满载(即使包裹)应归 channel_busy, 实际 %q", got)
+	}
 }
 
 // TestAttemptRecordsAppendTruncateAndCap 验证尝试轨迹的追加、摘要截断、容量裁剪与 SSE 发布。

@@ -574,7 +574,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					request.releaseRoundLifecycle()
 					// 整链无结论释放(含叶子): 与清洗重试路径同语义, 防止候选占用滞留钉死整组。
 					releaseRefChainHops(hops)
-					if len(busyRejected) >= len(group.Items) {
+					// 分母改数"本请求自顶层可达且非禁用"的叶子成员, 而非叶子分组的 group.Items:
+					// group.Items 会混入引用成员(解析进别的分组)、禁用渠道成员、冷却成员,
+					// 它们都不会进入 busyRejected, 若直接取 len(group.Items) 要么虚高(永远凑不满, 空转烧轮次),
+					// 要么因叶子分组不含顶层其余成员而过早 503(引用场景丢弃尚未尝试的健康成员)。
+					if len(busyRejected) >= routableLeafCount(hops[0].group) {
 						request.markFailed(errAllChannelsBusy, "", nil)
 						recordErrorLog(request)
 						rejectRequest(c, inbound, errAllChannelsBusy)
@@ -604,11 +608,13 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					(selectedKey.Key == "" && (code == http.StatusUnauthorized || code == http.StatusForbidden))) {
 					request.releaseRoundLifecycle()
 					releaseRefChainHops(hops[:len(hops)-1])
-					// 同一成员反复出现确定性 4xx 只记一次, 集合按成员去重后与成员总数比较。
+					// 同一成员反复出现确定性 4xx 只记一次, 集合按成员去重后与可达叶子数比较:
+					// 分母复用 routableLeafCount 而非 len(group.Items), 与满载终止同口径——
+					// group.Items 混入引用/禁用/冷却成员会虚高导致永不终止, 或叶子分组不含顶层其余成员导致过早终止。
 					recordRouteFailureIfReal(group, item.ID, failureCounts, err)
 					clearSessionStickyByItem(group.ID, item.ID)
 					nonRetryable[item.ID] = true
-					if len(nonRetryable) >= len(group.Items) {
+					if len(nonRetryable) >= routableLeafCount(hops[0].group) {
 						request.markFailed(err, "", nil)
 						recordErrorLog(request)
 						rejectRequest(c, inbound, errNoAvailableChannels)
