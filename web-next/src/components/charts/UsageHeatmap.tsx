@@ -108,9 +108,8 @@ export function UsageHeatmap({
   // 总计统计
   const totals = useMemo(() => {
     const totalTokens = data.reduce((sum, d) => sum + d.tokens, 0);
-    const totalCost = data.reduce((sum, d) => sum + d.cost, 0);
     const activeDays = data.filter((d) => d.tokens > 0).length;
-    return { totalTokens, totalCost, activeDays };
+    return { totalTokens, activeDays };
   }, [data]);
 
   return (
@@ -130,14 +129,6 @@ export function UsageHeatmap({
           </span>{" "}
           tokens
         </span>
-        {totals.totalCost > 0 && (
-          <span>
-            预计消耗{" "}
-            <span className="num font-semibold text-ink">
-              ${totals.totalCost.toFixed(2)}
-            </span>
-          </span>
-        )}
       </div>
 
       <div className="relative overflow-x-auto">
@@ -199,7 +190,7 @@ export function UsageHeatmap({
                   <title>
                     {cell.date}:{" "}
                     {cell.point
-                      ? `${formatNumber(cell.point.tokens)} tokens · $${cell.point.cost.toFixed(4)} · ${cell.point.count} 请求`
+                      ? `${formatNumber(cell.point.tokens)} tokens · ${cell.point.count} 请求`
                       : "无数据"}
                   </title>
                 </rect>
@@ -216,11 +207,6 @@ export function UsageHeatmap({
               {formatNumber(hoverPoint.tokens)} tokens ·{" "}
               {hoverPoint.count} 请求
             </div>
-            {hoverPoint.cost > 0 && (
-              <div className="text-ink-muted">
-                ${hoverPoint.cost.toFixed(4)}
-              </div>
-            )}
           </div>
         )}
       </div>

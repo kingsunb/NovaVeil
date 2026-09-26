@@ -1,20 +1,29 @@
-# Agent Note: 模型评估「当前评估」视图渠道排序对齐渠道列表自定义排序
+# Agent Note: 模型评估与分组编辑的渠道展示排序
 
 Status: implemented
 
 ## 问题
 
-模型评估页「当前评估」视图按渠道分组展示可评估模型，渠道顺序直接沿用 `/channel/list` 后端返回顺序（按 id）。渠道管理页的默认「自定义排序」却按 `sort` 降序排列（数值大 = 优先级高 = 靠前，同值按名称兜底）。两处顺序不一致：用户在渠道页把高优先级渠道排到顶部后，进评估页看到的是另一套顺序，跨页对照产生困惑。
+模型评估页「当前评估」视图和分组编辑器都按渠道展示模型。直接沿用 `/channel/list` 后端返回顺序（按 id）不能反映用户设置的渠道优先级，跨页对照容易产生困惑。渠道管理页的默认「自定义排序」将非内置渠道排在前面，再按 `sort` 降序排列（数值大 = 优先级高 = 靠前，同值按名称兜底）。
 
 ## 决定
 
-`web-next/src/pages/ModelEval.tsx` 的 `allTargets` 在 `flatMap` 展开渠道模型前，先对渠道列表排序，复用渠道页 `custom` 排序同一条表达式：
+`web-next/src/pages/ModelEval.tsx` 的 `allTargets` 在 `flatMap` 展开渠道模型前，先按渠道优先级和名称排序：
 
 ```ts
 (b.sort ?? 0) - (a.sort ?? 0) || a.name.localeCompare(b.name)
 ```
 
-`sort` 越大越靠上，同值按渠道名。排序只作用于「当前评估」（以及共享该目标列表的 `EvalDetail` 目标查找），不修改渠道数据本身。
+`sort` 越大越靠上，同值按渠道名。该排序作用于「当前评估」（以及共享该目标列表的 `EvalDetail` 目标查找）。
+
+`web-next/src/pages/Groups.tsx` 的 `ChannelModelPicker` 对过滤后的渠道列表采用渠道页 `custom` 的完整排序规则：
+
+```ts
+Number(a.builtin) - Number(b.builtin) ||
+(b.sort ?? 0) - (a.sort ?? 0) || a.name.localeCompare(b.name)
+```
+
+新建和编辑分组共用此选择器；搜索和清空搜索保持同一顺序，停用渠道保留在原有可选范围内。排序只作用于选择器的渠道展示，不改 React Query 缓存中的原始数组，也不调整分组成员的 `priority`、自动匹配追加顺序或故障转移顺序。
 
 ## 备选方案
 
@@ -24,10 +33,11 @@ Status: implemented
 
 ## 后果
 
-- 收益：评估页渠道顺序与渠道管理页默认视图一致，优先级高的渠道置顶，跨页对照的认知负担下降。
-- 边界：排序表达式与 `web-next/src/pages/Channels.tsx` 内联规则重复，未来调整排序需同步两处（尚未抽公共函数）；评估页仍不排除 `type === "custom"` 渠道，与渠道页的过滤存在已知差异。
+- 收益：评估页反映渠道自定义优先级；分组编辑器的渠道展示顺序与渠道管理页默认视图一致，搜索后也便于按相同位置查找渠道。
+- 边界：排序规则内联在 `Channels.tsx`、`Groups.tsx` 和 `ModelEval.tsx`，未来调整需检查三处（尚未抽公共函数）。模型评估的排序不区分 `builtin`；评估页和分组选择器都不排除 `type === "custom"` 渠道，与渠道管理页的可选范围存在差异。
 
 ## 验证
 
-- 新增 `web-next/src/pages/ModelEval.test.tsx`：三条渠道 `sort` 分别为 10 / 30 / 20 且以 id 顺序乱序返回，断言「当前评估」渲染顺序为 30 → 20 → 10。
-- `pnpm typecheck` 与 `pnpm test`（vitest）通过。
+- `web-next/src/pages/ModelEval.test.tsx` 覆盖三条渠道 `sort` 分别为 10 / 30 / 20 且以 id 顺序乱序返回时，「当前评估」渲染顺序为 30 → 20 → 10。
+- `web-next/src/pages/Groups.test.tsx` 覆盖新建和编辑分组的渠道排序：非内置优先、`sort` 降序、同值按名称、停用渠道保留，以及搜索过滤和清空搜索后的顺序。
+- 本次修改按用户要求仅作源码与 Git 差异审阅，未执行编译、测试、应用运行或笔记门禁。

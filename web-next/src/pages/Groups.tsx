@@ -1536,12 +1536,20 @@ function ChannelModelPicker({
   const hasSearch = q.length > 0;
 
   const filtered = useMemo(() => {
-    if (!q) return channels;
-    return channels.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        c.models.some((m) => m.name.toLowerCase().includes(q)),
-    );
+    // 与渠道管理的自定义排序一致：非内置在前、优先级降序、同值按名称。
+    return channels
+      .filter(
+        (c) =>
+          !q ||
+          c.name.toLowerCase().includes(q) ||
+          c.models.some((m) => m.name.toLowerCase().includes(q)),
+      )
+      .sort(
+        (a, b) =>
+          Number(a.builtin) - Number(b.builtin) ||
+          (b.sort ?? 0) - (a.sort ?? 0) ||
+          a.name.localeCompare(b.name),
+      );
   }, [channels, q]);
 
   // 搜索时同步过滤引用分组，否则底部「引用其他分组」始终全量展示

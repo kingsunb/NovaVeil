@@ -52,11 +52,11 @@ describe("<UsageHeatmap /> 渲染", () => {
     expect(screen.getByText("少")).toBeInTheDocument();
   });
 
-  it("有 cost 数据时显示预计消耗", () => {
+  it("有 cost 数据时也不显示预计消耗", () => {
     const data = [singlePoint(todayStr(), 10000, 1.5)];
-    render(<UsageHeatmap data={data} weeks={4} />);
-    expect(screen.getByText(/预计消耗/)).toBeInTheDocument();
-    expect(screen.getByText("$1.50")).toBeInTheDocument();
+    const { container } = render(<UsageHeatmap data={data} weeks={4} />);
+    expect(screen.queryByText(/预计消耗/)).not.toBeInTheDocument();
+    expect(container).not.toHaveTextContent("$");
   });
 
   it("cost 全零时不显示预计消耗", () => {
@@ -165,7 +165,7 @@ describe("<UsageHeatmap /> hover 交互", () => {
     expect(getTooltip(container)).toBeNull();
   });
 
-  it("hover 有 cost 的格子时 tooltip 显示消耗", () => {
+  it("hover 有 cost 的格子时 tooltip 只显示日期、token 与请求数", () => {
     const data = [singlePoint(todayStr(), 5000, 3.5, 10)];
     const { container } = render(<UsageHeatmap data={data} weeks={4} />);
     const dataRect = findDataRect(container);
@@ -173,7 +173,10 @@ describe("<UsageHeatmap /> hover 交互", () => {
     fireEvent.mouseEnter(dataRect);
     const tooltip = getTooltip(container);
     expect(tooltip).not.toBeNull();
-    expect(tooltip!.textContent).toContain("$3.5000");
+    expect(tooltip).toHaveTextContent(todayStr());
+    expect(tooltip).toHaveTextContent("tokens");
+    expect(tooltip).toHaveTextContent("10 请求");
+    expect(tooltip).not.toHaveTextContent("$");
   });
 
   it("hover cost=0 的格子时 tooltip 不显示消耗", () => {
@@ -185,7 +188,7 @@ describe("<UsageHeatmap /> hover 交互", () => {
     const tooltip = getTooltip(container);
     expect(tooltip).not.toBeNull();
     expect(tooltip!.textContent).toContain("10 请求");
-    expect(tooltip!.textContent).not.toContain("$0.0000");
+    expect(tooltip).not.toHaveTextContent("$");
   });
 
   it("hover 无数据的格子时不显示 tooltip", () => {
@@ -199,8 +202,8 @@ describe("<UsageHeatmap /> hover 交互", () => {
 });
 
 describe("<UsageHeatmap /> title 元素", () => {
-  it("有数据的格子 title 包含 token 信息", () => {
-    const data = [singlePoint(todayStr(), 5000, 1.0, 10)];
+  it.each([0, 1.0])("cost=%s 时格子 title 包含用量但不含金额", (cost) => {
+    const data = [singlePoint(todayStr(), 5000, cost, 10)];
     const { container } = render(<UsageHeatmap data={data} weeks={4} />);
 
     const titles = container.querySelectorAll("title");
@@ -208,6 +211,9 @@ describe("<UsageHeatmap /> title 元素", () => {
       t.textContent?.includes("tokens"),
     );
     expect(dataTitle).toBeDefined();
+    expect(dataTitle).toHaveTextContent(todayStr());
+    expect(dataTitle).toHaveTextContent("10 请求");
+    expect(dataTitle).not.toHaveTextContent("$");
   });
 
   it("无数据的格子 title 显示「无数据」", () => {

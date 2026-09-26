@@ -658,7 +658,7 @@ describe("分组列表排序与自定义顺序", () => {
   });
 });
 
-describe("ChannelModelPicker 搜索过滤", () => {
+describe("ChannelModelPicker 搜索过滤与渠道排序", () => {
   // 两个渠道，各自多个模型；两个可引用分组
   const ch1: typeof sampleChannel = {
     ...sampleChannel,
@@ -682,18 +682,60 @@ describe("ChannelModelPicker 搜索过滤", () => {
   const refGroupA = { ...sampleGroup, id: 20, name: "ref-backup" };
   const refGroupB = { ...sampleGroup, id: 21, name: "ref-canary" };
 
-  function setupSearchFetch() {
+  function setupSearchFetch(channels: Array<typeof sampleChannel> = [ch1, ch2]) {
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) => {
         if (url.includes("/group/list"))
           return Promise.resolve(jsonOk([sampleGroup, refGroupA, refGroupB]));
         if (url.includes("/channel/list"))
-          return Promise.resolve(jsonOk([ch1, ch2]));
+          return Promise.resolve(jsonOk(channels));
         return Promise.resolve(jsonOk(null));
       }),
     );
   }
+
+  it.each(["新建", "编辑"])("%s分组的渠道顺序与渠道自定义排序一致，搜索后保持", async (action) => {
+    const user = userEvent.setup();
+    setupSearchFetch([
+      { ...ch1, sort: 10 },
+      { ...ch1, id: 5, name: "builtin-free", builtin: true, sort: 100, models: [] },
+      { ...ch1, id: 3, name: "zulu-prod", enabled: false, sort: 30, models: [] },
+      { ...ch1, id: 4, name: "alpha-prod", sort: 30, models: [] },
+      { ...ch2, sort: 20 },
+    ]);
+    render(<GroupsPage />, { wrapper: Wrapper });
+    await screen.findByText("gpt-4o-prod");
+
+    await user.click(
+      action === "新建"
+        ? screen.getByRole("button", { name: "新建分组" })
+        : screen.getAllByRole("button", { name: "编辑" })[0],
+    );
+    const dialog = await screen.findByRole("dialog");
+    const picker = within(dialog).getByRole("list", { name: "选择渠道模型" });
+    const channelOrder = () =>
+      within(picker)
+        .getAllByRole("button", { name: /^渠道 / })
+        .map((button) => button.getAttribute("aria-label"));
+    const expectedOrder = [
+      "渠道 alpha-prod",
+      "渠道 zulu-prod",
+      "渠道 anthropic-prod",
+      "渠道 openai-prod",
+      "渠道 builtin-free",
+    ];
+
+    await waitFor(() => expect(channelOrder()).toEqual(expectedOrder));
+    expect(within(picker).getByText("已停用")).toBeInTheDocument();
+
+    const searchInput = within(dialog).getByLabelText("搜索渠道或模型");
+    await user.type(searchInput, "prod");
+    expect(channelOrder()).toEqual(expectedOrder.slice(0, 4));
+
+    await user.clear(searchInput);
+    expect(channelOrder()).toEqual(expectedOrder);
+  });
 
   it("搜索模型名：只显示匹配的模型，非匹配模型不出现", async () => {
     const user = userEvent.setup();
