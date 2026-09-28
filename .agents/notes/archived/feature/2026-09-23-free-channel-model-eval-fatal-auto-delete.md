@@ -1,6 +1,7 @@
 # Agent Note: 免费渠道模型评估确定性失败累计自动删除
 
 Status: implemented
+Archived: 2026-09-28
 
 ## 问题
 

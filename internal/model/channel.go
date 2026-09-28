@@ -81,7 +81,6 @@ type ChannelModel struct {
 	Name              string             `json:"name" gorm:"not null;index:idx_channel_model_name,unique"`       // 上游模型名称。
 	Source            ChannelModelSource `json:"source" gorm:"not null;default:auto"`                            // 模型来源。
 	UpstreamProtocol  string             `json:"upstream_protocol" gorm:"not null;default:''"`                   // 上游原生协议: chat/responses/anthropic; 空表示按渠道类型。
-	EvalFatalFailures int                `json:"eval_fatal_failures" gorm:"not null;default:0"`                  // 评估确定性失败(401/403/404)累计次数, 免费渠道达到阈值自动删除。
 }
 
 // 追加到上游请求的单个 Header。
