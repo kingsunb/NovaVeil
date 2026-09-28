@@ -209,7 +209,7 @@
 
 ### 背景
 
-当前模型测试固定以 OpenAI Chat Completion 协议构造请求，再经转换器转成渠道协议；日志中的 RelayMode 也硬编码为 converted。对非 OpenAI Chat 渠道（如 Anthropic、OpenAI Responses 等），测试路径与真实请求不一致。
+模型测试需要模拟与渠道协议一致的下游请求；固定构造 Chat 报文只能覆盖 Chat 入站，不能代表 Anthropic、Responses 的原生请求路径，日志协议标签也必须反映实际路径。
 
 ### 需求描述
 
@@ -220,9 +220,9 @@
 
 - 渠道参数覆盖、模型限制、密钥选择、测试超时（300 秒）等既有测试语义保持生效；仅改变测试请求的协议构造方式（透传渠道原生协议）。
 
-### 后续调整（2026-09-19）
+### 当前实现
 
-「按渠道原生协议透传」在客户端协议 ≠ 渠道原生格式时（如客户端发 openai_chat、渠道是 anthropic）反而与真实转发路径分歧：透传/转换判定、完全透传 `raw.Path`、响应校验口径三处不一致，导致面板测试误判失败或回复提取为空。探针协议构造方式调整为以 `openai_chat` 作为代表客户端协议（`testProbeClientFormat`），路径决定与真实转发（客户端发 openai_chat）对齐。决定与因果见 [channel-test-probe-client-format](../.agents/notes/implemented/bug-fix/2026-09-19-channel-test-probe-client-format.md)。
+渠道测试模拟与生效渠道/模型协议一致的下游请求，Chat、Responses、Anthropic 分别使用对应的请求体和路径；无独立入站的类型通过 Chat 转换。日志在请求发出前登记运行态，并在同一 ID 下记录重试、成功、失败或取消。编辑器隔离过期请求结果，原生回复收集全部正文文本块。接口和边界见 [转发引擎](modules/relay.md#渠道诊断测试)，决定与因果见 [渠道测试生命周期与原生协议](../.agents/notes/implemented/bug-fix/2026-09-28-channel-test-lifecycle-and-native-protocol.md)。
 
 ---
 

@@ -33,6 +33,10 @@ Status: implemented
 - **收益**：单模型/逐密钥测试探针的上游 URL 路径、透传/转换判定、响应校验口径、日志流 `client_format`/`relay_mode` 与真实转发（客户端发 openai_chat）逐渠道一致；anthropic/openai_responses 等渠道的面板测试不再因路径分歧误判失败或提取空回复。
 - **代价与已知上限**：探针固定以 `openai_chat` 作为代表客户端协议，若未来出现「客户端以 anthropic/openai_responses 入站、且该入站协议下的路径/校验行为与 openai_chat 入站有实质差异」的真实场景，探针无法覆盖该差异。重访信号：出现「某渠道面板测试通过但客户端以非 openai_chat 入站时真实转发失败」的真实案例时，可评估把探针 format 做成按待测入站协议可选。
 
+## 部分取代
+
+[渠道测试生命周期与原生协议](2026-09-28-channel-test-lifecycle-and-native-protocol.md) 按用户指定的测试语义取代本篇的固定 Chat 选择以及 Path 由调用方填写的决定。本篇保留原始理由供回访；当前实现按生效渠道/模型协议模拟下游，由 `newTestRequest` 同时生成正文与路径。真实出站共用、完全透传保留入站路径、`##` 原始地址和日志协议一致性约束仍生效。以下验证段描述固定 Chat 决定的原始回归范围，当前测试断言见新笔记。
+
 ## 验证
 
 `internal/relay/test_path_test.go` 新增路径一致性单测：`TestSendChannelTestRequestPathConsistency` 表驱动覆盖 openai/anthropic/openai_responses/gemini/volcengine 五个渠道类型，用 `httptest.Server` 捕获 `r.URL.Path` 断言与真实转发路径一致；`TestBuildOutboundPassthroughConsistency` 断言 passthrough 判定与 design 路径一致性对齐决策表逐行一致；`TestSendChannelTestRequestPassthroughPath`/`TestSendChannelTestRequestRawURLPath` 覆盖完全透传与 `##` 标记两条边界；`TestSendChannelTestRequestClientFormat` 断言日志流 `ClientFormat=="openai_chat"` 且 `RelayMode` 与路径一致；`TestExtractMessageContentProtocolCompatibility` 覆盖三种协议响应提取。`internal/relay/keytest_test.go` 新增 `TestSendKeyTestRequestPathConsistency` 断言逐密钥探针路径与单模型探针一致。存量测试均使用 openai 渠道、不按路径分支，无需修正。

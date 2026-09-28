@@ -274,7 +274,7 @@ func TestTestChannelRecordsToStream(t *testing.T) {
 }
 
 // TestSendKeyTestRequestPathConsistency 验证逐密钥探针的上游请求路径与单模型探针一致:
-// 修复后逐密钥探针以 openai_chat 作为代表客户端协议, openai 渠道走透传 /v1/chat/completions,
+// openai 渠道模拟 Chat 下游, 走透传 /v1/chat/completions,
 // 与单模型探针(sendChannelTestRequest)路径相同。
 func TestSendKeyTestRequestPathConsistency(t *testing.T) {
 	setupFailoverTest(t)

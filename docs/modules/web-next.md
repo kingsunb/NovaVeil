@@ -23,7 +23,11 @@ React 19 + Vite 8 + TypeScript 6 的管理台，React Query 5 管服务端状态
 
 ### 测试体系
 
-- Vitest 5 + happy-dom：545 个用例；覆盖率门禁覆盖 lib / ui / charts；Playwright E2E：侧栏导航 8 场景冒烟 + axe 无障碍扫描；size-limit 体积预算门禁。
+- Vitest 5 + happy-dom：575 个用例；覆盖率门禁覆盖 lib / ui / charts；Playwright E2E：侧栏导航 8 场景冒烟 + axe 无障碍扫描；size-limit 体积预算门禁。
+
+### 渠道测试反馈
+
+渠道列表、编辑器单模型/批量模型和逐密钥测试共用设置中的 `channel_test_message`，空值回退默认测试问题。编辑器以代次和模型请求票据隔离关闭、切换渠道、切换密钥之前的请求，旧结果和旧批次的收尾不能改写当前界面。关闭后未发出的批量项停止发送，已发出的请求继续由日志展示。成功显示耗时与回复，空文本显示明确提示，失败显示错误原因。新增提示集中在 `locales/zh-CN.ts`。
 
 ## 设计想法
 
@@ -33,8 +37,8 @@ React 19 + Vite 8 + TypeScript 6 的管理台，React Query 5 管服务端状态
 
 ## 已知边界
 
-- Chat（手写 SSE 解析）、Mask（脱敏配置）、channel-editor（2303 行）三个页面**零单测**，Chat 也无 e2e——Chat SSE 解析器单测列为 ROADMAP 未来项。
-- 无 i18n 体系，文案硬编码中文——与 AGENTS.md「UI 文案走 locale」的约定不符，约定文本未随 0.2.0 前端重写同步；做国际化前需先决定改约定还是改实现。
+- Chat（手写 SSE 解析）、Mask（脱敏配置）仍缺页面单测，Chat 也无 e2e——Chat SSE 解析器单测列为 ROADMAP 未来项。channel-editor 有针对测试结果与异步隔离的回归测试，不代表完整页面覆盖。
+- 无完整 i18n 体系，多数文案硬编码中文；渠道测试的新提示使用 locale 常量。其余文案与 AGENTS.md「UI 文案走 locale」的约定仍有差距。
 - SSE「连上即断」场景 onopen 会重置退避为固定 1s 重连。
 - 巨型组件：channel-editor 2303 行、Settings 2108、Groups 1882、Logs 1679，回归保护靠手写用例密度。
 

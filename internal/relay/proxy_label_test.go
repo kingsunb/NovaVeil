@@ -3,7 +3,6 @@ package relay
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kingsunb/NovaVeil/internal/model"
 )
@@ -60,6 +59,8 @@ func TestRoundProxyLabel(t *testing.T) {
 // TestRecordTestRequestProxyLabel 面板测试与真实转发走同一套 ChannelHttpClient 出站,
 // 日志流条目必须带上同样的代理标注: 否则渠道测试明明经代理出去, 日志页却显示直连。
 func TestRecordTestRequestProxyLabel(t *testing.T) {
+	beforeID := idSeq.Load()
+	defer cleanupProbeRequests(beforeID)
 	// 替换系统代理查找, 避免依赖全局设置缓存的初始状态。
 	originalLookup := systemProxyLookup
 	t.Cleanup(func() { systemProxyLookup = originalLookup })
@@ -68,9 +69,10 @@ func TestRecordTestRequestProxyLabel(t *testing.T) {
 
 	record := func(t *testing.T, channel model.Channel) RequestState {
 		t.Helper()
-		id := idSeq.Load() + 1
-		recordTestRequest(channel, "", "proxy-label-model", "proxy-label-model",
-			[]byte("{}"), "{}", time.Second, nil, nil, "passthrough", "openai_chat", "openai_chat")
+		_, _, target := testRequestTarget(channel, "proxy-label-model", "")
+		probe := startTestRequest("proxy-label-model", []byte("{}"), target, nil)
+		finishTestRequest(probe, "{}", nil, nil)
+		id := probe.ID
 		mu.Lock()
 		defer mu.Unlock()
 		request, ok := requests[id]

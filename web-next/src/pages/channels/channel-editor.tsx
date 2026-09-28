@@ -21,7 +21,7 @@ import {
   ClipboardPaste,
 } from "lucide-react";
 
-import { api, APIError, parseHeaderTemplates } from "@/lib/api";
+import { api, parseHeaderTemplates } from "@/lib/api";
 import type {
   Channel,
   ChannelKey,
@@ -31,7 +31,8 @@ import type {
   ProxyEntry,
 } from "@/lib/types";
 import { HEADER_TEMPLATES_SETTING_KEY } from "@/lib/types";
-import { DEFAULT_TEST_MESSAGE } from "@/lib/constants";
+import { useChannelTestMessage } from "@/lib/use-channel-test-message";
+import { zhCN } from "@/locales/zh-CN";
 import { Button } from "@/components/ui/button";
 
 
@@ -231,16 +232,7 @@ export function ChannelEditor({
   const isNew = !channel || channel === "new";
   const open = !!channel;
 
-  // 渠道模型测试使用的测试问题：取设置中 channel_test_message，缺失则回落默认。
-  const { data: msgSetting } = useQuery({
-    queryKey: ["setting", "channel_test_message"],
-    queryFn: () =>
-      api.getSetting("channel_test_message").catch((e: unknown) => {
-        if (e instanceof APIError && e.status === 404) return null;
-        throw e;
-      }),
-  });
-  const testMessage = msgSetting?.value?.trim() || DEFAULT_TEST_MESSAGE;
+  const testMessage = useChannelTestMessage();
 
   // 实时校验（仅在用户交互后显示）。编辑态只校验「用户改过的」字段：存量渠道
   // 的名称/地址可能来自导入或旧版本（如含中文括号、全角冒号等 NAME_RULE 不允许
@@ -454,6 +446,11 @@ export function ChannelEditor({
   const [testingModels, setTestingModels] = useState<Set<string>>(
     () => new Set(),
   );
+  const [testingAll, setTestingAll] = useState(false);
+  // 每次编辑目标/密钥变化递增代次, 旧请求不能被后续测试重新激活。
+  const modelTestsGenerationRef = useRef(0);
+  const modelTestTicketsRef = useRef(new Map<string, symbol>());
+  const keyTestsGenerationRef = useRef(0);
   // 批量测试勾选集合：勾中的模型可并发小池批量探测。
   const [checkedTestModels, setCheckedTestModels] = useState<Set<string>>(
     () => new Set(),
@@ -498,8 +495,12 @@ export function ChannelEditor({
 
   // handleTestKeyChange 切换按模型测试使用的密钥：既有结果属于上一把密钥，一并清空。
   const handleTestKeyChange = (value: string) => {
+    modelTestsGenerationRef.current += 1;
+    modelTestTicketsRef.current.clear();
     setTestKeyID(value === "default" ? "" : value);
     setModelTestResults({});
+    setTestingModels(new Set());
+    setTestingAll(false);
   };
 
   // handleKeyTest 一键核验全部密钥：后端对每把密钥各发一条测试消息（默认用
@@ -512,34 +513,40 @@ export function ChannelEditor({
       toast.warning("请先为渠道添加模型");
       return;
     }
-    // 捕获当前 channelKey，await 返回后校验是否已切换渠道。
-    const gen = channelKey;
+    // 代次区分同一渠道关闭后重开, 避免旧结果覆盖新测试。
+    const gen = keyTestsGenerationRef.current;
     setKeyTestRunning(true);
     setKeyTests(null);
     setKeyTestUsedModel(model);
     try {
-      const results = await api.testChannelKeys(channel!.id, model);
-      if (gen !== prevChannelKeyRef.current) return;
+      const results = await api.testChannelKeys(channel!.id, model, testMessage);
+      if (gen !== keyTestsGenerationRef.current) return;
       setKeyTests(results);
     } catch (err) {
-      if (gen !== prevChannelKeyRef.current) return;
-      toast.error(err instanceof Error ? err.message : "逐密钥测试失败");
+      if (gen !== keyTestsGenerationRef.current) return;
+      toast.error(err instanceof Error && err.message ? err.message : zhCN.channelTest.keyFailed);
     } finally {
-      if (gen === prevChannelKeyRef.current) setKeyTestRunning(false);
+      if (gen === keyTestsGenerationRef.current) setKeyTestRunning(false);
     }
   };
 
-  // 切换渠道 / 模型增删时清空旧的测试结果（避免 model 名残留误显）。
+  // 切换渠道时清空旧的测试结果（避免 model 名残留误显）。
   // 与 draft 重置一样按 channelKey 判定，后台 refetch 不清空测试结果。
   // 同时中止进行中的批量测试：本组件常驻挂载（关闭 Sheet 只是 open=false），
   // 不中止会让旧渠道的计费请求继续发出、结果串写进新渠道的同名模型。
   useEffect(() => {
-    modelTestsAbortedRef.current = true;
+    modelTestsGenerationRef.current += 1;
+    modelTestTicketsRef.current.clear();
+    keyTestsGenerationRef.current += 1;
     setModelTestResults({});
     setTestingModels(new Set());
+    setTestingAll(false);
     setCheckedTestModels(new Set());
     setKeyTests(null);
+    setKeyTestRunning(false);
+    setKeyTestUsedModel("");
     setKeyTestModel("");
+    setTestKeyID("");
   }, [channelKey]);
 
   // 模型列表变化时清掉已不存在的勾选, 保证「测试所选 (n)」的计数真实。
@@ -559,12 +566,10 @@ export function ChannelEditor({
   }, [draft.models, keyTestModel]);
 
   // 组件卸载后中止批量测试：剩余排队项不再发往上游（每个都是真实计费请求）。
-  // setup 侧复位以兼容 StrictMode 的卸载-重挂载。
-  const modelTestsAbortedRef = useRef(false);
   useEffect(() => {
-    modelTestsAbortedRef.current = false;
     return () => {
-      modelTestsAbortedRef.current = true;
+      modelTestsGenerationRef.current += 1;
+      keyTestsGenerationRef.current += 1;
     };
   }, []);
 
@@ -575,6 +580,12 @@ export function ChannelEditor({
       setModelTestResults((prev) => ({ ...prev, [modelName]: r }));
       return r;
     }
+    const generation = modelTestsGenerationRef.current;
+    const ticket = Symbol(modelName);
+    modelTestTicketsRef.current.set(modelName, ticket);
+    const isCurrent = () =>
+      generation === modelTestsGenerationRef.current &&
+      modelTestTicketsRef.current.get(modelName) === ticket;
     setTestingModels((prev) => new Set(prev).add(modelName));
     try {
       // 指定按密钥测试选择器选中的 Key；空串由后端选第一把健康 Key。
@@ -585,7 +596,7 @@ export function ChannelEditor({
         testKeyID || undefined,
       );
       // 切换渠道/卸载后不回写过期结果，避免串入新渠道界面。
-      if (modelTestsAbortedRef.current) return { ok: false, latency_ms: 0, error: "aborted" };
+      if (!isCurrent()) return { ok: false, latency_ms: 0, error: "aborted" };
       // 200 即成功：失败由后端以 5xx 表达，走下方 catch
       const normalized = {
         ok: true,
@@ -596,20 +607,23 @@ export function ChannelEditor({
       setModelTestResults((prev) => ({ ...prev, [modelName]: normalized }));
       return normalized;
     } catch (err) {
-      if (modelTestsAbortedRef.current) return { ok: false, latency_ms: 0, error: "aborted" };
+      if (!isCurrent()) return { ok: false, latency_ms: 0, error: "aborted" };
       const normalized = {
         ok: false,
         latency_ms: 0,
-        error: err instanceof Error ? err.message : "测试失败",
+        error: err instanceof Error && err.message ? err.message : zhCN.channelTest.failed,
       };
       setModelTestResults((prev) => ({ ...prev, [modelName]: normalized }));
       return normalized;
     } finally {
-      setTestingModels((prev) => {
-        const next = new Set(prev);
-        next.delete(modelName);
-        return next;
-      });
+      if (isCurrent()) {
+        modelTestTicketsRef.current.delete(modelName);
+        setTestingModels((prev) => {
+          const next = new Set(prev);
+          next.delete(modelName);
+          return next;
+        });
+      }
     }
   }
 
@@ -618,7 +632,7 @@ export function ChannelEditor({
   };
 
   // Footer「测试连通」专用：让后端按 channel[0] 兜底模型，body 不带 model 字段。
-  // 结果必须反馈：后端 30s 预算内静默返回/失败都会让管理员反复点击重试。
+  // 结果必须反馈，避免管理员反复点击重试。
   const testMutForFooter = useMutation({
     mutationFn: (id: number) => api.testChannel(id, undefined, testMessage),
     onSuccess: (r) => {
@@ -632,18 +646,16 @@ export function ChannelEditor({
    * runModelTests 并发小池批量测试：4 个 worker 共享 FIFO 队列，刻意保守并发
    * 避免触发上游风控；卸载/切换渠道后停止派发剩余排队项。
    */
-  const [testingAll, setTestingAll] = useState(false);
   async function runModelTests(models: string[]) {
     if (testingAll || models.length === 0) return;
-    // 开新一轮：清掉切渠道/关弹窗置下的中止标记，否则本轮一个请求都不会发。
-    modelTestsAbortedRef.current = false;
+    const generation = modelTestsGenerationRef.current;
     setTestingAll(true);
     try {
       const queue = [...models];
       let okCount = 0;
       const worker = async () => {
         while (queue.length > 0) {
-          if (modelTestsAbortedRef.current) return;
+          if (generation !== modelTestsGenerationRef.current) return;
           const name = queue.shift();
           if (!name) break;
           const r = await runSingleModelTest(name);
@@ -651,13 +663,13 @@ export function ChannelEditor({
         }
       };
       await Promise.all([worker(), worker(), worker(), worker()]);
-      if (!modelTestsAbortedRef.current) {
+      if (generation === modelTestsGenerationRef.current) {
         toast.success(
           `测试完成：${okCount}/${models.length} 成功，${models.length - okCount} 失败`,
         );
       }
     } finally {
-      setTestingAll(false);
+      if (generation === modelTestsGenerationRef.current) setTestingAll(false);
     }
   }
 
@@ -692,7 +704,8 @@ export function ChannelEditor({
   // 不应跨编辑目标残留。父级 state 会在 onClose 后把 channel 置 null，但这里
   // 主动清掉 draft，不依赖 effect 的滞后时序（审计 FE-02）。
   function closeEditor() {
-    modelTestsAbortedRef.current = true;
+    modelTestsGenerationRef.current += 1;
+    keyTestsGenerationRef.current += 1;
     setFetchedForSelect(null);
     setFetchChecked(new Set());
     setDraft(toDraft(null));
@@ -1526,7 +1539,11 @@ function ModelsTab({
                   item.ok ? "text-ink-muted" : "text-destructive",
                 )}
               >
-                {item.ok ? item.content : item.error}
+                {item.ok
+                  ? item.content?.trim()
+                    ? item.content
+                    : zhCN.channelTest.emptyContent
+                  : item.error || zhCN.channelTest.failed}
               </span>
             </div>
           ))}
@@ -1800,9 +1817,9 @@ function ModelsTab({
                         <span className="text-emerald-600 dark:text-emerald-400">
                           ✓ 成功 · 延迟 {result.latency_ms}ms
                         </span>
-                        {result.content && (
-                          <p className="text-ink-muted whitespace-pre-wrap break-all">{result.content}</p>
-                        )}
+                        <p className="text-ink-muted whitespace-pre-wrap break-all">
+                          {result.content?.trim() ? result.content : zhCN.channelTest.emptyContent}
+                        </p>
                       </div>
                     ) : (
                       <div className="space-y-1">

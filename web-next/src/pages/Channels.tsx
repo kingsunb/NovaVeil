@@ -22,6 +22,7 @@ import { TableSkeleton } from "@/components/ui/skeleton";
 import { QueryErrorBanner } from "@/components/ui/query-error";
 
 import { api } from "@/lib/api";
+import { useChannelTestMessage } from "@/lib/use-channel-test-message";
 import type { Channel, ChannelImportResult } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Pill } from "@/components/ui/pill";
@@ -58,6 +59,7 @@ type Sort = "custom" | "name" | "status" | "models";
 
 export default function ChannelsPage() {
   const qc = useQueryClient();
+  const testMessage = useChannelTestMessage();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [proxyFilter, setProxyFilter] = useState<ProxyFilter>("all");
@@ -150,7 +152,7 @@ export default function ChannelsPage() {
   });
 
   const testMut = useMutation({
-    mutationFn: (id: number) => api.testChannel(id),
+    mutationFn: (id: number) => api.testChannel(id, undefined, testMessage),
     onMutate: (id) => setTestingId(id),
     // 只清掉自己那行的 testing 态：连点两行时，先返回的请求不能清掉后一行的指示。
     onSettled: (_data, _error, id) =>

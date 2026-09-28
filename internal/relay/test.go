@@ -41,9 +41,7 @@ type ChannelKeyTestResult struct {
 // KEY_TEST_CONCURRENCY 逐密钥测试的并发上限, 与面板批量模型测试的并发保持一致。
 const KEY_TEST_CONCURRENCY = 4
 
-// keyTestRequestTimeout 单把密钥测试的上游超时; 部分上游(含推理/排队)首 token
-// 延迟较高, 300s 与单模型测试接口对齐, 避免慢上游被误判为不可用。
-// 并发池下一把密钥的等待不会被前一把的慢上游拖垮整体。
+// keyTestRequestTimeout 单把密钥/分组成员测试的独立超时。
 const keyTestRequestTimeout = 60 * time.Second
 
 // testProbeClientIP 测试探针在日志流里的客户端标识: 探针没有真实来源 IP,
@@ -96,85 +94,85 @@ func isRetryableDiagnosticError(err error) bool {
 	return isInfrastructureError(err)
 }
 
-// recordTestRequest 把一次渠道模型测试登记为终态请求并发布到状态流, 供日志页
-// 实时可见与追踪(请求体/响应体复用既有按需拉取接口, 追踪 Sheet 可直接打开)。
-// 刻意不走 newRequestState→markSucceeded/markFailed 完整管线: 探针没有真实
-// 客户端来源, 不应计入客户端调用统计; 管理端自测报文也不写入对话留存。
-// 失败照常落失败摘要, 让「最近失败」能看到探针结论。
-// clientModel 为日志流展示的客户端模型名(单渠道测试=上游模型名, 分组测试=分组名);
-// targetModel 为实际上游模型名; relayMode/clientFormat/upstreamType 记录本次中继方式
-// 与协议标签, 供日志页按透传/转换、客户端/上游协议筛选。
-// channel 为已解析的生效渠道(多 Key 代理模板已按所选 Key 展开), 测试出站与其余
-// 转发路径一样经 ChannelHttpClient 按该渠道代理发出, 因此代理标注必须同样落进
-// 日志流, 否则面板测试明明走了代理却显示直连。
-func recordTestRequest(channel model.Channel, keyLabel, clientModel, targetModel string, rawBody []byte, responseBody string, elapsed time.Duration, usage *llm.Usage, reqErr error, relayMode, clientFormat, upstreamType string) {
-	status := StatusSuccess
-	class := ErrClass("")
-	brief := ""
-	outcome := AttemptSuccess
-	if reqErr != nil {
-		status = StatusFailed
-		class = ClassifyError(reqErr)
-		brief = truncateErrBrief(reqErr.Error())
-		outcome = AttemptFailed
-	}
+// startTestRequest 在准备/发送探针前发布运行态。探针复用请求状态与轮次轨迹,
+// 但不计入业务客户端统计、用量分桶与对话留存。
+func startTestRequest(clientModel string, rawBody []byte, target RoundTarget, cancel context.CancelFunc) *RequestState {
 	mu.Lock()
 	defer mu.Unlock()
 	request := &RequestState{
 		ID:            idSeq.Add(1),
-		Status:        status,
-		StartedAt:     time.Now().Add(-elapsed),
-		Duration:      elapsed,
+		Status:        StatusRunning,
+		StartedAt:     time.Now(),
 		Model:         clientModel,
 		ClientIP:      testProbeClientIP,
-		TargetChannel: channel.Name,
-		TargetModel:   targetModel,
-		KeyLabel:      keyLabel,
-		ClientFormat:  clientFormat,
-		UpstreamType:  upstreamType,
-		RelayMode:     relayMode,
-		ProxyAddr:     roundProxyLabel(channel, channel),
-		Error:         brief,
-		Class:         class,
+		TargetChannel: target.ChannelName,
+		TargetModel:   target.Model,
+		KeyLabel:      target.KeyLabel,
+		ClientFormat:  target.ClientFormat,
+		UpstreamType:  target.UpstreamType,
+		RelayMode:     "converted",
+		ProxyAddr:     target.ProxyAddr,
 		body:          truncatePreview(string(rawBody)),
-		responseBody:  truncatePreview(responseBody),
+		cancel:        cancel,
+		stopCh:        make(chan struct{}),
 	}
-	if usage != nil {
-		request.Usage = *usage
-	}
-	request.Attempts = []AttemptRecord{{
-		Seq:         1,
-		ChannelID:   channel.ID,
-		ChannelName: channel.Name,
-		Model:       clientModel,
-		KeyLabel:    keyLabel,
-		ProxyAddr:   roundProxyLabel(channel, channel),
-		LatencyMS:   elapsed.Milliseconds(),
-		Outcome:     outcome,
-		ErrClass:    class,
-		ErrBrief:    brief,
-	}}
-	if reqErr != nil {
-		appendFailureLocked(FailureSummary{
-			ID:            request.ID,
-			FinishedAt:    time.Now(),
-			Model:         clientModel,
-			TargetChannel: channel.Name,
-			TargetModel:   targetModel,
-			ErrClass:      class,
-			ErrBrief:      brief,
-		})
+	if target.Passthrough {
+		request.RelayMode = "passthrough"
 	}
 	requests[request.ID] = request
 	publishRequestLocked(request)
+	return request
+}
+
+// finishTestRequest 更新同一探针的终态并加入有界历史, 不额外创建日志行。
+func finishTestRequest(request *RequestState, responseBody string, usage *llm.Usage, reqErr error) {
+	mu.Lock()
+	defer mu.Unlock()
+	request.Status = StatusSuccess
+	request.Class = ""
+	request.Error = ""
+	if reqErr != nil {
+		request.Status = StatusFailed
+		request.Class = ClassifyError(reqErr)
+		request.Error = truncateErrBrief(reqErr.Error())
+		if errors.Is(reqErr, context.Canceled) || request.stopRequested {
+			request.Status = StatusCanceled
+			request.Class = ErrClassClientCancel
+			if request.stopRequested {
+				request.Class = ErrClassAdminAbort
+			}
+		} else if errors.Is(reqErr, context.DeadlineExceeded) {
+			request.Class = ErrClassTimeout
+		}
+	}
+	request.Duration = time.Since(request.StartedAt)
+	request.Sending = false
+	request.cancel = nil
+	request.responseBody = truncatePreview(responseBody)
+	if usage != nil {
+		request.Usage = *usage
+	}
+	if request.Status == StatusFailed {
+		appendFailureLocked(FailureSummary{
+			ID:            request.ID,
+			FinishedAt:    time.Now(),
+			Model:         request.Model,
+			TargetChannel: request.TargetChannel,
+			TargetModel:   request.TargetModel,
+			ErrClass:      request.Class,
+			ErrBrief:      request.Error,
+		})
+	}
+	publishRequestLocked(request)
+	finishedRequestQueue = append(finishedRequestQueue, request.ID)
 	trimFinishedRequestsLocked()
 }
 
-// TestChannel 以 OpenAI Chat 协议向指定渠道的单个模型发送一条测试消息并返回回复摘要。
+// TestChannel 按渠道的生效协议模拟下游请求, 向单个模型发送测试消息并返回回复摘要。
 // 测试请求走与真实转发一致的转换 pipeline, 渠道参数覆盖与模型限制同样生效。
 // keyID 为空时固定使用第一把健康 Key(与半开/后台探测一致);
 // 非空时强制使用该把密钥并绕过冷却——管理端显式验证某把 Key, 冷却跳过会静默换 Key 使结果失真。
-// 每次测试都会作为一条终态请求出现在日志流(客户端标记为 面板测试)。
+// 每次测试从运行态到终态复用同一条日志记录(客户端标记为 面板测试)。
 func TestChannel(ctx context.Context, channelID int, modelName string, message string, keyID string) (*ChannelTestResult, error) {
 	channel, err := op.ChannelGet(channelID)
 	if err != nil {
@@ -187,11 +185,12 @@ func TestChannel(ctx context.Context, channelID int, modelName string, message s
 		message = "ping"
 	}
 
-	channel, keyIndex, key, err := effectiveTestChannel(channel, keyID)
+	effective, keyIndex, key, err := effectiveTestChannel(channel, keyID)
 	if err != nil {
+		recordTestSetupFailure(channel, modelName, modelName, message, channelKeyLabel(keyIndex, key), err)
 		return nil, err
 	}
-	return sendChannelTestRequest(ctx, channel, modelName, message, channelKeyLabel(keyIndex, key), testPanelMaxTokens)
+	return sendChannelTestRequest(ctx, effective, modelName, message, channelKeyLabel(keyIndex, key), testPanelMaxTokens)
 }
 
 // evalKeyAttemptLimit 单渠道单模型评估时最多尝试的密钥把数。密钥极多的渠道若逐把
@@ -217,7 +216,9 @@ func TestChannelKeyFailover(ctx context.Context, channelID int, modelName string
 	}
 	candidates := channelKeyTestCandidates(channel)
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("渠道未配置任何密钥")
+		err := fmt.Errorf("渠道未配置任何密钥")
+		recordTestSetupFailure(channel, modelName, modelName, message, "", err)
+		return nil, err
 	}
 	tried := candidates
 	if len(tried) > evalKeyAttemptLimit {
@@ -230,6 +231,7 @@ func TestChannelKeyFailover(ctx context.Context, channelID int, modelName string
 		}
 		effective, err := effectiveChannelForKey(channel, key)
 		if err != nil {
+			recordTestSetupFailure(channel, modelName, modelName, message, channelKeyLabel(index, key), err)
 			errs = append(errs, fmt.Sprintf("#%d(%s): %v", index+1, key.ID, err))
 			continue
 		}
@@ -267,7 +269,9 @@ func testChannelKeysWithChannel(ctx context.Context, channel model.Channel, mode
 	}
 	candidates := channelKeyTestCandidates(channel)
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("渠道未配置任何密钥")
+		err := fmt.Errorf("渠道未配置任何密钥")
+		recordTestSetupFailure(channel, modelName, modelName, message, "", err)
+		return nil, err
 	}
 
 	results := make([]ChannelKeyTestResult, len(candidates))
@@ -312,9 +316,11 @@ func testChannelKeyOnce(ctx context.Context, channel model.Channel, index int, k
 	effective, err := effectiveChannelForKey(channel, key)
 	if err == nil {
 		// 诊断测试不与业务流量抢并发槽位: 清零副本上的 max_concurrent,
-		// 避免业务请求占满信号量时测试在等槽位中烧掉自己的 30s 超时。
+		// 避免业务请求占满信号量时测试在等槽位中烧掉自己的超时。
 		effective.MaxConcurrent = 0
 		err = sendKeyTestRequest(ctx, effective, modelName, message, &result)
+	} else {
+		recordTestSetupFailure(channel, modelName, modelName, message, result.Label, err)
 	}
 	switch {
 	case err == nil:
@@ -330,38 +336,18 @@ func testChannelKeyOnce(ctx context.Context, channel model.Channel, index int, k
 }
 
 // sendKeyTestRequest 发送单把密钥的测试请求并把回复摘要与耗时写入 result。
-// 以 openai_chat 作为代表客户端协议构造请求, 路径决定与真实转发(客户端发
-// openai_chat)一致: 同协议渠道整包透传, 异协议渠道经 pipeline 转换。
+// 与单模型测试共用协议选择、日志生命周期和请求头注入。
 func sendKeyTestRequest(ctx context.Context, effective model.Channel, modelName string, message string, result *ChannelKeyTestResult) error {
 	keyCtx, cancel := context.WithTimeout(ctx, keyTestRequestTimeout)
 	defer cancel()
 
-	format := testProbeClientFormat
-	outbound, passthrough, err := buildOutbound(effective, nil, format)
-	if err != nil {
-		return err
-	}
-	raw, err := newTestRequest(format, modelName, message, testPanelMaxTokens)
-	if err != nil {
-		return err
-	}
-	// 代表客户端入站路径, 与 sendChannelTestRequest 对齐, 供 buildPassthroughRequest
-	// 在完全透传渠道下 strings.TrimPrefix(raw.Path, "/v1") 得到 "/chat/completions"。
-	raw.Path = "/v1/chat/completions"
-
 	startedAt := time.Now()
-	response, err := sendDiagnosticUpstream(keyCtx, func() (*upstreamResponse, error) {
-		if passthrough {
-			return sendPassthrough(keyCtx, format, raw, effective, outbound, false, "")
-		}
-		return sendConverted(keyCtx, format, raw, effective, outbound, false, "")
-	})
+	response, err := sendChannelTestRequest(keyCtx, effective, modelName, message, result.Label, testPanelMaxTokens)
 	result.ElapsedMS = time.Since(startedAt).Milliseconds()
 	if err != nil {
 		return err
 	}
-	defer response.Close()
-	result.Content = extractMessageContent(response.body)
+	result.Content = response.Content
 	return nil
 }
 
@@ -395,8 +381,8 @@ const testPanelMaxTokens = 4096
 
 // newTestRequest 按 format 构造一条非流式测试请求。maxTokens 指定输出上限:
 // 评估路径传 testMaxTokens, 面板/分组诊断路径传 testPanelMaxTokens, 传 0 时回退
-// testPanelMaxTokens(诊断默认)。透传渠道(原生格式)直接以渠道协议报文发出;
-// 转换渠道一律以 OpenAI Chat 报文发出, 由 pipeline 转换为渠道上游协议。
+// testPanelMaxTokens(诊断默认)。Path 与正文一起按客户端协议构造, 完全透传
+// 同样携带真实的入站路径。未提供原生入站的渠道通过 Chat 转换到上游协议。
 //   - OpenAI Chat / Anthropic Messages: messages 数组; Anthropic 另需 max_tokens。
 //   - OpenAI Responses: input 字段。
 //
@@ -449,9 +435,14 @@ func newTestRequest(format llm.APIFormat, modelName, message string, maxTokens i
 			return nil, err
 		}
 	}
+	headers := http.Header{"Content-Type": []string{"application/json"}}
+	if format == llm.APIFormatAnthropicMessage {
+		headers.Set("Anthropic-Version", "2023-06-01")
+	}
 	return &httpclient.Request{
 		Method:    http.MethodPost,
-		Headers:   http.Header{"Content-Type": []string{"application/json"}},
+		Path:      "/v1" + upstreamPath(format),
+		Headers:   headers,
 		Body:      body,
 		APIFormat: format.String(),
 	}, nil
@@ -464,43 +455,105 @@ func newTestChatRequest(modelName string, message string) (*httpclient.Request, 
 
 // sendChannelTestRequest 发送单模型测试请求并聚合回复摘要、耗时与 token 用量。
 // maxTokens 由调用方按场景传入: 面板诊断用 testPanelMaxTokens, 模型评估用 testMaxTokens。
-// 以 openai_chat 作为代表客户端协议构造请求, 路径决定与真实转发(客户端发
-// openai_chat)一致: 同协议渠道整包透传, 异协议渠道经 pipeline 转换。
-// 无论成败, 都把这次探针作为终态请求写入日志流(keyLabel 标识所用密钥)。
+// 客户端协议取渠道/模型的生效协议; keyLabel 标识所用密钥。
 func sendChannelTestRequest(ctx context.Context, channel model.Channel, modelName string, message string, keyLabel string, maxTokens int) (*ChannelTestResult, error) {
-	format := testProbeClientFormat
-	outbound, passthrough, err := buildOutbound(channel, nil, format)
-	if err != nil {
-		return nil, err
+	return sendTestRequest(ctx, channel, modelName, modelName, message, keyLabel, maxTokens)
+}
+
+// testRequestTarget 与真实转发共用生效协议规则, 包括 OpenCode 的模型协议覆盖。
+func testRequestTarget(channel model.Channel, modelName, keyLabel string) (llm.APIFormat, *model.ChannelModel, RoundTarget) {
+	var channelModel *model.ChannelModel
+	for i := range channel.Models {
+		if channel.Models[i].Name == modelName {
+			channelModel = &channel.Models[i]
+			break
+		}
 	}
+	format := channelNativeFormat(outboundProvider(channel, channelModel))
+	return format, channelModel, RoundTarget{
+		ChannelID:    channel.ID,
+		ChannelName:  channel.Name,
+		Model:        modelName,
+		KeyLabel:     keyLabel,
+		ClientFormat: clientFormatLabel(format),
+		UpstreamType: upstreamTypeLabel(channel, channelModel),
+		Passthrough:  supportsNativeFormat(channel, channelModel, format),
+		ProxyAddr:    roundProxyLabel(channel, channel),
+	}
+}
+
+// recordTestSetupFailure 记录渠道已识别但密钥/代理等准备失败的诊断结果。
+func recordTestSetupFailure(channel model.Channel, clientModel, modelName, message, keyLabel string, reqErr error) {
+	format, _, target := testRequestTarget(channel, modelName, keyLabel)
+	var body []byte
+	if raw, err := newTestRequest(format, modelName, message, testPanelMaxTokens); err == nil {
+		body = raw.Body
+	} // 构造失败时保留原始准备错误, 请求体为空。
+	request := startTestRequest(clientModel, body, target, nil)
+	finishTestRequest(request, "", nil, reqErr)
+}
+
+// sendTestRequest 统一单模型、逐密钥、分组与评估探针的出站和可观察生命周期。
+// clientModel 仅用于日志展示(分组测试为分组名), modelName 是实际上游模型。
+func sendTestRequest(ctx context.Context, channel model.Channel, clientModel, modelName, message, keyLabel string, maxTokens int) (*ChannelTestResult, error) {
+	format, channelModel, target := testRequestTarget(channel, modelName, keyLabel)
+	testCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	raw, err := newTestRequest(format, modelName, message, maxTokens)
 	if err != nil {
+		recordTestSetupFailure(channel, clientModel, modelName, message, keyLabel, err)
 		return nil, err
 	}
-	// 代表客户端入站路径, 供 buildPassthroughRequest 在完全透传渠道下
-	// strings.TrimPrefix(raw.Path, "/v1") 得到 "/chat/completions", 避免回退
-	// 到 upstreamPath(format) 导致与真实转发路径分歧。
-	raw.Path = "/v1/chat/completions"
-
-	relayMode := "converted"
-	if passthrough {
-		relayMode = "passthrough"
+	request := startTestRequest(clientModel, raw.Body, target, cancel)
+	outbound, passthrough, err := buildOutbound(channel, channelModel, format)
+	if err != nil {
+		finishTestRequest(request, "", nil, err)
+		return nil, err
 	}
+	target.Passthrough = passthrough
 	// 生成随机值以触发 injectRandomHeaders 注入动态头(含 opencode 兼容头),
 	// 与真实转发路径保持一致; 空串会让 injectRandomHeaders 提前返回而漏注这些头。
 	randomValue := uuid.NewString()
-	startedAt := time.Now()
-	result, err := sendDiagnosticUpstream(ctx, func() (*upstreamResponse, error) {
-		if passthrough {
-			return sendPassthrough(ctx, format, raw, channel, outbound, false, randomValue)
+	result, err := sendDiagnosticUpstream(testCtx, func() (*upstreamResponse, error) {
+		if err := testCtx.Err(); err != nil {
+			return nil, err
 		}
-		return sendConverted(ctx, format, raw, channel, outbound, false, randomValue)
+		request.startRound(cancel, target)
+		var response *upstreamResponse
+		var sendErr error
+		if passthrough {
+			response, sendErr = sendPassthrough(testCtx, format, raw, channel, outbound, false, randomValue)
+		} else {
+			response, sendErr = sendConverted(testCtx, format, raw, channel, outbound, false, randomValue)
+		}
+		if sendErr == nil {
+			request.finishRound(AttemptSuccess, "", "")
+		} else {
+			outcome, class := AttemptFailed, ClassifyError(sendErr)
+			if errors.Is(sendErr, context.Canceled) {
+				outcome, class = AttemptCanceled, ErrClassClientCancel
+				if request.IsStopRequested() {
+					class = ErrClassAdminAbort
+				}
+			} else if errors.Is(sendErr, context.DeadlineExceeded) {
+				class = ErrClassTimeout
+			}
+			request.finishRound(outcome, class, truncateErrBrief(sendErr.Error()))
+		}
+		return response, sendErr
 	})
-	elapsed := time.Since(startedAt)
-	clientFormat := clientFormatLabel(format)
-	upstreamType := upstreamTypeLabel(channel, nil)
 	if err != nil {
-		recordTestRequest(channel, keyLabel, modelName, modelName, raw.Body, "", elapsed, nil, err, relayMode, clientFormat, upstreamType)
+		// HTTP 错误体供日志详情按需读取, 不把原文塞进状态流。
+		var failure *httpclient.Error
+		responseBody := ""
+		if errors.As(err, &failure) {
+			responseBody = string(failure.Body)
+		}
+		// 重试等待期间取消/超时以请求上下文为准, 避免仍显示上一轮网络错误。
+		if contextErr := testCtx.Err(); contextErr != nil {
+			err = contextErr
+		}
+		finishTestRequest(request, responseBody, nil, err)
 		return nil, err
 	}
 	defer result.Close()
@@ -509,28 +562,18 @@ func sendChannelTestRequest(ctx context.Context, channel model.Channel, modelNam
 	if result.usage != nil {
 		usage = *result.usage
 	}
-	recordTestRequest(channel, keyLabel, modelName, modelName, raw.Body, string(result.body), elapsed, &usage, nil, relayMode, clientFormat, upstreamType)
+	finishTestRequest(request, string(result.body), &usage, nil)
 	return &ChannelTestResult{
 		Model:            modelName,
 		Content:          extractMessageContent(result.body),
-		ElapsedMS:        elapsed.Milliseconds(),
+		ElapsedMS:        request.Duration.Milliseconds(),
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
 	}, nil
 }
 
-// testProbeClientFormat 测试探针模拟的客户端协议, 作为单模型/逐密钥测试探针
-// format 的单一事实源。对齐范围为 buildOutbound 的 passthrough 判定、
-// sendPassthrough/sendConverted 的选择、buildPassthroughRequest 的 upstreamPath
-// 与完全透传 raw.Path 处理, 使探针的路径决定与真实转发(客户端发 openai_chat)一致。
-// 选 openai_chat 因它为最通用的客户端入口协议, 且前端测试按钮无协议选择项,
-// 管理端自测等价于客户端以 openai_chat 入站。
-const testProbeClientFormat = llm.APIFormatOpenAIChatCompletion
-
-// channelNativeFormat 返回渠道上游协议的原生 API 格式。剩余唯一调用方为
-// testGroupMember(分组测试, 不复用 testProbeClientFormat); 单模型/逐密钥测试
-// 探针已改用 testProbeClientFormat 对齐真实转发路径。Gemini/Volcengine/Custom
-// 等无原生透传支持的渠道回退 OpenAI Chat, 由转换器适配其上游协议。
+// channelNativeFormat 返回网关支持的对应入站格式。Gemini/Volcengine/Custom
+// 无独立原生入站, 使用 OpenAI Chat 并交给现有转换器适配上游。
 func channelNativeFormat(channelType model.ChannelProvider) llm.APIFormat {
 	switch channelType {
 	case model.ChannelProviderOpenAI:
@@ -544,10 +587,10 @@ func channelNativeFormat(channelType model.ChannelProvider) llm.APIFormat {
 	}
 }
 
-// extractMessageContent 从上游响应中提取首条回复文本, 兼容多种协议的回复结构:
+// extractMessageContent 从上游响应中提取回复文本, 跳过推理与工具块并拼接文本块:
 //   - OpenAI Chat: choices.0.message.content(字符串或分片数组)。
-//   - Anthropic Messages: content.0.text。
-//   - OpenAI Responses: output.0.content.0.text。
+//   - Anthropic Messages: content 中的 text 块。
+//   - OpenAI Responses: output 中所有 message 的 content 文本块。
 //
 // 逐路径尝试, 命中即返回; 均不命中返回空串。
 func extractMessageContent(responseBody []byte) string {
@@ -568,13 +611,27 @@ func extractMessageContent(responseBody []byte) string {
 			}
 		}
 	}
-	// Anthropic Messages: content.0.text。
-	if field := gjson.GetBytes(responseBody, "content.0.text"); field.Type == gjson.String {
-		return field.String()
+	var texts []string
+	for _, part := range gjson.GetBytes(responseBody, "content").Array() {
+		if part.Get("type").String() == "text" && part.Get("text").Type == gjson.String {
+			texts = append(texts, part.Get("text").String())
+		}
 	}
-	// OpenAI Responses: output.0.content.0.text。
-	if field := gjson.GetBytes(responseBody, "output.0.content.0.text"); field.Type == gjson.String {
-		return field.String()
+	if len(texts) > 0 {
+		return strings.Join(texts, "")
+	}
+	for _, item := range gjson.GetBytes(responseBody, "output").Array() {
+		if item.Get("type").String() != "message" {
+			continue
+		}
+		for _, part := range item.Get("content").Array() {
+			if part.Get("type").String() == "output_text" && part.Get("text").Type == gjson.String {
+				texts = append(texts, part.Get("text").String())
+			}
+		}
+	}
+	if len(texts) > 0 {
+		return strings.Join(texts, "")
 	}
 	return ""
 }
@@ -677,25 +734,17 @@ func testGroupMember(ctx context.Context, channelModelID int, groupName, message
 		return GroupTestResult{Model: cm.Name, Status: "fail", Error: fmt.Sprintf("渠道不存在: %v", err)}
 	}
 	// 选第一把健康 Key(与单模型测试探测路径一致); 找不到健康 Key 时记失败。
-	effective, _, _, err := effectiveProbeChannel(channel)
+	effective, keyIndex, key, err := effectiveProbeChannel(channel)
 	if err != nil {
+		recordTestSetupFailure(channel, groupName, cm.Name, message, channelKeyLabel(keyIndex, key), err)
 		return GroupTestResult{ChannelName: channel.Name, Model: cm.Name, Status: "fail", Error: err.Error()}
 	}
 	// 诊断测试不与业务流量抢并发槽位: 清零副本上的 max_concurrent。
 	effective.MaxConcurrent = 0
 
-	format := channelNativeFormat(effective.Type)
-	outbound, passthrough, err := buildOutbound(effective, nil, format)
-	if err != nil {
-		return GroupTestResult{ChannelName: channel.Name, Model: cm.Name, Status: "fail", Error: err.Error()}
-	}
-	raw, err := newTestRequest(format, cm.Name, message, testPanelMaxTokens)
-	if err != nil {
-		return GroupTestResult{ChannelName: channel.Name, Model: cm.Name, Status: "fail", Error: err.Error()}
-	}
-
+	_, _, target := testRequestTarget(effective, cm.Name, channelKeyLabel(keyIndex, key))
 	relayMode := "converted"
-	if passthrough {
+	if target.Passthrough {
 		relayMode = "passthrough"
 	}
 	// 单成员独立超时, 避免一个慢上游拖垮整组测试。
@@ -703,26 +752,10 @@ func testGroupMember(ctx context.Context, channelModelID int, groupName, message
 	defer cancel()
 
 	startedAt := time.Now()
-	resp, err := sendDiagnosticUpstream(testCtx, func() (*upstreamResponse, error) {
-		if passthrough {
-			return sendPassthrough(testCtx, format, raw, effective, outbound, false, "")
-		}
-		return sendConverted(testCtx, format, raw, effective, outbound, false, "")
-	})
+	resp, err := sendTestRequest(testCtx, effective, groupName, cm.Name, message, target.KeyLabel, testPanelMaxTokens)
 	elapsed := time.Since(startedAt)
-	clientFormat := clientFormatLabel(format)
-	upstreamType := upstreamTypeLabel(effective, nil)
 	if err != nil {
-		recordTestRequest(effective, "", groupName, cm.Name, raw.Body, "", elapsed, nil, err, relayMode, clientFormat, upstreamType)
 		return GroupTestResult{ChannelName: channel.Name, Model: cm.Name, Status: "fail", Error: err.Error(), LatencyMS: elapsed.Milliseconds(), RelayMode: relayMode}
 	}
-	defer resp.Close()
-
-	usage := llm.Usage{}
-	if resp.usage != nil {
-		usage = *resp.usage
-	}
-	content := extractMessageContent(resp.body)
-	recordTestRequest(effective, "", groupName, cm.Name, raw.Body, string(resp.body), elapsed, &usage, nil, relayMode, clientFormat, upstreamType)
-	return GroupTestResult{ChannelName: channel.Name, Model: cm.Name, Status: "ok", Content: content, LatencyMS: elapsed.Milliseconds(), RelayMode: relayMode}
+	return GroupTestResult{ChannelName: channel.Name, Model: cm.Name, Status: "ok", Content: resp.Content, LatencyMS: resp.ElapsedMS, RelayMode: relayMode}
 }

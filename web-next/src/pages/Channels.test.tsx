@@ -46,6 +46,7 @@ function mockFetch(opts: {
   list?: unknown[];
   fetchModels?: unknown[];
   fetchModelError?: { status: number; body: unknown };
+  testMessage?: string;
   testResults?: Array<{
     model?: string;
     content?: string;
@@ -155,7 +156,7 @@ function mockFetch(opts: {
       const key = parsed.searchParams.get("key") ?? "channel_test_message";
       return Promise.resolve(
         new Response(
-          JSON.stringify({ code: 200, message: "success", data: { key, value: "" } }),
+          JSON.stringify({ code: 200, message: "success", data: { key, value: opts.testMessage ?? "" } }),
           { status: 200, headers: { "content-type": "application/json" } },
         ),
       );
@@ -400,7 +401,22 @@ describe("<ChannelsPage />", () => {
     ).toBeInTheDocument();
   });
 
-  it("测试连通：仅 id（后端兜底模型）", async () => {
+  it.each(["", "自定义渠道测试问题"])("列表测试连通使用设置消息或默认值：%s", async (testMessage) => {
+    const fetchMock = mockFetch({ list: [sampleChannel], testMessage });
+    const user = userEvent.setup();
+    render(<ChannelsPage />, { wrapper: Wrapper });
+    await user.click(await screen.findByRole("button", { name: "测试 openai-prod" }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url]) => String(url).includes("/channel/test"));
+      expect(call).toBeDefined();
+      expect(JSON.parse(call![1]?.body as string)).toEqual({
+        id: sampleChannel.id,
+        message: testMessage || DEFAULT_TEST_MESSAGE,
+      });
+    });
+  });
+
+  it("编辑器测试连通传 id 和消息，后端兜底模型", async () => {
     const fetchMock = mockFetch({
       list: [sampleChannel],
       // 后端 relay.TestChannel 返回 {model, content, elapsed_ms, ...}
@@ -493,8 +509,10 @@ describe("<ChannelsPage />", () => {
       expect(calls.length).toBeGreaterThanOrEqual(1);
       const body = JSON.parse(calls[calls.length - 1][1]?.body as string) as {
         model?: string;
+        message?: string;
       };
       expect(body.model).toBe("gpt-4o-mini");
+      expect(body.message).toBe(DEFAULT_TEST_MESSAGE);
     });
 
     // 结果标题展示所用模型名

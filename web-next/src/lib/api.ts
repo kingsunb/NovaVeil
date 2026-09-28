@@ -842,7 +842,7 @@ export const api = {
     });
     return normalizeChannelTestResult(raw);
   },
-  // 逐密钥测试：后端对每把密钥各发一条测试消息（并发 4、单 Key 30s 超时），
+  // 逐密钥测试：后端对每把密钥各发一条测试消息（并发 4、单 Key 60s 超时），
   // 按配置顺序返回逐 Key 有效性结果。
   testChannelKeys: async (id: number, model?: string, message?: string) => {
     const body: Record<string, unknown> = { id };
