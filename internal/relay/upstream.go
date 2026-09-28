@@ -86,6 +86,16 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		releaseConcurrency()
 		return nil, err
 	}
+	// OpenCode Zen 免费档请求改写: 见 opencode_free.go。改写须在连线上游前完成, 否则
+	// 免费档以 403 FreeTierError 拒绝任何非 Agent 形态请求。改写放在 buildPassthroughRequest
+	// 之后, 保证 model 名已写入正文且渠道参数/请求头已应用; 折叠仅在客户端非流式且改写
+	// 把 stream 置真时触发(此时上游返回 SSE, 需聚合回 JSON)。
+	collapsed := false
+	if isChatFormat(format) && isOpencodeFreeModel(channel, bodyModelName(request.Body)) {
+		var shaped bool
+		request.Body, shaped = shapeOpencodeFreeBody(request.Body)
+		collapsed = shaped && !streaming
+	}
 	if streaming {
 		resp, streamErr := sendPassthroughStream(ctx, format, request, client)
 		if streamErr != nil {
@@ -96,6 +106,23 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		// 失败路径已在 sendPassthroughStream 内部 close events 后返回, 此处无需再释放。
 		resp.release = releaseConcurrency
 		return resp, nil
+	}
+	if collapsed {
+		resp, err := sendPassthroughStream(ctx, format, request, client)
+		if err != nil {
+			releaseConcurrency()
+			return nil, err
+		}
+		resp.release = releaseConcurrency
+		body, usage, err := collapseOpencodeFreeStream(ctx, format, resp)
+		resp.Close()
+		if err != nil {
+			return nil, err
+		}
+		if err := validateCollapsedFreeBody(format, body, usage); err != nil {
+			return nil, err
+		}
+		return &upstreamResponse{body: body, usage: usage, release: releaseConcurrency}, nil
 	}
 
 	response, err := httpclient.NewHttpClientWithClient(client).Do(ctx, request)
@@ -243,6 +270,12 @@ func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *
 	}
 	if err := applyChannelConfig(m.channel, request, m.randomValue, m.opencodeSession); err != nil {
 		return nil, err
+	}
+	// OpenCode Zen 免费档改写: 转换路径与透传路径须同形, 否则免费档以 403 FreeTierError
+	// 拒绝。Chat 归一与渠道参数已应用、model 名已最终化, 此时把出站 Chat 正文规范成
+	// Agent 形态(stream + 核心工具)。客户端非流式的折叠由 sendConverted 依据 !streaming 判定。
+	if m.format == llm.APIFormatOpenAIChatCompletion && isOpencodeFreeModel(m.channel, bodyModelName(request.Body)) {
+		request.Body, _ = shapeOpencodeFreeBody(request.Body)
 	}
 	// 角色归一与渠道参数覆盖之后再回写。Chat 归一会剥掉白名单外的顶层字段,
 	// 必须在那之后补回, 且只补出站 JSON 里还没有的字段。不回写 JSONBody, 避免该值进日志副本。
@@ -515,6 +548,15 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		outbound,
 		pipeline.WithMiddlewares(middleware),
 	)
+	// OpenCode Zen 免费档非流式折叠: 客户端(Anthropic/Responses)请求非流式、且目标是免费档模型时,
+	// 把客户端正文置为流式, 让 pipeline 以流式驱动上游并返回事件流, 稍后聚合回非流式正文。
+	// 免费档只接受 Agent 形态的流式请求, 非流式直连必然 403 FreeTierError。
+	collapse := !streaming && outbound.APIFormat() == llm.APIFormatOpenAIChatCompletion && isOpencodeFreeModel(channel, bodyModelName(raw.Body))
+	if collapse {
+		if next, err := sjson.SetBytes(raw.Body, "stream", true); err == nil {
+			raw.Body = next
+		}
+	}
 	result, err := processor.Process(ctx, raw)
 	if traceOn && ct != nil {
 		ct.Elapsed = time.Since(convStart)
@@ -526,6 +568,26 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 			return nil, fmt.Errorf("%w: %s", err, middleware.rawBody)
 		}
 		return nil, err
+	}
+	if collapse {
+		// 与流式分支相同的窗口预读校验, 再把完整事件流折叠成非流式正文。
+		events := result.EventStream
+		window, ended, terminated, err := readStreamWindow(ctx, format, inbound, events)
+		if err != nil {
+			_ = events.Close()
+			releaseConcurrency()
+			return nil, err
+		}
+		resp := &upstreamResponse{events: events, window: window, last: ended, terminated: terminated, release: releaseConcurrency}
+		body, usage, err := collapseOpencodeFreeStream(ctx, format, resp)
+		resp.Close()
+		if err != nil {
+			return nil, err
+		}
+		if err := validateCollapsedFreeBody(format, body, usage); err != nil {
+			return nil, fmt.Errorf("%w: %s", err, middleware.rawBody)
+		}
+		return &upstreamResponse{body: body, usage: usage, release: releaseConcurrency}, nil
 	}
 	if !streaming {
 		// 输出 token 明确为 0 的响应按无效处理, 在提交前换目标重试;

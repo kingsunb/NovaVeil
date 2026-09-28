@@ -24,7 +24,7 @@
 - 渠道 `sort` 可以写成 0。完全透传不跳过分组路由、故障转移和 Key 轮询。
 - OpenCode 免费渠道与官方渠道已经是两条内置渠道。自定义渠道的 `opencode_compat` 被强制关掉。Chat、Responses、Anthropic 的转换在现有 relay，不需要第二套协议栈。
 
-参考 [gpt-load](https://github.com/tbphp/gpt-load) 和本地的 opencode2api 时：只借鉴行为，不复制源码，不引入第二套数据库、`auth.key` 或无库配置面。不移植订阅 OAuth、Responses WebSocket、匿名请求改写、CLI 指纹或双 Key 池。
+参考 [gpt-load](https://github.com/tbphp/gpt-load) 和本地的 opencode2api 时：只借鉴行为，不复制源码，不引入第二套数据库、`auth.key` 或无库配置面。不移植订阅 OAuth、Responses WebSocket、CLI 指纹或双 Key 池。免费档的 Agent 形态请求改写（强制 stream + 注入核心工具、非流式折叠回 JSON）已按「只借鉴行为」落地，见 [OpenCode 免费档改写](../../.agents/notes/implemented/bug-fix/2026-09-29-opencode-free-tier-agent-shape-rewrite.md)。
 
 ## 3. 第一批：凭据、内存和部署
 

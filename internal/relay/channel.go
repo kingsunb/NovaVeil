@@ -431,6 +431,9 @@ func applyChannelConfig(channel model.Channel, request *httpclient.Request, rand
 	if len(opencodeSession) > 0 {
 		applyResolvedOpencodeSession(channel, opencodeSession[0], request)
 	}
+	// opencode 关联头在会话号最终确定之后补充: x-session-affinity 镜像最终会话号,
+	// x-opencode-request / x-opencode-project 各补一个关联 ID(非 OpencodeCompat 为无操作)。
+	injectOpencodeCorrelationHeaders(channel, request)
 	// [debug] 打印最终发往上游的完整请求头, 便于排查 opencode 兼容头等注入是否生效。
 	// 仅 Debug 级别输出; Authorization / X-Api-Key / X-Goog-Api-Key 仅显示前缀, 不泄露完整凭据。
 	if log.GetLevel() <= log.DebugLevel {

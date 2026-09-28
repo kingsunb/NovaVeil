@@ -560,3 +560,76 @@ func TestOpencodeSessionEmptyKeyMintsOncePerCaller(t *testing.T) {
 		t.Fatalf("空会话不应写入缓存, 实际条目数 %d", n)
 	}
 }
+
+// TestInjectOpencodeCorrelationHeaders 验证 OpencodeCompat 渠道在会话号确定后补关联头:
+// x-session-affinity 镜像最终会话号, x-opencode-request 每请求唯一(req_<32hex>),
+// x-opencode-project 稳定(prj_<12hex>); 非 OpencodeCompat 渠道完全不注入。
+func TestInjectOpencodeCorrelationHeaders(t *testing.T) {
+	channel := model.Channel{ID: 999, OpencodeCompat: true}
+
+	// 模拟 applyChannelConfig 的完整次序: 动态头占位 → 显式会话号覆盖 → 关联头补充。
+	req := newRandomHeaderRequest()
+	applyResolvedOpencodeSession(channel, validSesA, req)
+	injectOpencodeCorrelationHeaders(channel, req)
+
+	if got := req.Headers.Get(opencodeAffinityHeader); got != validSesA {
+		t.Fatalf("x-session-affinity 应镜像最终会话号 %q, 实际 %q", validSesA, got)
+	}
+	reqID := req.Headers.Get(opencodeRequestHeader)
+	if !validOpencodeRequestID(reqID) {
+		t.Fatalf("x-opencode-request 格式应为 req_<32hex>, 实际 %q", reqID)
+	}
+	project := req.Headers.Get(opencodeProjectHeader)
+	if !validOpencodeProjectID(project) {
+		t.Fatalf("x-opencode-project 格式应为 prj_<24hex>, 实际 %q", project)
+	}
+
+	// 项目 ID 跨请求稳定; 请求 ID 跨请求唯一。
+	req2 := newRandomHeaderRequest()
+	applyResolvedOpencodeSession(channel, validSesA, req2)
+	injectOpencodeCorrelationHeaders(channel, req2)
+	if got := req2.Headers.Get(opencodeProjectHeader); got != project {
+		t.Fatalf("x-opencode-project 应稳定, 首次 %q 再次 %q", project, got)
+	}
+	if got := req2.Headers.Get(opencodeRequestHeader); got == reqID {
+		t.Fatalf("x-opencode-request 应每请求唯一, 两次都是 %q", reqID)
+	}
+
+	// 没有会话号时 affinity 不注入, 但 request/project 仍补。
+	req3 := newRandomHeaderRequest()
+	injectOpencodeCorrelationHeaders(channel, req3)
+	if got := req3.Headers.Get(opencodeAffinityHeader); got != "" {
+		t.Fatalf("无会话号时不应注入 x-session-affinity, 实际 %q", got)
+	}
+	if req3.Headers.Get(opencodeRequestHeader) == "" || req3.Headers.Get(opencodeProjectHeader) == "" {
+		t.Fatal("无会话号时仍应补 x-opencode-request / x-opencode-project")
+	}
+
+	// 非 OpencodeCompat 渠道完全不注入。
+	req4 := newRandomHeaderRequest()
+	injectOpencodeCorrelationHeaders(model.Channel{ID: 998, OpencodeCompat: false}, req4)
+	for _, h := range []string{opencodeAffinityHeader, opencodeRequestHeader, opencodeProjectHeader} {
+		if req4.Headers.Get(h) != "" {
+			t.Fatalf("非 OpencodeCompat 渠道不应注入 %s, 实际 %q", h, req4.Headers.Get(h))
+		}
+	}
+}
+
+// validOpencodeRequestID 校验 x-opencode-request 格式: req_ + 32 位小写十六进制。
+func validOpencodeRequestID(v string) bool {
+	if len(v) != 4+32 || v[:4] != "req_" {
+		return false
+	}
+	_, err := hex.DecodeString(v[4:])
+	return err == nil
+}
+
+// validOpencodeProjectID 校验 x-opencode-project 格式: prj_ + 24 位小写十六进制
+// (对齐 opencode2api 的 StableID: SHA-256 前 12 字节).
+func validOpencodeProjectID(v string) bool {
+	if len(v) != 4+24 || v[:4] != "prj_" {
+		return false
+	}
+	_, err := hex.DecodeString(v[4:])
+	return err == nil
+}

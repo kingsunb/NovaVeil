@@ -78,7 +78,7 @@ var BuiltinFreeChannels = []model.Channel{
 		Key:            "public",
 		OpencodeCompat: true,
 		CustomHeader: []model.CustomHeader{
-			{HeaderKey: "x-opencode-client", HeaderValue: "desktop"},
+			{HeaderKey: "x-opencode-client", HeaderValue: "cli"},
 			{HeaderKey: "User-Agent", HeaderValue: "opencode/1.18.33"},
 		},
 		Models: []model.ChannelModel{

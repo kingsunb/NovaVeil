@@ -17,6 +17,15 @@ import (
 // opencodeSessionHeader opencode 兼容请求头的固定头名。
 const opencodeSessionHeader = "x-opencode-session"
 
+// opencode 关联头名。x-session-affinity 镜像会话号; x-opencode-request 每请求唯一;
+// x-opencode-project 固定默认项目。三者都不参与免费档 403 判定(只查会话号 + stream
+// + 工具名), 仅为上游 prompt/session 亲缘与请求关联, 语义对齐 opencode2api 的关联头。
+const (
+	opencodeAffinityHeader = "x-session-affinity"
+	opencodeRequestHeader  = "x-opencode-request"
+	opencodeProjectHeader  = "x-opencode-project"
+)
+
 // opencodeSessionIDPattern 是上游接受的 x-opencode-session 整段格式:
 // ses_ + 12 位小写十六进制 + 14 位字母数字。与模型同步测试里的格式正则对齐。
 // 不接受前后空白, 调用方不得 TrimSpace 后再拿来匹配。
@@ -221,6 +230,29 @@ func applyResolvedOpencodeSession(channel model.Channel, session string, request
 		request.Headers = make(http.Header)
 	}
 	request.Headers.Set(opencodeSessionHeader, session)
+}
+
+// injectOpencodeCorrelationHeaders 在 OpencodeCompat 渠道上补充 opencode 关联头。
+// 调用方应在 x-opencode-session 最终写入之后调用(applyChannelConfig 里紧跟
+// applyResolvedOpencodeSession), 这样 x-session-affinity 镜像的是最终会话号而非占位值。
+// x-opencode-request / x-opencode-project 只在头未存在时写入, 不覆盖客户端或全局随机头
+// 规则已经给的值。非 OpencodeCompat 渠道不注入(与 x-opencode-session 同口径)。
+func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient.Request) {
+	if !channel.OpencodeCompat || request == nil {
+		return
+	}
+	if request.Headers == nil {
+		request.Headers = make(http.Header)
+	}
+	if session := request.Headers.Get(opencodeSessionHeader); session != "" {
+		request.Headers.Set(opencodeAffinityHeader, session)
+	}
+	if request.Headers.Get(opencodeRequestHeader) == "" {
+		request.Headers.Set(opencodeRequestHeader, opencodeid.GenerateRequestID())
+	}
+	if request.Headers.Get(opencodeProjectHeader) == "" {
+		request.Headers.Set(opencodeProjectHeader, opencodeid.ProjectID())
+	}
 }
 
 // resolveRequestRandomValue 在请求级一次性解析本请求所有随机头应使用的稳定会话 ID:

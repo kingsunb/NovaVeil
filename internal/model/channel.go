@@ -55,7 +55,7 @@ type Channel struct {
 	FixedReply             string                       `json:"fixed_reply"`                                                    // 自定义固定回复文案: 仅 type=custom 渠道生效, 命中即以该文案合成响应。
 	Proxy                  bool                         `json:"proxy" gorm:"default:false"`                                     // 是否使用代理。
 	AutoSync               bool                         `json:"auto_sync" gorm:"default:false"`                                 // 是否自动同步模型。
-	OpencodeCompat         bool                         `json:"opencode_compat" gorm:"not null;default:false"`                  // 是否注入 opencode 兼容请求头(x-opencode-session, 会话级稳定 UUID)。
+	OpencodeCompat         bool                         `json:"opencode_compat" gorm:"not null;default:false"`                  // 是否注入 opencode 兼容请求头(x-opencode-session + affinity/request/project 关联头)。
 	CustomHeader           []CustomHeader               `json:"custom_header" gorm:"serializer:json"`                           // 追加到上游请求的 Header。
 	ParamOverride          *string                      `json:"param_override"`                                                 // 请求参数覆盖配置。
 	ChannelProxy           *string                      `json:"channel_proxy"`                                                  // 渠道专用代理地址。
