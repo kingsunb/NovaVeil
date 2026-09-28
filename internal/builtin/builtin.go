@@ -79,7 +79,7 @@ var BuiltinFreeChannels = []model.Channel{
 		OpencodeCompat: true,
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "desktop"},
-			{HeaderKey: "User-Agent", HeaderValue: "opencode/1.18.31"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/1.18.33"},
 		},
 		Models: []model.ChannelModel{
 			// 协议来自 models.opencode.ai 的 opencode 提供方：这六个模型没有单独的
@@ -221,7 +221,7 @@ var BuiltinOfficialChannels = []model.Channel{
 		OpencodeCompat: true,
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "desktop"},
-			{HeaderKey: "User-Agent", HeaderValue: "opencode/1.18.31"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/1.18.33"},
 		},
 	},
 	{
