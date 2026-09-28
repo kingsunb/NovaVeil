@@ -23,6 +23,7 @@ func init() {
 		AddRoute(router.NewRoute("/rank/move", http.MethodPost).Handle(moveModelEvalRank)).
 		AddRoute(router.NewRoute("/rank/remove", http.MethodPost).Handle(removeModelEvalRank)).
 		AddRoute(router.NewRoute("/rank/from-history", http.MethodPost).Handle(fromHistoryModelEvalRank)).
+		AddRoute(router.NewRoute("/rank/manual-add", http.MethodPost).Handle(manualAddModelEvalRank)).
 		AddRoute(router.NewRoute("/rank/apply-pro", http.MethodPost).Handle(applyProFromEvalRank))
 }
 
@@ -126,6 +127,27 @@ func fromHistoryModelEvalRank(c *gin.Context) {
 		return
 	}
 	items, err := op.ModelEvalRankFromHistory(c.Request.Context(), request.EvalID)
+	if err != nil {
+		writeEvalRankOpError(c, err)
+		return
+	}
+	resp.Success(c, gin.H{"items": items})
+}
+
+func manualAddModelEvalRank(c *gin.Context) {
+	resp.NoStore(c)
+	var request struct {
+		ChannelModelIDs []int `json:"channel_model_ids" binding:"required,min=1"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
+		return
+	}
+	if len(request.ChannelModelIDs) == 0 {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
+		return
+	}
+	items, err := op.ModelEvalRankManualAdd(c.Request.Context(), request.ChannelModelIDs)
 	if err != nil {
 		writeEvalRankOpError(c, err)
 		return

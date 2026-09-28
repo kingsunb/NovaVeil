@@ -3,6 +3,7 @@ package op
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/kingsunb/NovaVeil/internal/db"
@@ -23,9 +24,9 @@ var (
 // 串行化队列写入与手动排序，避免并发分配相同位置或覆盖正在调整的名次。
 var modelEvalRankMu sync.Mutex
 
-// rankableOutcomes 可进入排序的评估结果：请求成功即可，不区分格式是否合规。
-// ok = 成功且格式合规；violation = 成功但格式不符；error = 请求失败不入排序。
-var rankableOutcomes = []model.ModelEvalOutcome{model.ModelEvalOK, model.ModelEvalViolation}
+// rankableOutcomes 可进入排序的评估结果：请求成功即可，不区分格式是否合规；
+// manual = 手动加入、未运行评估。error = 请求失败不入排序。
+var rankableOutcomes = []model.ModelEvalOutcome{model.ModelEvalOK, model.ModelEvalViolation, model.ModelEvalManual}
 
 // isRankableOutcome 判断该评估结果是否可进入排序（成功即入，不区分格式合规）。
 func isRankableOutcome(outcome model.ModelEvalOutcome) bool {
@@ -260,6 +261,93 @@ func ModelEvalRankFromHistory(ctx context.Context, evalID int64) ([]model.ModelE
 	}
 	if err := ModelEvalRankUpsert(ctx, rank); err != nil {
 		return nil, err
+	}
+	return ModelEvalRankList(ctx)
+}
+
+// ModelEvalRankManualAdd 把一批渠道模型手动加入排序，跳过实际评估请求：
+// 逐个解析 channel_model_id 为渠道+模型快照，校验渠道启用且模型存在；
+// 同 (channel_id, model_name) 已存在排序条目时跳过（保留既有快照，不覆盖已评估内容），
+// 未存在的以 outcome=manual、空 content、source_eval_id=0 追加到可入组区末尾。
+func ModelEvalRankManualAdd(ctx context.Context, channelModelIDs []int) ([]model.ModelEvalRankSummary, error) {
+	if len(channelModelIDs) == 0 {
+		return []model.ModelEvalRankSummary{}, nil
+	}
+
+	// 先解析渠道模型快照, 事务外失败不占锁; 命中缓存即返回。
+	type candidate struct {
+		key  string
+		rank model.ModelEvalRank
+	}
+	candidates := make([]candidate, 0, len(channelModelIDs))
+	seenInput := make(map[string]struct{}, len(channelModelIDs))
+	for _, cmID := range channelModelIDs {
+		cm, err := ChannelModelGet(cmID)
+		if err != nil {
+			return nil, ErrEvalRankModelUnavailable
+		}
+		channel, err := ChannelGetCore(cm.ChannelID)
+		if err != nil {
+			return nil, ErrEvalRankModelUnavailable
+		}
+		if !channel.Enabled {
+			return nil, ErrEvalRankModelUnavailable
+		}
+		key := fmt.Sprintf("%d:%s", channel.ID, cm.Name)
+		if _, exists := seenInput[key]; exists {
+			continue
+		}
+		seenInput[key] = struct{}{}
+		candidates = append(candidates, candidate{key: key, rank: model.ModelEvalRank{
+			ChannelID:      channel.ID,
+			ChannelModelID: cm.ID,
+			ChannelName:    channel.Name,
+			ChannelType:    channel.Type,
+			ModelName:      cm.Name,
+			Outcome:        model.ModelEvalManual,
+			SourceEvalID:   0,
+		}})
+	}
+	if len(candidates) == 0 {
+		return []model.ModelEvalRankSummary{}, nil
+	}
+
+	modelEvalRankMu.Lock()
+	defer modelEvalRankMu.Unlock()
+
+	// 已存在的 (channel_id, model_name) 跳过, 不覆盖既有成功快照。
+	var existing []model.ModelEvalRank
+	if err := db.GetDB().WithContext(ctx).Model(&model.ModelEvalRank{}).
+		Select("channel_id", "model_name").
+		Find(&existing).Error; err != nil {
+		return nil, err
+	}
+	existingKeys := make(map[string]struct{}, len(existing))
+	for _, r := range existing {
+		existingKeys[fmt.Sprintf("%d:%s", r.ChannelID, r.ModelName)] = struct{}{}
+	}
+
+	var nextPos int
+	if err := db.GetDB().WithContext(ctx).Model(&model.ModelEvalRank{}).
+		Select("COALESCE(MAX(position), -1)").
+		Where("outcome IN ? AND position >= ?", rankableOutcomes, 0).
+		Scan(&nextPos).Error; err != nil {
+		return nil, err
+	}
+
+	toCreate := make([]model.ModelEvalRank, 0, len(candidates))
+	for _, cand := range candidates {
+		if _, exists := existingKeys[cand.key]; exists {
+			continue
+		}
+		nextPos++
+		cand.rank.Position = nextPos
+		toCreate = append(toCreate, cand.rank)
+	}
+	if len(toCreate) > 0 {
+		if err := db.GetDB().WithContext(ctx).Create(&toCreate).Error; err != nil {
+			return nil, err
+		}
 	}
 	return ModelEvalRankList(ctx)
 }

@@ -86,8 +86,14 @@ export function extractRenderableHtml(content: string): string {
  *  - error      : 测试请求失败（上游报错/超时/拒绝），不进入排序，也不覆盖已有成功快照。
  *  - violation  : 请求成功但未按格式包裹，与 ok 一样可以进入排序并写入 auto 分组。
  *  - ok         : 成功且包裹合规，可以进入排序。
+ *  - manual     : 手动加入排序、未运行评估，无回复内容，仅用于排序与 auto 分组。
  */
-export type EvalOutcome = "ok" | "violation" | "error";
+export type EvalOutcome = "ok" | "violation" | "error" | "manual";
+
+/** 判断结果是否可进入排序（请求成功或手动加入均算，error 不算）。 */
+export function isRankableEvalOutcome(outcome: EvalOutcome): boolean {
+  return outcome === "ok" || outcome === "violation" || outcome === "manual";
+}
 
 /** 评估候选：一个渠道上的一个模型。 */
 export interface EvalTarget {

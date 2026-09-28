@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, ListChecks, Plus, RefreshCw, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { AUTO_GROUP_NAME, extractRenderableHtml, formatEvalTime, type EvalRankSummary } from "@/lib/model-eval";
+import { AUTO_GROUP_NAME, extractRenderableHtml, formatEvalTime, isRankableEvalOutcome, type EvalRankSummary } from "@/lib/model-eval";
 import { formatNumber } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -23,7 +23,7 @@ export function EvalRanking({ busy, onShowHistory }: { busy: boolean; onShowHist
     staleTime: 0,
   });
   const groupsQuery = useQuery({ queryKey: ["groups"], queryFn: api.listGroups });
-  const rankable = (ranksQuery.data?.items ?? []).filter((r) => r.outcome === "ok" || r.outcome === "violation");
+  const rankable = (ranksQuery.data?.items ?? []).filter((r) => isRankableEvalOutcome(r.outcome));
   const existingAuto = groupsQuery.data?.find((g) => g.name === AUTO_GROUP_NAME);
 
   const applyAutoMut = useMutation({
@@ -62,7 +62,7 @@ export function EvalRanking({ busy, onShowHistory }: { busy: boolean; onShowHist
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <ListChecks className="h-4 w-4 text-ink-muted" aria-hidden />
-            <h2 className="text-sm font-semibold text-ink">评估排序 <span className="font-normal text-ink-subtle">· {rankable.length} 个成功模型</span></h2>
+            <h2 className="text-sm font-semibold text-ink">评估排序 <span className="font-normal text-ink-subtle">· {rankable.length} 个排序条目</span></h2>
           </div>
           <div className="flex items-center gap-2">
             <Button type="button" variant="ghost" size="sm" onClick={() => void ranksQuery.refetch()} disabled={rankBusy || ranksQuery.isFetching}>
@@ -73,7 +73,7 @@ export function EvalRanking({ busy, onShowHistory }: { busy: boolean; onShowHist
             </Button>
           </div>
         </div>
-        <p className="text-[11px] leading-relaxed text-ink-subtle">显示请求成功的结果，格式不符的也在内，越靠前优先级越高。失败结果不在此列表。输入名次后按回车或移开焦点保存，其他模型自动顺延；超过最大名次时排到最后。{existingAuto ? `更新将用当前排序替换 ${AUTO_GROUP_NAME} 的现有成员。` : "从历史加入时，目前只能选择格式合规的记录。"}</p>
+        <p className="text-[11px] leading-relaxed text-ink-subtle">显示请求成功与手动加入的结果，格式不符的也在内，越靠前优先级越高。失败结果不在此列表。输入名次后按回车或移开焦点保存，其他模型自动顺延；超过最大名次时排到最后。{existingAuto ? `更新将用当前排序替换 ${AUTO_GROUP_NAME} 的现有成员。` : "从历史加入时，目前只能选择格式合规的记录。"}</p>
       </div>
 
       {ranksQuery.isError ? (
@@ -81,7 +81,7 @@ export function EvalRanking({ busy, onShowHistory }: { busy: boolean; onShowHist
       ) : ranksQuery.isLoading ? (
         <div className="space-y-3 p-4"><Skeleton className="h-20 w-full" /><Skeleton className="h-20 w-full" /><Skeleton className="h-20 w-full" /></div>
       ) : rankable.length === 0 ? (
-        <EmptyState icon={<ListChecks className="h-5 w-5" />} title="还没有成功的排序结果" hint="请求成功的评估会自动加入排序，格式不符的也包括在内。从历史手动加入时，目前只能选择格式合规的记录。" />
+        <EmptyState icon={<ListChecks className="h-5 w-5" />} title="还没有排序结果" hint="请求成功的评估会自动加入排序，格式不符的也包括在内；也可以到「当前评估」选择模型后直接加入排序，跳过实际评估。从历史手动加入时，目前只能选择格式合规的记录。" />
       ) : (
         <ul className="divide-y divide-border/40">
           {rankable.map((record, index) => (
@@ -216,7 +216,11 @@ function RankItem({ record, index, total, busy, expanded, onToggle, onMove, onSe
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pl-16">
         <EvalOutcomeBadge outcome={record.outcome} />
-        <span className="text-[11px] tabular-nums text-ink-subtle">{formatNumber(record.latency_ms)} ms · {formatNumber(record.completion_tokens)} 输出 tok</span>
+        {record.outcome === "manual" ? (
+          <span className="text-[11px] text-ink-subtle">未运行评估</span>
+        ) : (
+          <span className="text-[11px] tabular-nums text-ink-subtle">{formatNumber(record.latency_ms)} ms · {formatNumber(record.completion_tokens)} 输出 tok</span>
+        )}
         <div className="flex flex-wrap items-center gap-1 sm:ml-auto">
           <Button type="button" variant="ghost" size="sm" onClick={onToggle} aria-expanded={expanded} aria-controls={`eval-rank-preview-${record.id}`}>{expanded ? "收起预览" : "查看预览"}</Button>
           <Button type="button" variant="ghost" size="sm" onClick={onHistory}>历史</Button>

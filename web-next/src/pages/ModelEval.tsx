@@ -147,6 +147,17 @@ export default function ModelEvalPage() {
     onError: (e: Error) => toast.error(e.message || "入队失败"),
   });
 
+  const manualAddMut = useMutation({
+    mutationFn: (channelModelIds: number[]) => api.addEvalRankManual(channelModelIds),
+    onSuccess: (data) => {
+      qc.setQueryData(["model-eval", "rank", "list"], data);
+      void qc.invalidateQueries({ queryKey: ["model-eval", "rank", "list"] });
+      changeView("ranking");
+      toast.success("已加入排序（未评估）");
+    },
+    onError: (e: Error) => toast.error(e.message || "加入排序失败"),
+  });
+
   function changeView(nextView: EvalView) {
     const next = new URLSearchParams(params);
     next.set("view", nextView);
@@ -177,7 +188,7 @@ export default function ModelEvalPage() {
     enqueueMut.mutate([record.channel_model_id]);
   }
 
-  const busy = enqueueMut.isPending;
+  const busy = enqueueMut.isPending || manualAddMut.isPending;
 
   return (
     <div className="min-w-0 space-y-4">
@@ -305,7 +316,7 @@ export default function ModelEvalPage() {
         <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
           <div className="min-w-0 xl:sticky xl:top-0">
             {channelsQuery.isLoading ? <Skeleton className="h-80 w-full" /> : (
-              <EvalSelection key={channelId} targets={filteredTargets} selectedIds={selectedIds} onSelectionChange={setSelectedIds} disabled={busy || channelsQuery.isError} onRun={() => enqueueMut.mutate(selectedTargets.map((t) => t.channelModelId))} onHistory={showHistory} />
+              <EvalSelection key={channelId} targets={filteredTargets} selectedIds={selectedIds} onSelectionChange={setSelectedIds} disabled={busy || channelsQuery.isError} onRun={() => enqueueMut.mutate(selectedTargets.map((t) => t.channelModelId))} onManualAdd={() => manualAddMut.mutate(selectedTargets.map((t) => t.channelModelId))} onHistory={showHistory} />
             )}
           </div>
           <div className="min-w-0 space-y-4">

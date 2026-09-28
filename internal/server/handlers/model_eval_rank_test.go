@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -212,4 +214,37 @@ func TestApplyProFromEvalRankGroupReplaceErrorReturns500(t *testing.T) {
 	applyProFromEvalRank(c)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// TestManualAddModelEvalRank 验证 /rank/manual-add 通过 channel_model_ids 把渠道模型
+// 直接加入排序，返回的 items 含 manual 条目，且不产生评估历史内容。
+func TestManualAddModelEvalRank(t *testing.T) {
+	ctx := context.Background()
+	ch := newTestChannel(t, ctx, "h-manual", "h-manual-model")
+	t.Cleanup(func() {
+		_ = op.ChannelDel(ch.ID, ctx)
+		_ = db.GetDB().Where("channel_id = ?", ch.ID).Delete(&model.ModelEvalRank{}).Error
+	})
+
+	payload, err := json.Marshal(map[string]any{"channel_model_ids": []int{ch.Models[0].ID}})
+	require.NoError(t, err)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/model-eval/rank/manual-add", nil)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Body = io.NopCloser(bytes.NewReader(payload))
+	manualAddModelEvalRank(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var body struct {
+		Code int `json:"code"`
+		Data struct {
+			Items []model.ModelEvalRankSummary `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, http.StatusOK, body.Code)
+	require.Len(t, body.Data.Items, 1, "手动加入后排序列表应恰好 1 条")
+	assert.Equal(t, model.ModelEvalManual, body.Data.Items[0].Outcome)
+	assert.Equal(t, "h-manual-model", body.Data.Items[0].ModelName)
 }

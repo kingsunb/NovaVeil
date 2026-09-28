@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, History, Play } from "lucide-react";
+import { ChevronDown, ChevronRight, History, ListChecks, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { QueryErrorBanner } from "@/components/ui/query-error";
 import { SearchField } from "@/components/ui/search-field";
 import { api } from "@/lib/api";
-import type { EvalTarget } from "@/lib/model-eval";
+import { AUTO_GROUP_NAME, type EvalTarget } from "@/lib/model-eval";
 
 export function EvalSelection({
   targets,
@@ -15,6 +15,7 @@ export function EvalSelection({
   onSelectionChange,
   disabled,
   onRun,
+  onManualAdd,
   onHistory,
 }: {
   targets: EvalTarget[];
@@ -22,6 +23,7 @@ export function EvalSelection({
   onSelectionChange: (ids: Set<number>) => void;
   disabled: boolean;
   onRun: () => void;
+  onManualAdd: () => void;
   onHistory: (channelId: number, modelName?: string) => void;
 }) {
   const [search, setSearch] = useState("");
@@ -191,7 +193,11 @@ export function EvalSelection({
           <Play className="h-3.5 w-3.5" aria-hidden />
           开始评估{selectedCount > 0 ? ` (${selectedCount})` : ""}
         </Button>
-        <p className="text-[11px] leading-relaxed text-ink-subtle">每个所选模型发送一次实际请求，结果自动保存。可先选单个模型试评。</p>
+        <Button type="button" variant="secondary" className="w-full" onClick={onManualAdd} disabled={disabled || selectedCount === 0}>
+          <ListChecks className="h-3.5 w-3.5" aria-hidden />
+          直接加入排序（不评估）{selectedCount > 0 ? ` (${selectedCount})` : ""}
+        </Button>
+        <p className="text-[11px] leading-relaxed text-ink-subtle">「开始评估」对每个所选模型发送一次实际请求；「直接加入排序」跳过评估，把所选模型作为「手动加入」条目直接放入排序，可随后应用到 {AUTO_GROUP_NAME} 分组。</p>
       </div>
     </Card>
   );

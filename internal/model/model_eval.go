@@ -20,6 +20,9 @@ const (
 	ModelEvalOK        ModelEvalOutcome = "ok"
 	ModelEvalViolation ModelEvalOutcome = "violation"
 	ModelEvalError     ModelEvalOutcome = "error"
+	// ModelEvalManual 表示手动加入排序、未运行实际评估的条目：仅用于排序与
+	// auto 分组，不写评估历史、不累计评估次数，也没有可预览的回复内容。
+	ModelEvalManual ModelEvalOutcome = "manual"
 )
 
 // ModelEvalSummary 保留评估时的渠道/模型快照。无级联外键，模型同步或渠道删除不清除历史。

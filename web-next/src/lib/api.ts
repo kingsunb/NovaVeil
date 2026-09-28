@@ -1034,6 +1034,11 @@ export const api = {
       method: "POST",
       body: { eval_id: evalId },
     }),
+  addEvalRankManual: (channelModelIds: number[]) =>
+    http<EvalRankList>("/model-eval/rank/manual-add", {
+      method: "POST",
+      body: { channel_model_ids: channelModelIds },
+    }),
   applyProGroup: () =>
     http<EvalApplyProResult>("/model-eval/rank/apply-pro", {
       method: "POST",

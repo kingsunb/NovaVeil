@@ -245,6 +245,58 @@ func TestModelEvalRankMoveAllowsViolation(t *testing.T) {
 	assert.Equal(t, b.Position, afterA.Position, "a 应拿到 b 原位置")
 }
 
+// TestModelEvalRankManualAdd 验证手动加入排序：写入 manual 条目、空内容、
+// 同目标幂等不重复、停用渠道拒绝。
+func TestModelEvalRankManualAdd(t *testing.T) {
+	ctx := context.Background()
+
+	ch, cmIDs := createChannelForEval(t, "manual-ch", "manual-model")
+	t.Cleanup(func() { cleanupRanksByChannel(t, ch.ID) })
+	cmID := cmIDs[0]
+
+	// 首次手动加入：应写入一条 manual 条目，空内容。
+	list, err := ModelEvalRankManualAdd(ctx, []int{cmID})
+	require.NoError(t, err)
+	var found *model.ModelEvalRankSummary
+	for i := range list {
+		if list[i].ChannelID == ch.ID && list[i].ModelName == "manual-model" {
+			found = &list[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "manual 条目应出现在排序列表")
+	assert.Equal(t, model.ModelEvalManual, found.Outcome)
+	assert.Equal(t, ch.Name, found.ChannelName)
+	assert.Equal(t, ch.Type, found.ChannelType)
+
+	rec, err := ModelEvalRankContent(ctx, found.ID)
+	require.NoError(t, err)
+	assert.Empty(t, rec.Content, "手动加入条目不产生回复内容")
+	assert.Equal(t, int64(0), rec.SourceEvalID, "手动加入条目没有来源评估记录")
+
+	// 同 channel_model_id 再次手动加入：幂等，不重复追加。
+	list2, err := ModelEvalRankManualAdd(ctx, []int{cmID})
+	require.NoError(t, err)
+	var count int
+	for _, it := range list2 {
+		if it.ChannelID == ch.ID && it.ModelName == "manual-model" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "重复手动加入不应产生重复排序条目")
+
+	// 停用渠道后，手动加入应被拒绝。
+	enabled := false
+	_, err = ChannelUpdate(&model.ChannelUpdateRequest{ID: ch.ID, Enabled: &enabled}, ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		en := true
+		_, _ = ChannelUpdate(&model.ChannelUpdateRequest{ID: ch.ID, Enabled: &en}, ctx)
+	})
+	_, err = ModelEvalRankManualAdd(ctx, []int{cmID})
+	assert.ErrorIs(t, err, ErrEvalRankModelUnavailable)
+}
+
 // TestModelEvalRankFromHistoryAcceptsViolation 验证从历史加入 violation 评估时成功入排序。
 func TestModelEvalRankFromHistoryAcceptsViolation(t *testing.T) {
 	ctx := context.Background()
