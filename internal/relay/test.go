@@ -511,9 +511,11 @@ func sendTestRequest(ctx context.Context, channel model.Channel, clientModel, mo
 		return nil, err
 	}
 	target.Passthrough = passthrough
-	// 生成随机值以触发 injectRandomHeaders 注入动态头(含 opencode 兼容头),
-	// 与真实转发路径保持一致; 空串会让 injectRandomHeaders 提前返回而漏注这些头。
+	// 普通动态头保持 UUID 随机值, 与探测路径原行为一致, 不改变非 OpencodeCompat 渠道。
+	// opencode 会话号单独铸出, 经 opencodeSession 参数只对 OpencodeCompat 渠道写
+	// x-opencode-session, 不污染 x-trace-id 等共享随机头; 保证上游收到的是 ses_ 格式。
 	randomValue := uuid.NewString()
+	opencodeSession := generateOpencodeSessionID()
 	result, err := sendDiagnosticUpstream(testCtx, func() (*upstreamResponse, error) {
 		if err := testCtx.Err(); err != nil {
 			return nil, err
@@ -522,9 +524,9 @@ func sendTestRequest(ctx context.Context, channel model.Channel, clientModel, mo
 		var response *upstreamResponse
 		var sendErr error
 		if passthrough {
-			response, sendErr = sendPassthrough(testCtx, format, raw, channel, outbound, false, randomValue)
+			response, sendErr = sendPassthrough(testCtx, format, raw, channel, outbound, false, randomValue, opencodeSession)
 		} else {
-			response, sendErr = sendConverted(testCtx, format, raw, channel, outbound, false, randomValue)
+			response, sendErr = sendConverted(testCtx, format, raw, channel, outbound, false, randomValue, opencodeSession)
 		}
 		if sendErr == nil {
 			request.finishRound(AttemptSuccess, "", "")

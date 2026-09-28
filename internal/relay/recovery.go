@@ -43,11 +43,15 @@ func probeChannel(ctx context.Context, channel model.Channel, modelName string) 
 	// 同协议渠道原样直通, 其余渠道经 pipeline 转换后请求。
 	// 探测结论直接决定成员恢复或加重冷却, 瞬时网络抖动不应计入, 按网络错误重试策略
 	// 容忍基础设施层错误后再下结论, 与分组路由对真实流量的容错口径一致。
+	// 探测不注入共享随机头(randomValue 保持空串, 与原行为一致), 单独铸一个合法 opencode
+	// 会话号经 opencodeSession 传入, 只对 OpencodeCompat 渠道写 x-opencode-session,
+	// 保证其格式合法; 非 OpencodeCompat 渠道完全不受影响。
+	opencodeSession := generateOpencodeSessionID()
 	result, err := sendDiagnosticUpstream(ctx, func() (*upstreamResponse, error) {
 		if passthrough {
-			return sendPassthrough(ctx, llm.APIFormatOpenAIChatCompletion, raw, channel, outbound, false, "")
+			return sendPassthrough(ctx, llm.APIFormatOpenAIChatCompletion, raw, channel, outbound, false, "", opencodeSession)
 		}
-		return sendConverted(ctx, llm.APIFormatOpenAIChatCompletion, raw, channel, outbound, false, "")
+		return sendConverted(ctx, llm.APIFormatOpenAIChatCompletion, raw, channel, outbound, false, "", opencodeSession)
 	})
 	if result != nil {
 		result.Close()

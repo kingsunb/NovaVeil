@@ -118,6 +118,69 @@ func TestChannelProbesNativeRequests(t *testing.T) {
 	}
 }
 
+// TestOpencodeCompatProbesInjectValidSession 验证面板测试/逐密钥诊断路径(无客户端会话)
+// 只对 OpencodeCompat 渠道写合法 ses_ 格式的 x-opencode-session, 其他渠道保持不注入;
+// 否则 OpenCode 上游会以 MissingSessionID 拒绝测试与后台探测请求。
+func TestOpencodeCompatProbesInjectValidSession(t *testing.T) {
+	compatCases := []struct {
+		compat bool
+		label  string
+	}{
+		{true, "opencode"},
+		{false, "ordinary"},
+	}
+	for _, cc := range compatCases {
+		for _, perKey := range []bool{false, true} {
+			mode := "model"
+			if perKey {
+				mode = "key"
+			}
+			t.Run(cc.label+"/"+mode, func(t *testing.T) {
+				beforeID := idSeq.Load()
+				defer cleanupProbeRequests(beforeID)
+				sessionCh := make(chan string, 1)
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					sessionCh <- r.Header.Get(opencodeSessionHeader)
+					_, _ = io.Copy(io.Discard, r.Body)
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(testPathOpenAIChatResponse))
+				}))
+				defer upstream.Close()
+				channel := model.Channel{
+					ID: 9874, Name: cc.label + "/" + mode, Type: model.ChannelProviderOpenAI, Enabled: true,
+					BaseURL: upstream.URL, Key: "test-key", OpencodeCompat: cc.compat,
+					Models: []model.ChannelModel{{Name: "m", UpstreamProtocol: model.UpstreamProtocolChat}},
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				var err error
+				if perKey {
+					result := ChannelKeyTestResult{Label: "#1(test)"}
+					err = sendKeyTestRequest(ctx, channel, "m", "hello", &result)
+				} else {
+					_, err = sendChannelTestRequest(ctx, channel, "m", "hello", "#1(test)", testPanelMaxTokens)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				var session string
+				select {
+				case session = <-sessionCh:
+				default:
+					t.Fatal("no upstream request captured")
+				}
+				if cc.compat {
+					if !validOpencodeSessionID(session) {
+						t.Fatalf("OpencodeCompat 测试/探测应注入合法 x-opencode-session, 实际 %q", session)
+					}
+				} else if session != "" {
+					t.Fatalf("非 OpencodeCompat 测试/探测不应注入 x-opencode-session, 实际 %q", session)
+				}
+			})
+		}
+	}
+}
+
 func awaitProbeState(t *testing.T, stream <-chan RequestState, match func(RequestState) bool) RequestState {
 	t.Helper()
 	timer := time.NewTimer(5 * time.Second)
