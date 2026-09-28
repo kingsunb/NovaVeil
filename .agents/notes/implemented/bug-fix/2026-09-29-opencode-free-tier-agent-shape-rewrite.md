@@ -31,7 +31,7 @@ Status: implemented
 ## 后果
 
 - **收益**：免费档模型的诊断测试与真实请求不再 403；非流式客户端对免费模型透明可用，流式客户端补上缺失的核心工具。
-- **代价与已知上限**：非流式免费请求多一次「流式上游 + 网关聚合」往返，响应体在网关内完整缓冲后才下发；改写只在 Chat 出站上成立，若未来 pipeline 变更导致非流式无法折叠，会退回 403。重访信号：OpenCode 免费档放宽 Agent 形态校验，或不再要求工具名。
+- **代价与已知上限**：非流式免费请求多一次「流式上游 + 网关聚合」往返，响应体在网关内完整缓冲后才下发；改写只在 Chat 出站上成立，若未来 pipeline 变更导致非流式无法折叠，会退回 403。Chat 工具注入对 Responses 原生模型是有害的：muse-spark 两只免费模型本是 `@ai-sdk/openai`，若因协议留空被误路由到 Chat，注入的 `function.name` 工具会被上游按 Responses 校验拒绝（`tools[0] missing name`）——已把它们补种为 `responses` 以绕开这段改写（见 [muse-spark 补种](2026-09-29-muse-spark-free-responses-protocol-backfill.md)）。重访信号：OpenCode 免费档放宽 Agent 形态校验，或不再要求工具名。
 
 ## 验证
 

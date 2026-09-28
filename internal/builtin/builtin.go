@@ -83,13 +83,17 @@ var BuiltinFreeChannels = []model.Channel{
 		},
 		Models: []model.ChannelModel{
 			// 协议来自 models.opencode.ai 的 opencode 提供方：这六个模型没有单独的
-			// provider.npm，继承 @ai-sdk/openai-compatible，对应 chat。核实不了的不写。
+			// provider.npm，继承 @ai-sdk/openai-compatible，对应 chat。muse-spark
+			// contributor 免费模型在模型级 provider.npm=@ai-sdk/openai，走 responses。
+			// 核实不了的不写。
 			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
 			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
 			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
 			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
 			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
 			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
 		},
 	},
 	{

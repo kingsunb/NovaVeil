@@ -43,15 +43,19 @@ func OpenCodeTier(baseURL string) string {
 }
 
 // OpencodeZenSeedProtocols 是从 models.opencode.ai 的 opencode 提供方核实过的
-// Zen 出厂手工模型协议。这些模型没有单独的 provider.npm，继承提供方
-// @ai-sdk/openai-compatible，对应 Chat Completions。未列入的名字不猜测。
+// Zen 出厂手工模型协议。绝大多数免费模型继承提供方 @ai-sdk/openai-compatible，
+// 对应 Chat Completions；muse-spark contributor 免费模型在模型级
+// provider.npm=@ai-sdk/openai，出站必须走 Responses API，否则会被上游以
+// tools[0] missing required field name 拒绝。未列入的名字不猜测。
 var OpencodeZenSeedProtocols = map[string]string{
-	"deepseek-v4-flash-free":      UpstreamProtocolChat,
-	"mimo-v2.5-free":              UpstreamProtocolChat,
-	"hy3-free":                    UpstreamProtocolChat,
-	"nemotron-3-ultra-free":       UpstreamProtocolChat,
-	"nemotron-3.5-lightning-free": UpstreamProtocolChat,
-	"laguna-s-2.1-free":           UpstreamProtocolChat,
+	"deepseek-v4-flash-free":          UpstreamProtocolChat,
+	"mimo-v2.5-free":                  UpstreamProtocolChat,
+	"hy3-free":                        UpstreamProtocolChat,
+	"nemotron-3-ultra-free":           UpstreamProtocolChat,
+	"nemotron-3.5-lightning-free":     UpstreamProtocolChat,
+	"laguna-s-2.1-free":               UpstreamProtocolChat,
+	"muse-spark-1.2-contributor-free": UpstreamProtocolResponses,
+	"muse-spark-1.3-contributor-free": UpstreamProtocolResponses,
 }
 
 // OpencodeSeedProtocols 返回该 BaseURL 档位上已核实的出厂协议副本。

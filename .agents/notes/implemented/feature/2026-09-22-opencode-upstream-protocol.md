@@ -12,9 +12,9 @@ OpenCode 的 Zen 与 Go 是两条内置渠道，渠道类型都锁成 `openai`�
 
 出站顺序是：完全透传且渠道不是 custom 时仍整包透传，忽略模型协议；`OpencodeCompat` 且协议非空时选用现有的 OpenAI Chat、Responses 或 Anthropic 转换器；其余情况，包括自定义渠道写了协议，仍按 `channel.Type`。轮次轨迹的上游协议和透传标记用同一套有效协议。BaseURL 仍是 `https://opencode.ai/zen` 与 `https://opencode.ai/zen/go`，转换器只追加一次 `/v1` 和协议路径。
 
-迁移 017 只加列。回填单独执行，只填 `Builtin && OpencodeCompat` 渠道上仍为空的协议，不覆盖非空值，也不改类型、Key、启停和模型名单。`EnsureBuiltinChannels` 对已存在渠道继续不覆盖。
+迁移 017 只加列。回填单独执行，只填 `Builtin && OpencodeCompat` 渠道上仍为空的协议，不覆盖非空值，也不改类型、Key、启停和模型名单。迁移 019 在种子扩大后（补 muse-spark → responses）再跑一轮同一空协议回填，让存量库上后补的种子也生效；回填幂等，仍不覆盖非空值。`EnsureBuiltinChannels` 对已存在渠道继续不覆盖。
 
-OpenCode Free 的六个出厂模型在公开目录 `https://models.opencode.ai/api.json` 的 `opencode` 提供方下都没有单独的 `provider.npm`，继承 `@ai-sdk/openai-compatible`，因此种子写成 `chat`。官方 OpenCode 渠道出厂仍然没有模型。同步只对 `OpencodeCompat` 渠道额外读这份目录，按 Zen/Go 分档，用 SDK 映射协议：`openai-compatible` 为 `chat`，`@ai-sdk/openai` 为 `responses`，包名含 `anthropic` 为 `anthropic`，其余留空。目录失败不清模型、不改已有协议。重建 auto 模型时带上协议；手动模型不被 AutoSync 替换。
+OpenCode Free 的八个出厂模型在公开目录 `https://models.opencode.ai/api.json` 的 `opencode` 提供方下：六个没有单独的 `provider.npm`，继承 `@ai-sdk/openai-compatible`，种子写成 `chat`；muse-spark-1.2/1.3-contributor-free 在模型级 `provider.npm=@ai-sdk/openai`，种子写成 `responses`（补种与再回填见 [muse-spark 补种](../bug-fix/2026-09-29-muse-spark-free-responses-protocol-backfill.md)）。官方 OpenCode 渠道出厂仍然没有模型。同步只对 `OpencodeCompat` 渠道额外读这份目录，按 Zen/Go 分档，用 SDK 映射协议：`openai-compatible` 为 `chat`，`@ai-sdk/openai` 为 `responses`，包名含 `anthropic` 为 `anthropic`，其余留空。目录失败不清模型、不改已有协议。重建 auto 模型时带上协议；手动模型不被 AutoSync 替换。
 
 完全透传与模型协议的优先级见 [完全渠道透传](2026-09-11-complete-channel-passthrough.md)。
 
