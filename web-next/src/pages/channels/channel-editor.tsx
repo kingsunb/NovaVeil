@@ -1334,6 +1334,16 @@ const THINKING_LEVEL_OPTIONS = [
   "max",
 ] as const;
 
+/** 模型名旁的配置徽标：区分「限制」与「思考」，避免思考等级被误标成限制。 */
+function modelLimitBadge(limit: ChannelModelLimit | undefined): string {
+  if (!limit) return "";
+  const hasMax = typeof limit.max_output === "number" && limit.max_output > 0;
+  const hasThinking = Boolean(limit.thinking_level);
+  if (hasMax && hasThinking) return "限制·思考";
+  if (hasMax) return "限制";
+  return "思考";
+}
+
 function ModelsTab({
   draft,
   update,
@@ -1691,9 +1701,9 @@ function ModelsTab({
                     {draft.opencode_compat ? (
                       <UpstreamProtocolLabel protocol={m.upstream_protocol} />
                     ) : null}
-                    {limit && (
+                    {modelLimitBadge(limit) && (
                       <Pill tone="neutral" className="text-[10px]">
-                        限额
+                        {modelLimitBadge(limit)}
                       </Pill>
                     )}
                   </div>
@@ -2081,7 +2091,7 @@ function LimitsTab({
         />
       </Field>
       <p className="rounded-md bg-surface-subtle/40 p-2.5 text-xs text-ink-muted">
-        按模型的 max_output / thinking_level 限额在「模型」Tab
+        按模型的 max_output / thinking_level 在「模型」Tab
         中点击行首箭头展开配置；模板化批量配置建议导出后手工编辑再导入。
       </p>
     </div>
