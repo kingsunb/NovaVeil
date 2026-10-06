@@ -14,7 +14,7 @@ DEV-04 残余项指出 `go.mod` 中有两个指向个人 fork 伪版本的 `repl
 
 - **`gin-contrib/sse` 切回官方 `v1.1.2`，删除个人 fork replace。** 差异核对结论：官方 `v1.1.2` 与 `looplj/sse` fork 的唯一实质代码差异是 SSE 数据行写成 `data:<payload>`（官方）还是 `data: <payload>`（fork，冒号后多一个空格）；另一个差异 `reflect.Pointer` vs `reflect.Ptr` 不改变行为。两者都是合法 SSE 编码，浏览器 `EventSource` 兼容。因此仓库不再需要为该 fork 承担供应链风险。
 - **`tmaxmax/go-sse => github.com/looplj/go-sse` 继续保留。** 差异核对结论：官方 `v0.11.0` 缺少 `github.com/looplj/axonhub/llm` 的 `httpclient/decoder.go` 使用的 `Stream` / `NewStreamWithConfig` API；直接切回官方版本无法通过编译。`go.mod` 中已就地注释该原因，待上游官方补齐 API 后切回。
-- **`github.com/looplj/axonhub/llm` 保留伪版本**：该模块无 tagged versions（`go list -m -versions` 为空），且是仓库实际使用的 LLM 适配层。伪版本随上游 `unstable` 分支跟进：2026-09-22 从 `v0.0.0-20260917094421-19a3c27d8b94` 升到 `v0.0.0-20260922030618-13ef11e67bcd`（HEAD）。该区间 17 个提交里 6 个落在 `llm/`——#2494（请求日志 UA 列）、#2497（JSON 图片编辑接受 `images` 数组）、#2501（出站保留供应商要求的 `User-Agent`）、#2502（持久化请求与响应头）、#2504（跨 Chat Completions 保留 `allowed_tools`/`tool_choice`）、#2506（codex 跨 responses 保留 turn state 与流式修复）——其余落在前端/dashboard/策略层，与本适配层无关。
+- **`github.com/looplj/axonhub/llm` 保留伪版本**：该模块无 tagged versions（`go list -m -versions` 为空），且是仓库实际使用的 LLM 适配层。伪版本随上游 `unstable` 分支跟进，当前 pin `v0.0.0-20261005144853-5c78997798b4`（2026-10-05 HEAD）。该 pin 相对前一 pin `276ee9fcc84f`（2026-09-28，纯前端 logo/登录页改动，未触碰 `llm/transformer`）含 14 个 `llm/transformer` 提交，以 bug 修复为主，多个直接命中 NovaVeil 调用路径（NovaVeil 在 `handler.go`/`upstream.go`/`opencode_free.go` 三处调用 `AggregateStreamChunks`）：#2561 修复聚合器吞掉 refusal/audio/logprobs/reasoning（模型 refusal 被当空 assistant 消息 + `finish_reason:"stop"` 返回）、#2572 修复 citations 泄漏到内部 `transformer_metadata`、#1872 修复 Anthropic 无参 function tool 缺 `input_schema` 致 422、#2582/#2035 responses transformer 修复、#2611 用量解析接受数字字符串、#2539 anthropic/gemini strict 工具设置保留、#2570 流终止/`finish_reason` 判定重构（统一 outcome reducer）、#2332 新增 MiniMax 图片生成（加性新子包）。无硬性 breaking change；主要行为风险是 #2570 流终止判定重构，已由 `internal/relay` 回归测试覆盖。
 - 对应的 SSE 线格式断言与前端文档同步为 `data:<payload>`（上游格式）。
 
 ## 备选方案
@@ -36,4 +36,4 @@ DEV-04 残余项指出 `go.mod` 中有两个指向个人 fork 伪版本的 `repl
 - `cd web-next && pnpm typecheck && pnpm lint && pnpm vitest run` 通过。
 - `gosec -quiet -severity=high -exclude=G115 ./...` 通过。
 - `govulncheck ./...` 通过。
-- 2026-09-22 跟进 `axonhub/llm` 至 `13ef11e67bcd`：`go build ./...` 与 `go test -count=1 ./...` 全绿；`go.sum` 净 `+2/-4`（新旧校验和替换，`go get` 期间短暂出现的根模块 `github.com/looplj/axonhub v1.0.0-beta9...` 被 tidy 裁剪、未进依赖图）；`golang.org/x/time` 由 indirect 升为 direct（新版 llm 直接 import）。go-sse fork replace 无需变化。
+- `axonhub/llm` 当前 pin `5c78997798b4`（2026-10-05）：`go build ./...`、`go vet ./...`、`go test -count=1 ./...` 全绿；`go.sum` 净 `+2/-2`（axonhub 校验和替换）。go-sse fork replace 无需变化。`golang.org/x/time` 为 direct（新版 llm 直接 import）。
