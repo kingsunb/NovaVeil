@@ -401,13 +401,28 @@ describe("匿名灰度桶 (§3.4)", () => {
   });
 
   it("getAnonymousBucket：同会话返回同值；clearAnonymousBucket 后可重新分桶", () => {
-    const a = getAnonymousBucket();
-    expect(getAnonymousBucket()).toBe(a);
-    clearAnonymousBucket();
-    sessionStorage.clear();
-    const c = getAnonymousBucket();
-    // 重新生成的桶极大概率与旧值不同（Math.random 碰撞概率 ~0）
-    expect(c).not.toBe(a);
+    // 固定随机源，使分桶结果确定可断言。桶为 Math.floor(random*100) ∈ [0,99]，
+    // 旧实现用 expect(c).not.toBe(a) 依赖"两次随机不碰撞"，但 100 个桶的碰撞
+    // 概率为 1/100（非 ~0），约每百次 CI 触发一次 flaky 失败。
+    const random = vi.spyOn(Math, "random");
+    try {
+      random.mockReturnValue(0.001); // → 桶 0
+      const a = getAnonymousBucket();
+      expect(a).toBe(0);
+      expect(getAnonymousBucket()).toBe(a); // 同会话稳定：复用缓存，不再摇号
+      expect(random).toHaveBeenCalledTimes(1);
+
+      clearAnonymousBucket();
+      sessionStorage.clear();
+
+      random.mockReturnValue(0.999); // → 桶 99
+      const c = getAnonymousBucket();
+      expect(c).toBe(99); // clear 后按新随机源重新分桶，证明缓存已失效
+      expect(random).toHaveBeenCalledTimes(2);
+      expect(c).not.toBe(a);
+    } finally {
+      random.mockRestore();
+    }
   });
 
   it("sessionStorage 不可用时用模块级 ref 兜底，同一周期内仍稳定", () => {
