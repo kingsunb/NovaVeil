@@ -4,14 +4,14 @@ Status: implemented
 
 ## 问题
 
-内置 OpenCode Free 渠道（`https://opencode.ai/zen`，`x-opencode-client` 头 + 公开占位 Key）的六个出厂模型都带 `-free` 后缀。Zen 免费档只接受「Agent 形态」的流式请求：`stream: true` 且请求体携带 `bash`/`edit`/`glob`/`grep`/`read` 五个核心工具名，否则一律 `403 FreeTierError`。网关的诊断测试发非流式、无工具的 Chat 正文，因此全部密钥测试失败；任何非流式或不带核心工具的客户端请求同样被拒，免费渠道实际不可用。
+内置 OpenCode Free 渠道（`https://opencode.ai/inference`，`x-opencode-client` 头 + 公开占位 Key `public`）的六个出厂模型都带 `-free` 后缀。Zen 免费档只接受「Agent 形态」的流式请求：`stream: true` 且请求体携带 `shell`/`edit`/`glob`/`grep`/`read` 五个核心工具名（OpenCode 2.x 将 `bash` 重命名为 `shell`），否则一律 `403 FreeTierError`。2026-10-14 起上游进一步对工具定义逐字节比对：名字存在不够，`description` 与 `parameters` 必须与官方 CLI 完全一致，占位 stub 会被 403 拒绝。网关的诊断测试发非流式、无工具的 Chat 正文，因此全部密钥测试失败；任何非流式或不带核心工具的客户端请求同样被拒，免费渠道实际不可用。
 
 ## 决定
 
 在连线上游前，把落在 Zen 免费档的请求规范成 Agent 形态（只借鉴 opencode2api 的行为，不复用其实现，见 [ROADMAP 第 2 节](../../../../docs/ROADMAP.md) 的「只借鉴行为、不复制源码」）：
 
 - 判定 `isOpencodeFreeModel`：`model.OpenCodeTier(baseURL) == "zen"` 且（`channel.IsFree` 或模型名含 `free` 子串，不区分大小写，对齐 opencode2api 的 `isFreeModel` 兜底）。`/zen/go` Go 档由 `OpenCodeTier` 先判排除，不做改写；非 OpenCode BaseURL 同样落空，指向 `/zen` 的自定义渠道若模型名含 `free` 子串也会改写。
-- 改写 `shapeOpencodeFreeBody`：强制 `stream: true`；补齐 `stream_options.include_usage: true`；注入缺失的核心工具——只按 `function.name` 判定已有工具，缺失的以最小 Chat 工具定义追加，既有工具的原始字节原样保留。用 sjson/gjson 点状改写，不整包 Marshal。
+- 改写 `shapeOpencodeFreeBody`：强制 `stream: true`；补齐 `stream_options.include_usage: true`；注入缺失的核心工具——按 `function.name` 判定已有工具，缺失的以真实定义追加；客户端声明的同名核心工具替换为真实定义（上游逐字节比对，客户端自带的不匹配会 403）。真实定义从 `opencode_tools.json`（`//go:embed`，从官方客户端捕获的 `description` + JSON schema）加载；非核心工具原样保留。用 sjson/gjson 点状改写，不整包 Marshal。
 - 折叠 `collapseOpencodeFreeStream`：客户端原本非流式、改写把 `stream` 置真时，上游返回 SSE，网关用客户端入站转换器的 `AggregateStreamChunks` 聚合成 JSON 再返回，终态校验复用 `validateRoundUsage`/`validateRoundAnswer` 与 Chat `finish_reason` 白名单。
 - 覆盖两条路径：透传 Chat 在 `sendPassthrough`（诊断测试即走这里）；转换（Anthropic/Responses → Chat）在 `sendConverted` 里把客户端正文置流式以便 pipeline 走流式、并在 `conversionMiddleware.OnOutboundRawRequest` 里对 Chat 出站做同一改写。
 - 指纹与关联头：内置免费渠道 `x-opencode-client` 用 `cli`；`OpencodeCompat` 渠道补 `x-session-affinity`/`x-opencode-session-id`/`X-Session-Id`（三者均镜像会话号）与 `x-opencode-project`（裸 40-hex SHA-1）关联头。这些头不参与免费档 403 判定（只查会话号 + stream + 工具名），仅为上游亲缘与请求关联，故改写仍是主修复、头是补充。关联头集合于 2026-10-15 按 opencode v2 官方客户端源码对齐，详见 [opencode v2 客户端头与端点对齐](2026-10-15-opencode-v2-client-header-endpoint-alignment.md)。
@@ -35,4 +35,4 @@ Status: implemented
 
 ## 验证
 
-`internal/relay/opencode_free.go` 提供 `isOpencodeFreeModel`/`shapeOpencodeFreeBody`/`collapseOpencodeFreeStream`；单测 `internal/relay/opencode_free_test.go` 覆盖判定（含名字中部/前缀含 `free` 的子串用例）、Agent 形态强制、幂等、工具合并与非数组 tools 不改写。关联头注入在 `internal/relay/random_headers.go`，单测覆盖 affinity 镜像、session-id 镜像、裸 40-hex project 格式与禁用零差异。`go build ./...`、`go vet ./...`、`go test ./internal/relay/...` 通过。
+`internal/relay/opencode_free.go` 提供 `isOpencodeFreeModel`/`shapeOpencodeFreeBody`/`collapseOpencodeFreeStream`；真实工具定义 embed 在 `internal/relay/opencode_tools.json`（`shell`/`edit`/`glob`/`grep`/`read` 五个核心工具的 `description` + `parameters`）。单测 `internal/relay/opencode_free_test.go` 覆盖判定（含名字中部/前缀含 `free` 的子串用例）、Agent 形态强制、幂等（真实定义下不再二次改写）、同名核心工具替换、非核心工具保留与非数组 tools 不改写。关联头注入在 `internal/relay/random_headers.go`，单测覆盖 affinity 镜像、session-id 镜像、裸 40-hex project 格式与禁用零差异。`go build ./...`、`go vet ./...`、`go test ./internal/relay/...` 通过。

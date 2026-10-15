@@ -35,7 +35,7 @@
 - **完全透传 = 任意协议原样转发，但不跳过分组路由、failover、Key 轮询**（见 [CHANNEL_PASSTHROUGH.md](../CHANNEL_PASSTHROUGH.md)）。
 - OpenCode 按模型协议：`ChannelModel.upstream_protocol` 只允许空 / `chat` / `responses` / `anthropic`，空值按渠道类型转发。协议来源分三层——种子（出厂免费模型）、目录同步（仅 `OpencodeCompat` 渠道读 OpenCode 公开能力目录）、未知（留空按 Chat 渠道转发）；目录失败只跳过协议填充，不抹掉已写的非空值。
 - OpenCode 会话头：入站合法 `ses_` 原样上送（优先级 `x-opencode-session` > `X-Session-Id`，都不合法新铸且不进缓存）；`prompt_cache_key` 只在转到 Chat / Responses 且出站还没有该字段时从脱敏后的正文回写，Anthropic 出站不发明该字段。`OpencodeCompat` 渠道再补 `x-session-affinity` / `x-opencode-session-id` / `X-Session-Id`（三者镜像会话号）、`x-opencode-project`（裸 40-hex SHA-1）关联头，对齐 opencode v2 官方客户端 `model-request.ts` 头集合；官方不发送 `x-opencode-request`，NovaVeil 也不再注入。
-- OpenCode Zen 免费档改写：落在 Zen 档（`IsFree` 渠道或模型名含 `free` 子串）的请求出站前把请求规范成 Agent 形态——强制 `stream: true`、补齐 `stream_options.include_usage`、注入缺失的 `bash`/`edit`/`glob`/`grep`/`read` 核心工具；客户端非流式时把上游折叠出的 SSE 聚合回 JSON 再下发。免费档只接受 Agent 形态流式请求（内置免费渠道指纹头 `x-opencode-client: cli`），非流式直连会被 403 FreeTierError 拒绝。Go 档（`/zen/v1`）与非 OpenCode BaseURL 不做改写。
+- OpenCode Zen 免费档改写：落在 Zen 档（`IsFree` 渠道或模型名含 `free` 子串）的请求出站前把请求规范成 Agent 形态——强制 `stream: true`、补齐 `stream_options.include_usage`、注入缺失的 `shell`/`edit`/`glob`/`grep`/`read` 核心工具（2026-10-14 起上游对工具定义逐字节比对，embed 了从官方客户端捕获的真实 description + JSON schema，同名工具替换为真实定义，占位 stub 会 403）；客户端非流式时把上游折叠出的 SSE 聚合回 JSON 再下发。免费档只接受 Agent 形态流式请求（内置免费渠道指纹头 `x-opencode-client: cli`），非流式直连会被 403 FreeTierError 拒绝。Go 档（`/zen/v1`）与非 OpenCode BaseURL 不做改写。
 - 透传响应头按 blocklist 过滤：`Set-Cookie` / `Location` / `WWW-Authenticate` 及逐跳头一律丢弃，防止恶意上游的 `Set-Cookie` 驱逐管理台认证 cookie。
 
 ### 全链路可视化与请求状态

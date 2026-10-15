@@ -76,13 +76,13 @@ func TestShapeOpencodeFreeBodyForcesAgentShape(t *testing.T) {
 	}
 }
 
-// TestShapeOpencodeFreeBodyIdempotent 验证已满足 Agent 形态的请求不再改写。
+// TestShapeOpencodeFreeBodyIdempotent 验证已满足 Agent 形态(真实工具定义)的请求不再改写。
 func TestShapeOpencodeFreeBodyIdempotent(t *testing.T) {
 	body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[` +
 		func() string {
 			var parts []string
 			for _, core := range opencodeFreeCoreTools {
-				parts = append(parts, `{"type":"function","function":{"name":"`+core+`"}}`)
+				parts = append(parts, opencodeFreeChatTool(core))
 			}
 			return strings.Join(parts, ",")
 		}() + `]}`)
@@ -92,13 +92,28 @@ func TestShapeOpencodeFreeBodyIdempotent(t *testing.T) {
 	}
 }
 
-// TestShapeOpencodeFreeBodyMergesMissingTools 验证只追加缺失工具、既有工具原始字节原样保留。
+// TestShapeOpencodeFreeBodyReplacesSameNameTools 验证客户端声明的同名核心工具被替换为真实定义。
+func TestShapeOpencodeFreeBodyReplacesSameNameTools(t *testing.T) {
+	body, changed := shapeOpencodeFreeBody([]byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[{"type":"function","function":{"name":"shell","description":"my custom","parameters":{"type":"object","properties":{"x":{"type":"string"}}}}}]}`))
+	if !changed {
+		t.Fatalf("同名核心工具应被替换为真实定义")
+	}
+	desc := gjson.GetBytes(body, "tools.0.function.description").String()
+	if desc == "my custom" {
+		t.Fatalf("客户端自定义 description 应被真实定义替换, 仍为 custom")
+	}
+	if desc == "" {
+		t.Fatalf("替换后 description 不应为空")
+	}
+}
+
+// TestShapeOpencodeFreeBodyMergesMissingTools 验证非核心工具原样保留、缺失核心工具被追加。
 func TestShapeOpencodeFreeBodyMergesMissingTools(t *testing.T) {
-	body, _ := shapeOpencodeFreeBody([]byte(`{"model":"x-free","tools":[{"type":"function","function":{"name":"bash","description":"custom","parameters":{"type":"object","properties":{"x":{"type":"string"}}}}}]}`))
+	body, _ := shapeOpencodeFreeBody([]byte(`{"model":"x-free","tools":[{"type":"function","function":{"name":"mytool","description":"custom","parameters":{"type":"object","properties":{"x":{"type":"string"}}}}}]}`))
 	raw := gjson.GetBytes(body, "tools").Raw
-	// 既有的 bash 工具字节完全保留。
+	// 非核心工具 mytool 字节完全保留。
 	if !strings.Contains(raw, `"description":"custom"`) {
-		t.Fatalf("既有工具应原样保留: %s", raw)
+		t.Fatalf("非核心工具应原样保留: %s", raw)
 	}
 	names := map[string]bool{}
 	for _, tool := range gjson.GetBytes(body, "tools").Array() {

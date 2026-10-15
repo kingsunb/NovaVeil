@@ -2,9 +2,11 @@ package relay
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/looplj/axonhub/llm"
@@ -14,13 +16,52 @@ import (
 )
 
 // OpenCode Zen 免费档只接受「Agent 形态」的流式请求: stream=true 且请求体携带
-// bash/edit/glob/grep/read 这五个核心工具名, 否则一律 403 FreeTierError。本文件
+// shell/edit/glob/grep/read 这五个核心工具名, 否则一律 403 FreeTierError。本文件
 // 在连线上游前把免费模型的请求规范化成该形态, 并在客户端原本是非流式时把上游
 // 折叠出的 SSE 聚合回 JSON。行为对齐 opencode2api 的匿名/免费档请求改写, 不复用其实现。
+//
+// 2026-10-14 起上游对工具定义做逐字节比对: 名字存在不够, description 与 parameters
+// 必须与官方 CLI 完全一致, 占位 stub 会被 403 拒绝。因此本文件 embed 了从官方客户端
+// 捕获的真实定义(opencode_tools.json), 注入和同名替换均用真实定义。
 
-// opencodeFreeCoreTools 是免费档判定 Agent 形态所需的核心工具名。缺任一即被上游拒绝;
-// 判定只看名字, 工具的 description/parameters 内容无关。
-var opencodeFreeCoreTools = []string{"bash", "edit", "glob", "grep", "read"}
+// opencodeFreeCoreTools 是免费档判定 Agent 形态所需的核心工具名。缺任一即被上游拒绝。
+// OpenCode 2.x 将 bash 重命名为 shell; 旧名 bash 的定义上游不认识, 会 403。
+var opencodeFreeCoreTools = []string{"shell", "edit", "glob", "grep", "read"}
+
+// opencodeToolsJSON 是从 OpenCode 官方客户端捕获的真实工具定义(description + JSON schema)。
+// 上游对每个识别的工具名做逐字节比对, 占位 stub 会被 403 FreeTierError 拒绝。
+//
+//go:embed opencode_tools.json
+var opencodeToolsJSON []byte
+
+// opencodeToolDef 是 opencode_tools.json 中单个工具的定义。
+type opencodeToolDef struct {
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
+var (
+	opencodeToolsOnce sync.Once
+	opencodeTools     map[string]opencodeToolDef
+)
+
+// loadOpencodeTools 解析 embed 的真实工具定义; 失败时返回空表(降级为占位, 上游会 403)。
+func loadOpencodeTools() {
+	opencodeToolsOnce.Do(func() {
+		defs := make(map[string]opencodeToolDef)
+		if err := json.Unmarshal(opencodeToolsJSON, &defs); err != nil {
+			defs = map[string]opencodeToolDef{}
+		}
+		opencodeTools = defs
+	})
+}
+
+// knownOpencodeTool 返回工具名的真实定义; 不在核心工具集中返回 false。
+func knownOpencodeTool(name string) (opencodeToolDef, bool) {
+	loadOpencodeTools()
+	def, ok := opencodeTools[name]
+	return def, ok
+}
 
 // isOpencodeFreeModel 判定该渠道上的模型是否落在 OpenCode Zen 免费档:
 // 渠道 BaseURL 是 /zen 或 /inference(见 model.OpenCodeTier 的档位识别), 并且
@@ -67,39 +108,59 @@ func shapeOpencodeFreeBody(body []byte) ([]byte, bool) {
 	return out, changed
 }
 
-// ensureOpencodeFreeTools 追加缺失的核心工具定义, 报告是否改写。已声明的工具原样保留;
-// tools 字段存在但不是数组时视为客户端输入异常, 不改写(与上游拒绝口径一致)。
+// ensureOpencodeFreeTools 确保核心工具存在且定义真实, 报告是否改写。
+//   - 客户端已声明的同名核心工具: 替换为真实定义(上游逐字节比对, 客户端自带的不匹配会 403)。
+//   - 缺失的核心工具: 追加真实定义。
+//   - 非核心工具原样保留。
+//
+// tools 字段存在但不是数组时视为客户端输入异常, 不改写。
 func ensureOpencodeFreeTools(body []byte) ([]byte, bool) {
 	tools := gjson.GetBytes(body, "tools")
 	if tools.Exists() && !tools.IsArray() {
 		return body, false
 	}
 
+	changed := false
 	present := make(map[string]bool, len(opencodeFreeCoreTools))
-	if tools.IsArray() {
-		for _, t := range tools.Array() {
-			if name := t.Get("function.name").String(); name != "" {
-				present[name] = true
+	items := make([]string, 0, len(tools.Array())+len(opencodeFreeCoreTools))
+
+	for _, t := range tools.Array() {
+		name := t.Get("function.name").String()
+		if name == "" {
+			items = append(items, t.Raw)
+			continue
+		}
+		present[name] = true
+		// 同名核心工具: 仅在 description 与真实定义不一致时替换。上游逐字节比对
+		// description/parameters, 客户端自带的定义几乎不可能恰好匹配。已一致的
+		// 不替换, 保持幂等。
+		if def, known := knownOpencodeTool(name); known {
+			if t.Get("function.description").String() != def.Description {
+				items = append(items, opencodeFreeChatTool(name))
+				changed = true
+				continue
 			}
 		}
+		items = append(items, t.Raw)
 	}
+
 	missing := make([]string, 0, len(opencodeFreeCoreTools))
 	for _, name := range opencodeFreeCoreTools {
 		if !present[name] {
 			missing = append(missing, name)
 		}
 	}
-	if len(missing) == 0 {
+	if len(missing) > 0 {
+		for _, name := range missing {
+			items = append(items, opencodeFreeChatTool(name))
+		}
+		changed = true
+	}
+
+	if !changed {
 		return body, false
 	}
 
-	items := make([]string, 0, len(tools.Array())+len(missing))
-	for _, t := range tools.Array() {
-		items = append(items, t.Raw)
-	}
-	for _, name := range missing {
-		items = append(items, opencodeFreeChatTool(name))
-	}
 	next, err := sjson.SetRawBytes(body, "tools", []byte("["+strings.Join(items, ",")+"]"))
 	if err != nil {
 		return body, false
@@ -107,18 +168,23 @@ func ensureOpencodeFreeTools(body []byte) ([]byte, bool) {
 	return next, true
 }
 
-// opencodeFreeChatTool 合成一个 Chat 协议的最小工具定义; 名字来自固定白名单,
-// 无注入风险。description/parameters 仅为满足上游校验的占位, 不对客户端可见。
+// opencodeFreeChatTool 生成 Chat 协议的工具定义。核心工具使用 embed 的真实定义
+// (description + parameters); 未知工具降级为占位(上游不识别, 不影响校验)。
 func opencodeFreeChatTool(name string) string {
+	description := "Agent tool " + name
+	parameters := map[string]any{"type": "object", "properties": map[string]any{}}
+	if def, ok := knownOpencodeTool(name); ok {
+		description = def.Description
+		if def.Parameters != nil {
+			parameters = def.Parameters
+		}
+	}
 	b, _ := json.Marshal(map[string]any{
 		"type": "function",
 		"function": map[string]any{
 			"name":        name,
-			"description": "Agent tool " + name,
-			"parameters": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
+			"description": description,
+			"parameters":  parameters,
 		},
 	})
 	return string(b)
