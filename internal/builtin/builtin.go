@@ -97,6 +97,54 @@ var BuiltinFreeChannels = []model.Channel{
 		},
 	},
 	{
+		// OpenCode Free 2 是 OpenCode Free 的同配置副本，供管理员分别配置不同代理。
+		// 内置渠道的 is_free / opencode_compat 不受 ensureFreeBuiltinChannels 的
+		// 自定义渠道清理逻辑影响，两个副本均可独立走各自代理转发同一免费端点。
+		Name:           "OpenCode Free 2",
+		Type:           model.ChannelProviderOpenAI,
+		BaseURL:        "https://opencode.ai/inference",
+		Key:            "public",
+		OpencodeCompat: true,
+		CustomHeader: []model.CustomHeader{
+			{HeaderKey: "x-opencode-client", HeaderValue: "cli"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.0.29/cli"},
+		},
+		Models: []model.ChannelModel{
+			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+		},
+	},
+	{
+		// OpenCode Free 3 是 OpenCode Free 的同配置副本，供管理员分别配置不同代理。
+		// 内置渠道的 is_free / opencode_compat 不受 ensureFreeBuiltinChannels 的
+		// 自定义渠道清理逻辑影响，各副本均可独立走各自代理转发同一免费端点。
+		Name:           "OpenCode Free 3",
+		Type:           model.ChannelProviderOpenAI,
+		BaseURL:        "https://opencode.ai/inference",
+		Key:            "public",
+		OpencodeCompat: true,
+		CustomHeader: []model.CustomHeader{
+			{HeaderKey: "x-opencode-client", HeaderValue: "cli"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.0.29/cli"},
+		},
+		Models: []model.ChannelModel{
+			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+		},
+	},
+	{
 		Name:    "UncloseAI Free",
 		Type:    model.ChannelProviderOpenAI,
 		BaseURL: "https://hermes.ai.unturf.com",
