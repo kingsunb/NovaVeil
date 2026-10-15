@@ -63,6 +63,16 @@ export interface ChannelModel {
    * 空或缺失表示按渠道类型转发；不要把缺省显示成错误。
    */
   upstream_protocol?: ChannelUpstreamProtocol;
+  /** 上下文窗口大小(token); 0 表示未知。来自 OpenCode 公开目录。 */
+  context_window?: number;
+  /** 最大输出 token; 0 表示未知。来自 OpenCode 公开目录。 */
+  max_output?: number;
+  /** 是否支持推理(thinking/reasoning)。来自 OpenCode 公开目录。 */
+  reasoning?: boolean;
+  /** 是否支持工具调用(function calling)。来自 OpenCode 公开目录。 */
+  tool_call?: boolean;
+  /** 输入模态, 逗号分隔: text,image,audio,video,pdf; 空表示未知。 */
+  input_modalities?: string;
 }
 
 export interface ChannelModelLimit {

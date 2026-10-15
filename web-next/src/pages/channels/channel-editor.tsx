@@ -1344,6 +1344,13 @@ function modelLimitBadge(limit: ChannelModelLimit | undefined): string {
   return "思考";
 }
 
+/** 格式化 token 数为可读短串: 976000 → "976K", 1024000 → "1M", 32000 → "32K" */
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${Math.round(n / 1_000_000)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+  return String(n);
+}
+
 function ModelsTab({
   draft,
   update,
@@ -1701,6 +1708,34 @@ function ModelsTab({
                     {draft.opencode_compat ? (
                       <UpstreamProtocolLabel protocol={m.upstream_protocol} />
                     ) : null}
+                    {m.context_window && m.context_window > 0 ? (
+                      <Pill tone="neutral" className="text-[10px]">
+                        {formatTokens(m.context_window)} ctx
+                      </Pill>
+                    ) : null}
+                    {m.max_output && m.max_output > 0 ? (
+                      <Pill tone="neutral" className="text-[10px]">
+                        {formatTokens(m.max_output)} out
+                      </Pill>
+                    ) : null}
+                    {m.reasoning ? (
+                      <Pill tone="info" className="text-[10px]">
+                        reasoning
+                      </Pill>
+                    ) : null}
+                    {m.tool_call ? (
+                      <Pill tone="info" className="text-[10px]">
+                        tools
+                      </Pill>
+                    ) : null}
+                    {m.input_modalities
+                      ?.split(",")
+                      .filter((x) => x.trim() && x.trim() !== "text")
+                      .map((x) => (
+                        <Pill key={x} tone="neutral" className="text-[10px]">
+                          {x.trim()}
+                        </Pill>
+                      ))}
                     {modelLimitBadge(limit) && (
                       <Pill tone="neutral" className="text-[10px]">
                         {modelLimitBadge(limit)}

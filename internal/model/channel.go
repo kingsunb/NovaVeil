@@ -81,6 +81,11 @@ type ChannelModel struct {
 	Name              string             `json:"name" gorm:"not null;index:idx_channel_model_name,unique"`       // 上游模型名称。
 	Source            ChannelModelSource `json:"source" gorm:"not null;default:auto"`                            // 模型来源。
 	UpstreamProtocol  string             `json:"upstream_protocol" gorm:"not null;default:''"`                   // 上游原生协议: chat/responses/anthropic; 空表示按渠道类型。
+	ContextWindow     int                `json:"context_window" gorm:"not null;default:0"`                       // 上下文窗口大小(token); 0 表示未知。
+	MaxOutput         int                `json:"max_output" gorm:"not null;default:0"`                           // 最大输出 token; 0 表示未知。
+	Reasoning         bool               `json:"reasoning" gorm:"not null;default:false"`                        // 是否支持推理(thinking/reasoning)。
+	ToolCall          bool               `json:"tool_call" gorm:"not null;default:false"`                        // 是否支持工具调用(function calling)。
+	InputModalities   string             `json:"input_modalities" gorm:"not null;default:''"`                    // 输入模态, 逗号分隔: text,image,audio,video,pdf; 空表示未知。
 }
 
 // 追加到上游请求的单个 Header。

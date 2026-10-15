@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kingsunb/NovaVeil/internal/db"
+	"github.com/kingsunb/NovaVeil/internal/helper"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/kingsunb/NovaVeil/internal/testutil"
@@ -134,24 +135,24 @@ func insertSyncChannel(t *testing.T, baseURL string, models []model.ChannelModel
 
 func stubSyncFetch(models []string, protocols map[string]string, catalogErr error) func() {
 	prevModels := fetchChannelModels
-	prevCatalog := fetchOpencodeProtocols
+	prevCatalog := fetchOpencodeCatalog
 	fetchChannelModels = func(context.Context, model.Channel) ([]string, error) {
 		out := append([]string(nil), models...)
 		return out, nil
 	}
-	fetchOpencodeProtocols = func(context.Context, model.Channel) (map[string]string, error) {
+	fetchOpencodeCatalog = func(context.Context, model.Channel) (map[string]helper.OpencodeModelInfo, error) {
 		if catalogErr != nil {
 			return nil, catalogErr
 		}
-		out := make(map[string]string, len(protocols))
+		out := make(map[string]helper.OpencodeModelInfo, len(protocols))
 		for name, protocol := range protocols {
-			out[name] = protocol
+			out[name] = helper.OpencodeModelInfo{Protocol: protocol}
 		}
 		return out, nil
 	}
 	return func() {
 		fetchChannelModels = prevModels
-		fetchOpencodeProtocols = prevCatalog
+		fetchOpencodeCatalog = prevCatalog
 	}
 }
 

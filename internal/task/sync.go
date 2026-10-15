@@ -15,8 +15,8 @@ import (
 
 // 模型列表与 OpenCode 目录的拉取点，测试替换它们以避免真实网络请求。
 var (
-	fetchChannelModels     = helper.FetchModels
-	fetchOpencodeProtocols = helper.FetchOpencodeProtocols
+	fetchChannelModels  = helper.FetchModels
+	fetchOpencodeCatalog = helper.FetchOpencodeCatalog
 )
 
 var (
@@ -87,15 +87,15 @@ func SyncModelsTask() error {
 		}
 
 		// 目录失败只跳过协议填充。/v1/models 的失败与空列表保护已经在上面返回。
-		var protocols map[string]string
-		protocolsOK := false
+		var catalog map[string]helper.OpencodeModelInfo
+		catalogOK := false
 		if channel.OpencodeCompat {
-			fetched, catalogErr := fetchOpencodeProtocols(fetchCtx, channel)
+			fetched, catalogErr := fetchOpencodeCatalog(fetchCtx, channel)
 			if catalogErr != nil {
 				log.Warnf("skip opencode protocol fill for channel %s: %v", channel.Name, catalogErr)
 			} else {
-				protocols = fetched
-				protocolsOK = true
+				catalog = fetched
+				catalogOK = true
 			}
 		}
 
@@ -116,6 +116,7 @@ func SyncModelsTask() error {
 		// 外部返回的模型名只在进入内部流程时清洗一次，并由手动模型优先占用重复名称。
 		// 重建 auto 模型时必须带上协议：目录识别到的值优先，否则抄回上一轮的非空协议。
 		// 只写名字和 Source 会在 ChannelUpdate 时把协议抹掉。
+		// 目录还提供上下文窗口、输出上限、推理/工具调用能力与输入模态，一并写入。
 		seen := make(map[string]struct{}, len(fetchModels))
 		autoModels := make([]model.ChannelModel, 0, len(fetchModels))
 		for _, modelName := range fetchModels {
@@ -131,16 +132,24 @@ func SyncModelsTask() error {
 			}
 			seen[modelName] = struct{}{}
 			protocol := oldAutoProtocols[modelName]
-			if protocolsOK {
-				if updated := protocols[modelName]; updated != "" {
-					protocol = updated
-				}
-			}
-			autoModels = append(autoModels, model.ChannelModel{
+			cm := model.ChannelModel{
 				Name:             modelName,
 				Source:           model.ChannelModelSourceAuto,
 				UpstreamProtocol: protocol,
-			})
+			}
+			if catalogOK {
+				if info, ok := catalog[modelName]; ok {
+					if info.Protocol != "" {
+						cm.UpstreamProtocol = info.Protocol
+					}
+					cm.ContextWindow = info.ContextWindow
+					cm.MaxOutput = info.MaxOutput
+					cm.Reasoning = info.Reasoning
+					cm.ToolCall = info.ToolCall
+					cm.InputModalities = strings.Join(info.InputModalities, ",")
+				}
+			}
+			autoModels = append(autoModels, cm)
 		}
 		addedModels := make([]string, 0)
 		newAutoNames := make(map[string]struct{}, len(autoModels))

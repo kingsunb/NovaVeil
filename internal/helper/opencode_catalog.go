@@ -12,19 +12,30 @@ import (
 )
 
 // opencodeCatalogURL 是 OpenCode 公开能力目录。按提供方区分 Zen 与 Go，
-// 用 npm SDK 判断 chat / responses / anthropic。不读取价格、窗口或模态。
+// 用 npm SDK 判断 chat / responses / anthropic，同时提取上下文窗口、输出上限、
+// 推理/工具调用能力与输入模态供管理台展示。
 const opencodeCatalogURL = "https://models.opencode.ai/api.json"
 
 // opencodeCatalogMaxBytes 限制目录响应体，避免异常响应把同步任务撑满内存。
 const opencodeCatalogMaxBytes = 16 << 20
 
-// FetchOpencodeProtocols 读取公开目录，返回该渠道档位上已识别的模型协议。
+// OpencodeModelInfo 是目录里单个模型的协议与能力元数据。
+type OpencodeModelInfo struct {
+	Protocol        string   // chat / responses / anthropic。
+	ContextWindow   int      // 上下文窗口大小(token); 0 表示目录未提供。
+	MaxOutput       int      // 最大输出 token; 0 表示目录未提供。
+	Reasoning       bool     // 是否支持推理(thinking/reasoning)。
+	ToolCall        bool     // 是否支持工具调用(function calling)。
+	InputModalities []string // 输入模态: text/image/audio/video/pdf 等。
+}
+
+// FetchOpencodeCatalog 读取公开目录，返回该渠道档位上已识别的模型协议与能力元数据。
 // 键只包含能映射到 chat/responses/anthropic 的模型；目录失败返回 error，
 // 调用方必须保留模型行上已有的协议。BaseURL 不是 Zen/Go 时返回空表且无错误。
-func FetchOpencodeProtocols(ctx context.Context, channel model.Channel) (map[string]string, error) {
+func FetchOpencodeCatalog(ctx context.Context, channel model.Channel) (map[string]OpencodeModelInfo, error) {
 	tier := model.OpenCodeTier(channel.BaseURL)
 	if tier == "" {
-		return map[string]string{}, nil
+		return map[string]OpencodeModelInfo{}, nil
 	}
 	if err := ResolveChannelProxyTemplate(&channel); err != nil {
 		return nil, err
@@ -53,7 +64,7 @@ func FetchOpencodeProtocols(ctx context.Context, channel model.Channel) (map[str
 	if len(body) > opencodeCatalogMaxBytes {
 		return nil, fmt.Errorf("opencode catalog exceeds %d bytes", opencodeCatalogMaxBytes)
 	}
-	return ParseOpencodeProtocolCatalog(body, tier)
+	return ParseOpencodeCatalog(body, tier)
 }
 
 type opencodeCatalogFile map[string]opencodeCatalogProvider
@@ -68,20 +79,33 @@ type opencodeCatalogProvider struct {
 type opencodeCatalogModel struct {
 	ID       string                        `json:"id"`
 	Provider *opencodeCatalogModelProvider `json:"provider"`
+	Limit    *opencodeCatalogModelLimit    `json:"limit"`
+	Reasoning bool                         `json:"reasoning"`
+	ToolCall  bool                         `json:"tool_call"`
+	Modalities *opencodeCatalogModalities  `json:"modalities"`
 }
 
 type opencodeCatalogModelProvider struct {
 	NPM string `json:"npm"`
 }
 
-// ParseOpencodeProtocolCatalog 从目录 JSON 抽出指定档位的模型协议。
+type opencodeCatalogModelLimit struct {
+	Context int `json:"context"`
+	Output  int `json:"output"`
+}
+
+type opencodeCatalogModalities struct {
+	Input []string `json:"input"`
+}
+
+// ParseOpencodeCatalog 从目录 JSON 抽出指定档位的模型协议与能力元数据。
 // tier 为 zen 或 go。提供方 id 精确匹配优先（opencode / opencode-go）；
 // 没有精确 id 时才用 api 地址里的 /zen 或 /zen/go 兜底。
 // 模型级 provider.npm 覆盖提供方 npm。无法识别的 SDK 不进入结果。
-func ParseOpencodeProtocolCatalog(data []byte, tier string) (map[string]string, error) {
+func ParseOpencodeCatalog(data []byte, tier string) (map[string]OpencodeModelInfo, error) {
 	tier = strings.ToLower(strings.TrimSpace(tier))
 	if tier != "zen" && tier != "go" {
-		return map[string]string{}, nil
+		return map[string]OpencodeModelInfo{}, nil
 	}
 	var file opencodeCatalogFile
 	if err := json.Unmarshal(data, &file); err != nil {
@@ -110,7 +134,7 @@ func ParseOpencodeProtocolCatalog(data []byte, tier string) (map[string]string, 
 	if len(chosen) == 0 {
 		chosen = fallback
 	}
-	out := make(map[string]string)
+	out := make(map[string]OpencodeModelInfo)
 	for _, provider := range chosen {
 		for name, entry := range provider.Models {
 			modelName := strings.TrimSpace(entry.ID)
@@ -131,7 +155,17 @@ func ParseOpencodeProtocolCatalog(data []byte, tier string) (map[string]string, 
 			if _, exists := out[modelName]; exists {
 				continue
 			}
-			out[modelName] = protocol
+			info := OpencodeModelInfo{Protocol: protocol}
+			if entry.Limit != nil {
+				info.ContextWindow = entry.Limit.Context
+				info.MaxOutput = entry.Limit.Output
+			}
+			info.Reasoning = entry.Reasoning
+			info.ToolCall = entry.ToolCall
+			if entry.Modalities != nil {
+				info.InputModalities = entry.Modalities.Input
+			}
+			out[modelName] = info
 		}
 	}
 	return out, nil
