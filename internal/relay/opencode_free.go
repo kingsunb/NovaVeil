@@ -23,9 +23,9 @@ import (
 var opencodeFreeCoreTools = []string{"bash", "edit", "glob", "grep", "read"}
 
 // isOpencodeFreeModel 判定该渠道上的模型是否落在 OpenCode Zen 免费档:
-// 渠道 BaseURL 是 /zen(且不含 /zen/go, 见 model.OpenCodeTier 的 Go 先判), 并且
+// 渠道 BaseURL 是 /zen 或 /inference(见 model.OpenCodeTier 的档位识别), 并且
 // 渠道是内置免费渠道, 或模型名含 "free" 子串(不区分大小写, 对齐 opencode2api
-// 的 isFreeModel 兜底)。Go 档(/zen/go)是付费档, 不做改写。
+// 的 isFreeModel 兜底)。Go 档(/zen/go 或 /zen/v1)是付费档, 不做改写。
 func isOpencodeFreeModel(channel model.Channel, modelName string) bool {
 	if model.OpenCodeTier(channel.BaseURL) != "zen" {
 		return false

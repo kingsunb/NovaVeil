@@ -17,13 +17,17 @@ import (
 // opencodeSessionHeader opencode 兼容请求头的固定头名。
 const opencodeSessionHeader = "x-opencode-session"
 
-// opencode 关联头名。x-session-affinity 镜像会话号; x-opencode-request 每请求唯一;
-// x-opencode-project 固定默认项目。三者都不参与免费档 403 判定(只查会话号 + stream
-// + 工具名), 仅为上游 prompt/session 亲缘与请求关联, 语义对齐 opencode2api 的关联头。
+// opencode 关联头名。opencode v2 官方客户端(packages/core/src/session/model-request.ts:282-292)
+// 在每个 model 请求上注入: x-opencode-session-id(= session.id)、x-session-affinity(= affinity)、
+// X-Session-Id(= affinity, 大写 X)、x-opencode-project(= projectID)、x-opencode-session(= affinity)、
+// x-opencode-client(= app.name)。官方不发送 x-opencode-request(客户端发送路径无此头)。
+// 对顶层会话, affinity == session.id, 故 x-opencode-session-id / x-session-affinity / X-Session-Id
+// 三者同值, 均镜像 x-opencode-session。
 const (
-	opencodeAffinityHeader = "x-session-affinity"
-	opencodeRequestHeader  = "x-opencode-request"
-	opencodeProjectHeader  = "x-opencode-project"
+	opencodeAffinityHeader  = "x-session-affinity"
+	opencodeSessionIDHeader = "x-opencode-session-id"
+	opencodeUpstreamSessID  = "X-Session-Id"
+	opencodeProjectHeader   = "x-opencode-project"
 )
 
 // opencodeSessionIDPattern 是上游接受的 x-opencode-session 整段格式:
@@ -234,9 +238,12 @@ func applyResolvedOpencodeSession(channel model.Channel, session string, request
 
 // injectOpencodeCorrelationHeaders 在 OpencodeCompat 渠道上补充 opencode 关联头。
 // 调用方应在 x-opencode-session 最终写入之后调用(applyChannelConfig 里紧跟
-// applyResolvedOpencodeSession), 这样 x-session-affinity 镜像的是最终会话号而非占位值。
-// x-opencode-request / x-opencode-project 只在头未存在时写入, 不覆盖客户端或全局随机头
-// 规则已经给的值。非 OpencodeCompat 渠道不注入(与 x-opencode-session 同口径)。
+// applyResolvedOpencodeSession), 这样关联头镜像的是最终会话号而非占位值。
+// x-opencode-project 只在头未存在时写入, 不覆盖客户端或全局随机头规则已经给的值。
+// 非 OpencodeCompat 渠道不注入(与 x-opencode-session 同口径)。
+// 头集合对齐 opencode v2 官方客户端 model-request.ts:282-292: x-session-affinity、
+// x-opencode-session-id、X-Session-Id 三者镜像会话号, x-opencode-project 发裸 40-hex。
+// 官方不发送 x-opencode-request, 此处也不再注入。
 func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient.Request) {
 	if !channel.OpencodeCompat || request == nil {
 		return
@@ -246,9 +253,8 @@ func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient
 	}
 	if session := request.Headers.Get(opencodeSessionHeader); session != "" {
 		request.Headers.Set(opencodeAffinityHeader, session)
-	}
-	if request.Headers.Get(opencodeRequestHeader) == "" {
-		request.Headers.Set(opencodeRequestHeader, opencodeid.GenerateRequestID())
+		request.Headers.Set(opencodeSessionIDHeader, session)
+		request.Headers.Set(opencodeUpstreamSessID, session)
 	}
 	if request.Headers.Get(opencodeProjectHeader) == "" {
 		request.Headers.Set(opencodeProjectHeader, opencodeid.ProjectID())

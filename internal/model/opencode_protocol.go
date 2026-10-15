@@ -29,13 +29,19 @@ func CanonicalUpstreamProtocol(raw string) (string, error) {
 var errInvalidUpstreamProtocol = errors.New("上游协议只允许空、chat、responses、anthropic")
 
 // OpenCodeTier 按渠道 BaseURL 区分 OpenCode 的 Zen 与 Go 档。
-// 无法识别时返回空字符串。Go 必须先于 Zen 判断，因为 /zen/go 同时包含 /zen。
+// 无法识别时返回空字符串。Go 必须先于 Zen 判断，因为 /zen/go 和 /zen/v1 同时包含 /zen。
+//
+// 端点演变：opencode v2 官方客户端(packages/ai/src/providers/opencode-zen.ts)用
+// https://opencode.ai/zen/v1 作为统一推理端点(免费/付费靠 apiKey 区分)。第三方
+// opencode2api(2026-10-14)观察到免费流量迁移至 https://opencode.ai/inference。
+// NovaVeil 内置免费档用 /inference，付费档用 /zen/v1；旧端点 /zen 与 /zen/go
+// 保留识别以兼容已落库的自定义渠道。
 func OpenCodeTier(baseURL string) string {
 	value := strings.ToLower(strings.TrimSpace(baseURL))
 	switch {
-	case strings.Contains(value, "/zen/go"):
+	case strings.Contains(value, "/zen/go"), strings.Contains(value, "/zen/v1"):
 		return "go"
-	case strings.Contains(value, "/zen"):
+	case strings.Contains(value, "/zen"), strings.Contains(value, "/inference"):
 		return "zen"
 	default:
 		return ""

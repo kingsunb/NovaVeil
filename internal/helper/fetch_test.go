@@ -124,11 +124,19 @@ func TestFetchOpenAIModelsAcceptsPopulated(t *testing.T) {
 
 // TestFetchOpenAIModelsInjectsOpencodeSession 验证模型同步/探测路径与转发路径一致:
 // OpencodeCompat=true 的 OpenAI 渠道拉取模型列表时, 必须注入 opencode 格式的
-// x-opencode-session 头, 否则 opencode.ai/zen 上游会拒绝请求。
+// x-opencode-session 及 x-opencode-session-id 头(两者同值), 对齐 opencode v2 官方客户端
+// model-request.ts:283 的头集合, 否则 opencode.ai 上游会拒绝请求。
 func TestFetchOpenAIModelsInjectsOpencodeSession(t *testing.T) {
-	got := make(chan string, 1)
+	type headers struct {
+		session   string
+		sessionID string
+	}
+	got := make(chan headers, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got <- r.Header.Get("x-opencode-session")
+		got <- headers{
+			session:   r.Header.Get("x-opencode-session"),
+			sessionID: r.Header.Get("x-opencode-session-id"),
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"data":[]}`))
@@ -144,18 +152,28 @@ func TestFetchOpenAIModelsInjectsOpencodeSession(t *testing.T) {
 		t.Fatalf("fetchOpenAIModels: %v", err)
 	}
 
-	session := <-got
-	if !opencodeSessionPattern.MatchString(session) {
-		t.Fatalf("x-opencode-session = %q, 期望匹配 %s", session, opencodeSessionPattern.String())
+	h := <-got
+	if !opencodeSessionPattern.MatchString(h.session) {
+		t.Fatalf("x-opencode-session = %q, 期望匹配 %s", h.session, opencodeSessionPattern.String())
+	}
+	if h.sessionID != h.session {
+		t.Fatalf("x-opencode-session-id 应与 x-opencode-session 同值, session=%q session-id=%q", h.session, h.sessionID)
 	}
 }
 
 // TestFetchOpenAIModelsSkipsOpencodeSessionWhenDisabled 验证 OpencodeCompat=false
-// 的普通渠道不会被注入 x-opencode-session, 保持与转发路径相同的开关语义。
+// 的普通渠道不会被注入 x-opencode-session / x-opencode-session-id, 保持与转发路径相同的开关语义。
 func TestFetchOpenAIModelsSkipsOpencodeSessionWhenDisabled(t *testing.T) {
-	got := make(chan string, 1)
+	type headers struct {
+		session   string
+		sessionID string
+	}
+	got := make(chan headers, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got <- r.Header.Get("x-opencode-session")
+		got <- headers{
+			session:   r.Header.Get("x-opencode-session"),
+			sessionID: r.Header.Get("x-opencode-session-id"),
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"data":[]}`))
@@ -171,7 +189,11 @@ func TestFetchOpenAIModelsSkipsOpencodeSessionWhenDisabled(t *testing.T) {
 		t.Fatalf("fetchOpenAIModels: %v", err)
 	}
 
-	if session := <-got; session != "" {
-		t.Fatalf("OpencodeCompat=false 时不应注入 x-opencode-session, 实际注入 %q", session)
+	h := <-got
+	if h.session != "" {
+		t.Fatalf("OpencodeCompat=false 时不应注入 x-opencode-session, 实际注入 %q", h.session)
+	}
+	if h.sessionID != "" {
+		t.Fatalf("OpencodeCompat=false 时不应注入 x-opencode-session-id, 实际注入 %q", h.sessionID)
 	}
 }

@@ -25,6 +25,12 @@ func TestIsOpencodeFreeModel(t *testing.T) {
 		{"go 档不判定免费", "https://opencode.ai/zen/go", true, "gpt-5.3-codex-free", false},
 		{"非 opencode 渠道不判定免费", "https://api.openai.com/v1", true, "gpt-x-free", false},
 		{"空 baseURL", "", true, "x-free", false},
+		// 新端点: /inference(免费) 和 /zen/v1(付费)。
+		{"内置免费渠道 inference", "https://opencode.ai/inference", true, "gpt-5.3-codex", true},
+		{"inference 上 free 模型名", "https://opencode.ai/inference", false, "deepseek-v4-flash-free", true},
+		{"inference 上非 free 模型名且非免费渠道", "https://opencode.ai/inference", false, "gpt-5.3-codex", false},
+		{"zen/v1 付费档不判定免费", "https://opencode.ai/zen/v1", true, "gpt-5.3-codex-free", false},
+		{"zen/v1 付费档 free 模型名也不改写", "https://opencode.ai/zen/v1", false, "deepseek-v4-flash-free", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

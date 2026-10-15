@@ -311,13 +311,17 @@ func applyCustomHeaders(req *http.Request, channel model.Channel) {
 }
 
 // applyOpencodeCompatHeaders 为开启 opencode 兼容开关的 OpenAI 渠道注入
-// x-opencode-session。仅 OpenCode 兼容场景需要该头, 其他 provider 不注入。
-// 与转发路径(internal/relay 的 injectRandomHeaders)保持一致: 动态头在静态自定义
-// Header 之后注入, 同名时覆盖静态固定值。模型同步请求没有会话锚点, 每次生成新的
-// opencode 格式会话 ID 即可(与转发路径 sessionKey 为空时的行为一致)。
+// x-opencode-session 及 x-opencode-session-id。仅 OpenCode 兼容场景需要这些头,
+// 其他 provider 不注入。与转发路径(internal/relay 的 injectRandomHeaders)保持一致:
+// 动态头在静态自定义 Header 之后注入, 同名时覆盖静态固定值。模型同步请求没有会话
+// 锚点, 每次生成新的 opencode 格式会话 ID 即可(与转发路径 sessionKey 为空时的行为
+// 一致)。x-opencode-session-id 与 x-opencode-session 同值, 对齐 opencode v2 官方客户端
+// model-request.ts:283 的头集合。
 func applyOpencodeCompatHeaders(req *http.Request, channel model.Channel) {
 	if !channel.OpencodeCompat {
 		return
 	}
-	req.Header.Set("x-opencode-session", opencodeid.GenerateSessionID())
+	session := opencodeid.GenerateSessionID()
+	req.Header.Set("x-opencode-session", session)
+	req.Header.Set("x-opencode-session-id", session)
 }

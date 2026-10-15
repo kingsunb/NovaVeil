@@ -7,7 +7,7 @@ package opencodeid
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/hex"
 	"sync/atomic"
 	"time"
@@ -72,9 +72,9 @@ func GenerateSessionID() string {
 }
 
 // GenerateRequestID 生成每请求唯一的 opencode 关联请求 ID, 格式 req_<32 hex>。
-// 与 x-opencode-session 不同, 上游不校验该头格式, 也不参与免费档 403 判定(只查
-// 会话号 + stream + 工具名), 仅用于上游请求关联与日志。沿用 opencode2api 网关侧
-// 的随机 hex 形态, 而非 opencode 原生 req_ 形态。
+// 注意: opencode v2 官方客户端不发送 x-opencode-request 头(客户端发送路径无此头,
+// 见 packages/core/src/session/model-request.ts:282-292), 该函数保留供内部关联/
+// 日志使用, 但不再注入到发往 opencode.ai 的上游请求头中。
 func GenerateRequestID() string {
 	buf := make([]byte, 16)
 	if _, err := rand.Read(buf); err != nil {
@@ -87,15 +87,17 @@ func GenerateRequestID() string {
 	return "req_" + hex.EncodeToString(buf)
 }
 
-// defaultProjectSignal 是固定默认项目信号, 与 opencode2api 的 default-project
-// 兜底语义一致: 无项目信号的请求共享同一稳定项目 ID。
-const defaultProjectSignal = "novaveil:default-project"
+// defaultProjectSignal 是固定默认项目信号, 与 opencode 官方客户端的 directory-based
+// project ID 语义对齐: 无项目信号的请求共享同一稳定项目 ID。
+const defaultProjectSignal = "directory:novaveil:default-project"
 
-// projectIDHash 预先计算固定默认项目信号的 SHA-256 前 12 字节, 避免每次请求重复哈希。
-var projectIDHash = sha256.Sum256([]byte("prj\x00" + defaultProjectSignal))
+// projectIDHash 预先计算固定默认项目信号的 SHA-1, 生成裸 40-hex 项目 ID。
+// opencode v2 官方客户端用 Hash.fast = SHA-1 生成项目 ID(packages/util/src/hash.ts),
+// 格式为裸 40-hex, 不带 prj_ 前缀(packages/schema/src/project-id.ts 无前缀)。
+var projectIDHash = sha1.Sum([]byte(defaultProjectSignal))
 
-// ProjectID 返回 opencode 关联项目 ID, 格式 prj_<24 hex>(SHA-256 前 12 字节),
-// 对所有请求稳定不变。同样不参与免费档判定, 仅为上游请求关联。
+// ProjectID 返回 opencode 关联项目 ID, 格式为裸 40-hex(SHA-1),
+// 对所有请求稳定不变。与 opencode v2 官方客户端的 directory-based project ID 格式一致。
 func ProjectID() string {
-	return "prj_" + hex.EncodeToString(projectIDHash[:12])
+	return hex.EncodeToString(projectIDHash[:])
 }
