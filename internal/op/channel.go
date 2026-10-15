@@ -774,6 +774,21 @@ func syncChannelModels(tx *gorm.DB, channelID int, requested []model.ChannelMode
 			if current.UpstreamProtocol != protocol {
 				updates["upstream_protocol"] = protocol
 			}
+			if current.ContextWindow != requestedModel.ContextWindow {
+				updates["context_window"] = requestedModel.ContextWindow
+			}
+			if current.MaxOutput != requestedModel.MaxOutput {
+				updates["max_output"] = requestedModel.MaxOutput
+			}
+			if current.Reasoning != requestedModel.Reasoning {
+				updates["reasoning"] = requestedModel.Reasoning
+			}
+			if current.ToolCall != requestedModel.ToolCall {
+				updates["tool_call"] = requestedModel.ToolCall
+			}
+			if current.InputModalities != requestedModel.InputModalities {
+				updates["input_modalities"] = requestedModel.InputModalities
+			}
 			if len(updates) > 0 {
 				if err := tx.Model(&model.ChannelModel{}).Where("id = ?", current.ID).Updates(updates).Error; err != nil {
 					return fmt.Errorf("更新渠道模型失败: %w", err)
@@ -782,7 +797,17 @@ func syncChannelModels(tx *gorm.DB, channelID int, requested []model.ChannelMode
 			delete(existingByName, name)
 			continue
 		}
-		if err := tx.Create(&model.ChannelModel{ChannelID: channelID, Name: name, Source: source, UpstreamProtocol: protocol}).Error; err != nil {
+		if err := tx.Create(&model.ChannelModel{
+			ChannelID:       channelID,
+			Name:            name,
+			Source:          source,
+			UpstreamProtocol: protocol,
+			ContextWindow:   requestedModel.ContextWindow,
+			MaxOutput:       requestedModel.MaxOutput,
+			Reasoning:       requestedModel.Reasoning,
+			ToolCall:        requestedModel.ToolCall,
+			InputModalities: requestedModel.InputModalities,
+		}).Error; err != nil {
 			return fmt.Errorf("创建渠道模型失败: %w", err)
 		}
 	}

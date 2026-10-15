@@ -12,7 +12,8 @@ NovaVeil 同步 OpenCode 渠道模型时已拉取 `models.opencode.ai/api.json` 
 
 - `ChannelModel` 结构新增五个字段：`ContextWindow`/`MaxOutput`(int, 0=未知)、`Reasoning`/`ToolCall`(bool)、`InputModalities`(逗号分隔 string)。GORM AutoMigrate 自动加列，默认值 0/false/空，存量行无破坏。
 - `opencode_catalog.go` 把 `FetchOpencodeProtocols`/`ParseOpencodeProtocolCatalog` 重命名为 `FetchOpencodeCatalog`/`ParseOpencodeCatalog`，返回 `map[string]OpencodeModelInfo`（协议 + 元数据）。`opencodeCatalogModel` 结构补 `Limit`/`Reasoning`/`ToolCall`/`Modalities` JSON 字段。
-- `sync.go` 在重建 auto 模型时从目录写入元数据；目录失败仍只跳过填充，不阻断同步。
+- `sync.go` 在重建 auto 模型时从目录写入元数据；目录失败仍只跳过填充，不阻断同步。跳过条件从「无增删且协议不变」扩展为「无增删且协议与元数据均不变」，确保首次同步和目录元数据变更都能触发写入。
+- `op/channel.go` 的 `syncChannelModels` 在更新已有模型和创建新模型时都写入元数据字段(原先只更新 `source`/`upstream_protocol`)。
 - 前端 `ChannelModel` 类型加对应可选字段；`channel-editor.tsx` 模型行在模型名后展示徽章：`{ctx}K ctx`、`{out}K out`、`reasoning`、`tools`、非 text 模态名(image/audio/video/pdf)。`formatTokens` 把 976000 格式化为 "976K"、1024000 为 "1M"。
 
 ## Alternatives considered

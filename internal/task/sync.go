@@ -101,7 +101,7 @@ func SyncModelsTask() error {
 
 		manualNames := make(map[string]struct{})
 		oldAutoNames := make(map[string]struct{})
-		oldAutoProtocols := make(map[string]string)
+		oldAutoModels := make(map[string]model.ChannelModel)
 		models := make([]model.ChannelModel, 0, len(channel.Models)+len(fetchModels))
 		for _, channelModel := range channel.Models {
 			switch channelModel.Source {
@@ -110,7 +110,7 @@ func SyncModelsTask() error {
 				models = append(models, channelModel)
 			case model.ChannelModelSourceAuto:
 				oldAutoNames[channelModel.Name] = struct{}{}
-				oldAutoProtocols[channelModel.Name] = channelModel.UpstreamProtocol
+				oldAutoModels[channelModel.Name] = channelModel
 			}
 		}
 		// 外部返回的模型名只在进入内部流程时清洗一次，并由手动模型优先占用重复名称。
@@ -131,7 +131,7 @@ func SyncModelsTask() error {
 				continue
 			}
 			seen[modelName] = struct{}{}
-			protocol := oldAutoProtocols[modelName]
+			protocol := oldAutoModels[modelName].UpstreamProtocol
 			cm := model.ChannelModel{
 				Name:             modelName,
 				Source:           model.ChannelModelSourceAuto,
@@ -166,13 +166,29 @@ func SyncModelsTask() error {
 			}
 		}
 		protocolDirty := false
+		metadataDirty := false
 		for _, channelModel := range autoModels {
-			if prev, existed := oldAutoProtocols[channelModel.Name]; existed && prev != channelModel.UpstreamProtocol {
+			prev, existed := oldAutoModels[channelModel.Name]
+			if existed && prev.UpstreamProtocol != channelModel.UpstreamProtocol {
 				protocolDirty = true
-				break
+			}
+			if existed {
+				if prev.ContextWindow != channelModel.ContextWindow ||
+					prev.MaxOutput != channelModel.MaxOutput ||
+					prev.Reasoning != channelModel.Reasoning ||
+					prev.ToolCall != channelModel.ToolCall ||
+					prev.InputModalities != channelModel.InputModalities {
+					metadataDirty = true
+				}
+			} else {
+				// 新增模型带元数据也算 dirty
+				if channelModel.ContextWindow != 0 || channelModel.MaxOutput != 0 ||
+					channelModel.Reasoning || channelModel.ToolCall || channelModel.InputModalities != "" {
+					metadataDirty = true
+				}
 			}
 		}
-		if len(deletedModels) == 0 && len(addedModels) == 0 && !protocolDirty {
+		if len(deletedModels) == 0 && len(addedModels) == 0 && !protocolDirty && !metadataDirty {
 			// 无增删的渠道同样要释放本轮 fetchCtx, 否则其定时器会挂到超时为止。
 			fetchCancel()
 			continue
