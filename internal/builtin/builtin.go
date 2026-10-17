@@ -153,6 +153,38 @@ var BuiltinFreeChannels = []model.Channel{
 		},
 	},
 	{
+		// OpenCode Free Old: legacy /zen/v1 通道(opencode2api 2026-10-16 双通道主通道)。
+		// BaseURL https://opencode.ai/zen → 转换器追加 /v1/chat/completions →
+		// https://opencode.ai/zen/v1/chat/completions, 即 legacy 免费档端点。
+		// 与 /inference 档的区别:
+		//   - User-Agent 用 v1.3.7 格式 opencode/1.18.31 (<os> <arch>; <runtime>);
+		//   - x-opencode-project 用 prj_<24hex> 格式(覆盖默认 40-hex);
+		//   - legacy 档只需单个 read 工具且不校验 schema, 比 /inference 的 5 工具
+		//     逐字节校验更鲁棒, 适合作为主通道; /inference 作为 fallback。
+		// OpenCodeTier 判定 https://opencode.ai/zen 为 "zen"(免费), isOpencodeFreeModel
+		// 命中后 shapeOpencodeFreeBody 仍会注入 5 工具, legacy 档不校验 schema 故可接受。
+		Name:           "OpenCode Free Old",
+		Type:           model.ChannelProviderOpenAI,
+		BaseURL:        "https://opencode.ai/zen",
+		Key:            "public",
+		OpencodeCompat: true,
+		CustomHeader: []model.CustomHeader{
+			{HeaderKey: "x-opencode-client", HeaderValue: "cli"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/1.18.31 (linux amd64; go1.26.0)"},
+			{HeaderKey: "x-opencode-project", HeaderValue: "prj_a1b2c3d4e5f6a1b2c3d4e5f6"},
+		},
+		Models: []model.ChannelModel{
+			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+		},
+	},
+	{
 		Name:    "UncloseAI Free",
 		Type:    model.ChannelProviderOpenAI,
 		BaseURL: "https://hermes.ai.unturf.com",
