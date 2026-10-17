@@ -67,6 +67,14 @@ func init() {
 //   - Airforce Free：免 key OpenAI Compatible 聚合端点，管理员可按需开启 AutoSync。
 //   - G4F Space NVIDIA Free：免 key OpenAI Compatible 的 NVIDIA 代理端点，
 //     管理员可按需开启 AutoSync 跟随 /v1/models。
+//   - Kilocode Free：Kilo OpenRouter 免费网关，固定匿名 key "anonymous" 即可
+//     免注册访问 GPT-5.6 / Claude Opus 5 / Gemini 3.1 Pro 等顶级模型；与 Kilo
+//     Gateway Free 同域但不同路径，需附带 X-KILOCODE-EDITORNAME 头。
+//   - Naga.ac Free：免 key OpenAI Compatible 聚合网关，280+ 模型动态发现，
+//     以 :free 结尾的模型免费；预置 5 个免费种子模型，管理员可按需开启 AutoSync。
+//   - G4F Space Gemini/Groq/Ollama/Pollinations Free：免 key OpenAI Compatible
+//     的 g4f.space 代理端点，分别代理 Gemini / Groq / Ollama / Pollinations，
+//     管理员可按需开启 AutoSync 跟随 /v1/models。
 //
 // 其他候选（DuckDuckGo/Cloudflare Playground 等）依赖浏览器/WebSocket/专用协议，
 // 或已停服（9router 的 MiMo Free），暂不纳入。
@@ -230,6 +238,87 @@ var BuiltinFreeChannels = []model.Channel{
 			{Name: "deepseek-ai/deepseek-r1"},
 			{Name: "qwen/qwen2.5-coder-32b-instruct"},
 			{Name: "microsoft/phi-4"},
+		},
+	},
+	{
+		// Kilocode (Kilo OpenRouter) 免费网关：固定匿名 key "anonymous" 即可
+		// 免注册访问 GPT-5.6 / Claude Opus 5 / Gemini 3.1 Pro 等顶级模型。
+		// 与 Kilo Gateway Free 同域 (api.kilo.ai) 但不同路径 (/api/openrouter
+		// vs /api/gateway)；openrouter 端点不带 /v1 前缀，故 BaseURL 以 # 结尾
+		// 跳过 NormalizeBaseURL 的版本拼接。需附带 X-KILOCODE-EDITORNAME 头。
+		Name:    "Kilocode Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://api.kilo.ai/api/openrouter#",
+		Key:     "anonymous",
+		CustomHeader: []model.CustomHeader{
+			{HeaderKey: "X-KILOCODE-EDITORNAME", HeaderValue: "NovaVeil"},
+		},
+		Models: []model.ChannelModel{
+			{Name: "openrouter/free"},
+			{Name: "openai/gpt-5.6-sol"},
+			{Name: "openai/gpt-5.6-terra"},
+			{Name: "openai/gpt-5.6-luna"},
+			{Name: "anthropic/claude-opus-5"},
+			{Name: "anthropic/claude-sonnet-5"},
+			{Name: "anthropic/claude-haiku-4.5"},
+			{Name: "google/gemini-3.1-pro-preview"},
+			{Name: "google/gemini-3.7-flash"},
+			{Name: "google/gemini-3.5-flash-lite"},
+			{Name: "qwen/qwen3.8-max"},
+			{Name: "qwen/qwen3.7-plus"},
+			{Name: "deepseek/deepseek-v4-pro-0813"},
+			{Name: "deepseek/deepseek-v4-flash-0731"},
+			{Name: "moonshotai/kimi-k3"},
+		},
+	},
+	{
+		// Naga.ac 免费聚合网关：免 key OpenAI 兼容端点，280+ 模型动态发现。
+		// 以 :free 结尾的模型免费；此处预置已确认的 5 个免费模型作为种子，
+		// 管理员可按需开启 AutoSync 跟随 /v1/models 发现更多。
+		Name:    "Naga.ac Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://api.naga.ac",
+		Models: []model.ChannelModel{
+			{Name: "apodex-1.1-mini:free"},
+			{Name: "dots-3-note-preview:free"},
+			{Name: "lfm-2.5-2.6b:free"},
+			{Name: "nemotron-3.5-lightning:free"},
+			{Name: "nemotron-3.5-super-vl:free"},
+		},
+	},
+	{
+		Name:    "G4F Space Gemini Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://g4f.space/api/gemini",
+		Models: []model.ChannelModel{
+			{Name: "models/gemini-2.5-flash"},
+			{Name: "models/gemini-2.5-pro"},
+		},
+	},
+	{
+		Name:    "G4F Space Groq Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://g4f.space/api/groq",
+		Models: []model.ChannelModel{
+			{Name: "llama-3.3-70b-versatile"},
+			{Name: "llama-3.1-8b-instant"},
+		},
+	},
+	{
+		Name:    "G4F Space Ollama Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://g4f.space/api/ollama",
+		Models: []model.ChannelModel{
+			{Name: "gemma3:4b"},
+		},
+	},
+	{
+		Name:    "G4F Space Pollinations Free",
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://g4f.space/api/pollinations",
+		Models: []model.ChannelModel{
+			{Name: "openai"},
+			{Name: "openai-fast"},
 		},
 	},
 }
