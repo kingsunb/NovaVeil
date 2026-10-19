@@ -14,7 +14,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.20.3
-	github.com/looplj/axonhub/llm v0.0.0-20261016035026-a946fca495c5
+	github.com/looplj/axonhub/llm v0.0.0-20261018172154-8d3c3865dc64
 	github.com/refraction-networking/utls v1.8.2
 	github.com/samber/lo v1.53.0
 	github.com/spf13/cobra v1.10.2
