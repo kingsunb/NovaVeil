@@ -1470,6 +1470,12 @@ function GroupEditor({
                 checked={!!relayConfig.mask_enabled}
                 onChange={(v) => updateRelay("mask_enabled", v)}
               />
+              <Toggle
+                label="回显请求模型名"
+                description="把响应里的模型名改写回客户端请求的分组名，避免聚合分组透传真实上游模型名"
+                checked={relayConfig.echo_response_model}
+                onChange={(v) => updateRelay("echo_response_model", v)}
+              />
             </div>
           </div>
         )}

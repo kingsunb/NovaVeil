@@ -250,6 +250,8 @@ export interface GroupRelayConfig {
   mask_enabled?: boolean;
   /** 是否启用自动匹配：以分组名称为关键词，自动将名称包含该关键词的渠道模型加入分组成员。 */
   auto_match_models: boolean;
+  /** 是否把响应里的模型名改写回客户端请求的分组名，避免聚合分组透传真实上游模型名，默认 false。 */
+  echo_response_model: boolean;
 }
 
 /**
@@ -279,6 +281,7 @@ export const DEFAULT_GROUP_RELAY_CONFIG: GroupRelayConfig = {
   emergency_item_id: 0,
   prefer_passthrough: false,
   auto_match_models: false,
+  echo_response_model: false,
 };
 
 export interface GroupItem {
