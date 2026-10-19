@@ -14,6 +14,13 @@ import (
 // 便于在日志中按渠道与别名追踪每个请求的出口。该函数挂在每请求热路径上,
 // 日志降为 Debug 级别, 避免 Info 级别下高频刷屏与 url.Parse 开销。
 func ChannelHttpClient(channel *model.Channel) (*http.Client, error) {
+	// OpenCode 免费档(/zen, /inference)走 Bun 伪装传输: TLS ClientHello 与 HTTP/1.1
+	// 头布局匹配 Bun 运行时(官方客户端运行环境), 规避上游按 JA3/JA4 指纹识别非官方客户端。
+	// 仅对 OpencodeCompat 且档位为 "zen" 的渠道生效; /zen/v1、/zen/go(go 档)及所有
+	// 非 OpenCode 渠道不受影响, 继续走常规客户端。
+	if channel.OpencodeCompat && model.OpenCodeTier(channel.BaseURL) == "zen" {
+		return client.GetOpencodeBunClient(channel)
+	}
 	if !channel.Proxy {
 		if log.GetLevel() <= log.DebugLevel {
 			log.Debugf("channel %d(%s) outbound direct: proxy disabled", channel.ID, channel.Name)

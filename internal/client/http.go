@@ -123,6 +123,37 @@ func GetHTTPClientCustomProxy(proxyURL string) (*http.Client, error) {
 	return actual.(*http.Client), nil
 }
 
+// GetOpencodeBunClient 为 OpenCode 免费档渠道(/zen, /inference)返回走 Bun 伪装传输的
+// HTTP 客户端。代理解析与常规渠道同口径: 渠道未开代理→直连; 渠道代理→渠道代理地址;
+// 否则→系统代理(setting proxy_url, 空则报错, 与 GetHTTPClientSystemProxy(true) 一致)。
+// 仅对 OpencodeCompat 且档位为 "zen" 的渠道调用, 其余渠道走常规客户端, 互不影响。
+func GetOpencodeBunClient(channel *model.Channel) (*http.Client, error) {
+	var proxyURL *url.URL
+	if !channel.Proxy {
+		// 直连, 无代理。
+	} else if channel.ChannelProxy != nil && strings.TrimSpace(*channel.ChannelProxy) != "" {
+		u, err := url.Parse(strings.TrimSpace(*channel.ChannelProxy))
+		if err != nil {
+			return nil, fmt.Errorf("parse channel proxy: %w", err)
+		}
+		proxyURL = u
+	} else {
+		addr, err := op.SettingGetString(model.SettingKeyProxyURL)
+		if err != nil {
+			return nil, err
+		}
+		if addr == "" {
+			return nil, fmt.Errorf("proxy url is empty")
+		}
+		u, err := url.Parse(addr)
+		if err != nil {
+			return nil, fmt.Errorf("parse system proxy: %w", err)
+		}
+		proxyURL = u
+	}
+	return GetBunClient(proxyURL)
+}
+
 // maxCustomProxyClients 自定义代理客户端缓存的软上限。
 const maxCustomProxyClients = 64
 

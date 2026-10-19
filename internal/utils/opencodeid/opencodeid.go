@@ -29,6 +29,21 @@ var opencodeIDTimestamp atomic.Int64
 //
 // 算法逆向自 opencode 二进制中的 tU(!0) 函数。
 func GenerateSessionID() string {
+	return generateOpencodePrefixedID("ses_")
+}
+
+// GenerateMessageID 生成 v1 档(/zen) x-opencode-request 头所需的递增消息 ID,
+// 格式 msg_ + 12 位十六进制 + 14 位字母数字, 与 opencode 1.x 客户端的消息 ID 同形。
+// opencode2api 在 v1 档每个模型请求上发送此头(递增 msg_ id); v2 档(/inference)不发
+// (v2 网关对 x-opencode-request 返回 403 FreeTierError)。
+func GenerateMessageID() string {
+	return generateOpencodePrefixedID("msg_")
+}
+
+// generateOpencodePrefixedID 生成 <prefix> + 12 位十六进制 + 14 位字母数字的 ID,
+// 复用 opencode 的毫秒计数器保证同毫秒内递增。会话 ID(ses_)与 v1 请求消息 ID(msg_)共用,
+// 保证两处注入值格式与递增性一致。算法逆向自 opencode 二进制中的 tU(!0) 函数。
+func generateOpencodePrefixedID(prefix string) string {
 	now := time.Now().UnixMilli()
 
 	// 计数器管理: 时间戳变更时重置, 每次调用递增。与 opencode 的 tU() 行为一致。
@@ -43,7 +58,7 @@ func GenerateSessionID() string {
 	// val = timestamp_ms * 4096 + counter, 与 opencode 的 BigInt(Y)*0x1000n+BigInt(cU) 一致。
 	val := now*0x1000 + counter
 
-	// 会话 ID 使用按位取反(^), 与 opencode 的 tU(true) → ~$ 一致。
+	// ID 使用按位取反(^), 与 opencode 的 tU(true) → ~$ 一致。
 	// Go 的 int64 对负数的 >> 做算术右移(符号扩展), 与 JS BigInt 行为一致。
 	inverted := ^val
 
@@ -68,7 +83,7 @@ func GenerateSessionID() string {
 		randPart[i] = opencodeIDCharset[b%62]
 	}
 
-	return "ses_" + hexPart + string(randPart)
+	return prefix + hexPart + string(randPart)
 }
 
 // GenerateRequestID 生成每请求唯一的 opencode 关联请求 ID, 格式 req_<32 hex>。

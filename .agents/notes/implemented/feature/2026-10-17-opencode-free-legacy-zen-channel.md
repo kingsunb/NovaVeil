@@ -17,10 +17,7 @@ opencode2api 在 2026-10-16（commit `076451f` + `a9470df`）将 legacy `/zen/v1
 
 - **BaseURL** `https://opencode.ai/zen`：axonhub 转换器 `NormalizeBaseURL(baseURL, "v1")` 追加 `/v1`，最终请求落点 `https://opencode.ai/zen/v1/chat/completions`，即 legacy 免费档端点。
 - **Key** `public`，**OpencodeCompat** `true`：与现有 OpenCode Free 渠道一致，触发 opencode 会话头注入和免费档请求改写。
-- **CustomHeader** 与 `/inference` 渠道有三处差异：
-  - `User-Agent: opencode/1.18.31 (linux amd64; go1.26.0)` — legacy v1.3.7 格式，非 v2 的 `opencode/latest/2.0.29/cli`。
-  - `x-opencode-project: prj_a1b2c3d4e5f6a1b2c3d4e5f6` — legacy `prj_<24hex>` 格式。`injectOpencodeCorrelationHeaders`（`internal/relay/random_headers.go`）仅在头为空时写入默认 40-hex 值，CustomHeader 先于该函数应用，故 `prj_` 值不被覆盖。
-  - `x-opencode-client: cli` — 与 `/inference` 渠道一致。
+- **CustomHeader** 仅 `x-opencode-client: cli`（与 `/inference` 渠道一致）。User-Agent 与 x-opencode-project 不再静态设置，改由 `applyOpencodeFreeLaneHeaders`（`internal/relay/opencode_free.go`）在转发时按 v1 档动态注入：User-Agent 为协议相关的 `opencode/1.19.3 ai-sdk/provider-utils/<ver> runtime/bun/1.3.14`，x-opencode-project 为裸 40-hex（由 `injectOpencodeCorrelationHeaders` 注入）。详见 [opencode2api 兼容跟进](../architecture/2026-10-19-opencode2api-compat-followup.md)。
 - **Models** 与现有 OpenCode Free 渠道完全一致（8 个 free 模型，含 2 个 Responses 协议）。
 
 `OpenCodeTier("https://opencode.ai/zen")` 返回 `"zen"`（含 `/zen` 但不含 `/zen/go` 或 `/zen/v1`），`isOpencodeFreeModel` 命中 `IsFree = true`，`shapeOpencodeFreeBody` 照常注入 5 工具。legacy 档不校验 schema，5 工具的超集注入可接受——无需为 legacy 渠道单独实现精简改写路径。
@@ -50,7 +47,7 @@ opencode2api 在 2026-10-16（commit `076451f` + `a9470df`）将 legacy `/zen/v1
 ## 后果
 
 - **收益**：管理员可将 legacy `/zen/v1` 设为 OpenCode 免费档主通道，利用其宽松校验提高成功率；`/inference` 渠道作为 fallback 兜底。升级后 `EnsureBuiltinChannels` 按 Name 自动补建，无需手动操作。
-- **代价与已知上限**：`"OpenCode Free Old"` 的 User-Agent 和 `x-opencode-project` 是静态值（`opencode/1.18.31 (linux amd64; go1.26.0)` 和固定 `prj_` 值），不随运行时 OS/Go 版本动态生成——非 linux/amd64 部署需管理员在 UI 手动改 User-Agent。`x-opencode-project` 用固定值而非每请求随机，与 opencode2api 的 `legacyProjectID()` 行为略有差异，但 legacy 档不校验项目 ID 唯一性，固定值可接受。重访信号：legacy `/zen/v1` 端点开始校验 User-Agent 或项目 ID 格式，或需要动态生成这些头时，考虑在 `injectOpencodeCorrelationHeaders` 中按 `isLegacyZenUpstream` 分支注入。
+- **代价与已知上限**：v1 档的 User-Agent 与 x-opencode-project 现由 `applyOpencodeFreeLaneHeaders` 动态注入（见 [opencode2api 兼容跟进](../architecture/2026-10-19-opencode2api-compat-followup.md)），不再依赖静态 CustomHeader，故无 OS/Go 版本硬编码问题。重访信号：legacy `/zen/v1` 端点校验规则再次变更时，同步更新该动态注入逻辑。
 
 ## 验证
 

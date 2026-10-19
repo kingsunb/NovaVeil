@@ -91,10 +91,14 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	// 之后, 保证 model 名已写入正文且渠道参数/请求头已应用; 折叠仅在客户端非流式且改写
 	// 把 stream 置真时触发(此时上游返回 SSE, 需聚合回 JSON)。
 	collapsed := false
-	if isChatFormat(format) && isOpencodeFreeModel(channel, bodyModelName(request.Body)) {
-		var shaped bool
-		request.Body, shaped = shapeOpencodeFreeBody(request.Body)
-		collapsed = shaped && !streaming
+	if isOpencodeFreeModel(channel, bodyModelName(request.Body)) {
+		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)不动。
+		applyOpencodeFreeLaneHeaders(channel, request, bodyModelName(request.Body))
+		if isChatFormat(format) {
+			var shaped bool
+			request.Body, shaped = shapeOpencodeFreeBody(request.Body)
+			collapsed = shaped && !streaming
+		}
 	}
 	if streaming {
 		resp, streamErr := sendPassthroughStream(ctx, format, request, client)
@@ -274,8 +278,12 @@ func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *
 	// OpenCode Zen 免费档改写: 转换路径与透传路径须同形, 否则免费档以 403 FreeTierError
 	// 拒绝。Chat 归一与渠道参数已应用、model 名已最终化, 此时把出站 Chat 正文规范成
 	// Agent 形态(stream + 核心工具)。客户端非流式的折叠由 sendConverted 依据 !streaming 判定。
-	if m.format == llm.APIFormatOpenAIChatCompletion && isOpencodeFreeModel(m.channel, bodyModelName(request.Body)) {
-		request.Body, _ = shapeOpencodeFreeBody(request.Body)
+	if isOpencodeFreeModel(m.channel, bodyModelName(request.Body)) {
+		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)不动。
+		applyOpencodeFreeLaneHeaders(m.channel, request, bodyModelName(request.Body))
+		if m.format == llm.APIFormatOpenAIChatCompletion {
+			request.Body, _ = shapeOpencodeFreeBody(request.Body)
+		}
 	}
 	// 角色归一与渠道参数覆盖之后再回写。Chat 归一会剥掉白名单外的顶层字段,
 	// 必须在那之后补回, 且只补出站 JSON 里还没有的字段。不回写 JSONBody, 避免该值进日志副本。

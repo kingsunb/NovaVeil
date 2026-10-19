@@ -5,10 +5,12 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 
 	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/utils/opencodeid"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/tidwall/gjson"
@@ -75,6 +77,67 @@ func isOpencodeFreeModel(channel model.Channel, modelName string) bool {
 		return true
 	}
 	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "free")
+}
+
+// opencodeV1ClientVersion / opencodeV1BunVersion 是 v1 档(/zen)声称的 OpenCode 1.x
+// 客户端版本与 Bun 运行时版本, 取自同一发行版抓包, 与 opencode2api 的 httpx 对齐。
+const (
+	opencodeV1ClientVersion = "1.19.3"
+	opencodeV1BunVersion    = "1.3.14"
+)
+
+// opencodeV1ProviderUtils 按出站协议返回 v1 模型请求 User-Agent 中的 provider-utils 版本。
+// 各 @ai-sdk 提供方包自带 provider-utils, 版本随协议不同; 空协议默认 chat。
+var opencodeV1ProviderUtils = map[string]string{
+	model.UpstreamProtocolChat:      "4.0.23",
+	model.UpstreamProtocolResponses: "4.0.40",
+	model.UpstreamProtocolAnthropic: "4.0.46",
+}
+
+// isOpencodeV1Lane 判定渠道是否为 OpenCode v1 免费档(/zen)。OpenCodeTier 对 /zen 与
+// /inference 均返回 "zen", 这里用 BaseURL 含 "/zen" 区分 v1(/zen) 与 v2(/inference)。
+// /zen/go 与 /zen/v1 是 "go" 档(付费), 已被 OpenCodeTier 排除。
+func isOpencodeV1Lane(channel model.Channel) bool {
+	return model.OpenCodeTier(channel.BaseURL) == "zen" &&
+		strings.Contains(strings.ToLower(channel.BaseURL), "/zen")
+}
+
+// opencodeModelProtocol 在渠道模型表中按名查 UpstreamProtocol; 未找到或为空返回 chat(默认)。
+// 与 opencode2api 的 v1ProviderUtils 默认分支一致: SystemOne 等无 v1 对应的协议也报 chat 包。
+func opencodeModelProtocol(channel model.Channel, modelName string) string {
+	for i := range channel.Models {
+		if channel.Models[i].Name == modelName {
+			if p := channel.Models[i].UpstreamProtocol; p != "" {
+				return p
+			}
+			break
+		}
+	}
+	return model.UpstreamProtocolChat
+}
+
+// applyOpencodeFreeLaneHeaders 在连线上游前按档位设置 OpenCode 免费档的请求头:
+//   - v1 档(/zen): User-Agent 用协议相关的 opencode/1.19.3 ai-sdk/provider-utils/<ver>
+//     runtime/bun/1.3.14(<ver> 按出站协议), 并发送 x-opencode-request(msg_ 递增 id);
+//   - v2 档(/inference): User-Agent 由渠道 CustomHeader 静态设置(opencode/latest/2.0.32/cli),
+//     且不发送 x-opencode-request(v2 网关对此头 403), 本函数对 v2 不改写任何头。
+//
+// 仅对 v1 档改写头, 改写发生在 applyChannelConfig 之后, 覆盖渠道静态 User-Agent(若有)。
+// x-opencode-project 的裸 40-hex 由 injectOpencodeCorrelationHeaders 注入, 此处不重复。
+func applyOpencodeFreeLaneHeaders(channel model.Channel, request *httpclient.Request, modelName string) {
+	if !isOpencodeV1Lane(channel) || request == nil {
+		return
+	}
+	if request.Headers == nil {
+		request.Headers = make(http.Header)
+	}
+	ver := opencodeV1ProviderUtils[opencodeModelProtocol(channel, modelName)]
+	if ver == "" {
+		ver = opencodeV1ProviderUtils[model.UpstreamProtocolChat]
+	}
+	request.Headers.Set("User-Agent", "opencode/"+opencodeV1ClientVersion+
+		" ai-sdk/provider-utils/"+ver+" runtime/bun/"+opencodeV1BunVersion)
+	request.Headers.Set("x-opencode-request", opencodeid.GenerateMessageID())
 }
 
 // bodyModelName 从请求体提取 model 字段; 空串表示无法识别(不改写)。
