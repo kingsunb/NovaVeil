@@ -68,6 +68,7 @@ export const sampleGroup: Group = {
     emergency_item_id: 0,
     prefer_passthrough: false,
     auto_match_models: false,
+    echo_response_model: false,
   },
   items: [
     { id: 1, group_id: 10, channel_model_id: 100, ref_group_name: "", priority: 1 },

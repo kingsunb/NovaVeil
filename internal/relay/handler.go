@@ -670,6 +670,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				request.markCommitted()
 				// 脱敏还原: 非流式响应占位符→原文(文档 01 §3.1)。
 				result.body = restoreNonStream(result.body, maskMapping)
+				// 响应模型回显: 把真实上游模型名改写回客户端请求的分组名, 避免聚合分组泄露上游模型。
+				if relayConfig.EchoResponseModel {
+					result.body = echoNonStreamResponseModel(result.body, format, request.Model)
+				}
 				// 还原会改变字节长度。上游带来的 Content-Length 若原样留下,
 				// net/http 会按声明长度截断或报 ErrContentLength。
 				if got := c.Writer.Header().Get("Content-Length"); got != "" && got != strconv.Itoa(len(result.body)) {
@@ -826,6 +830,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 脱敏还原: SSE 事件增量文本占位符→原文, StreamRestorer 跨 chunk 缓冲拼接(文档 01 §3.2、03)。
 				if streamRestorer != nil {
 					event.Data = restoreStreamEvent(event.Data, format, streamRestorer)
+				}
+				// 响应模型回显: 流式事件里的真实上游模型名改写回客户端请求的分组名。
+				if relayConfig.EchoResponseModel {
+					event.Data = echoStreamResponseModel(event.Data, format, request.Model)
 				}
 				chunks = append(chunks, event)
 				encoded.Reset()
