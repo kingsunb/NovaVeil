@@ -247,6 +247,11 @@ func newHTTPClientNoProxy() (*http.Client, error) {
 // MaskProxySecret 返回用于日志展示的代理地址: 保留协议、主机、端口与用户名(含 {account}
 // 解析出的别名), 密码段以 **** 打码, 避免 userinfo 凭据进入日志。
 // 地址无法解析时返回固定占位符, 不回显原文(原文可能含密码)。
+//
+// 密码掩码不经 net/url 的 userinfo 序列化: 它会把 '*' 转义成 %2A, 日志里显示为
+// 形如 socks5h://temp:%2A%2A%2A%2A@resin:2260 的串, 既不直观, 也不便把日志里的出口
+// 与实际配置逐字比对。故只让 net/url 序列化用户名(别名可能含 @ : / 等需转义的字符),
+// 掩码以字面量拼回。
 func MaskProxySecret(proxyURL string) string {
 	parsed, err := url.Parse(strings.TrimSpace(proxyURL))
 	if err != nil {
@@ -255,10 +260,20 @@ func MaskProxySecret(proxyURL string) string {
 	if parsed.User == nil {
 		return parsed.String()
 	}
+	userinfo := url.User(parsed.User.Username()).String()
 	if _, hasPassword := parsed.User.Password(); hasPassword {
-		parsed.User = url.UserPassword(parsed.User.Username(), "****")
+		userinfo += ":****"
 	}
-	return parsed.String()
+	// 清空 User 后 String() 只剩 scheme://host..., 把 userinfo 插回原有位置,
+	// 以免重建 URL 时给不带路径的地址补上尾斜杠等与原配置不一致的形态。
+	parsed.User = nil
+	rest := parsed.String()
+	prefix := parsed.Scheme + "://"
+	if !strings.HasPrefix(rest, prefix) {
+		// 不透明(无 authority)的 URL 没有 userinfo 位置可插回: 宁可整体隐去也不回显密码。
+		return "(opaque proxy url)"
+	}
+	return prefix + userinfo + "@" + strings.TrimPrefix(rest, prefix)
 }
 
 func newHTTPClientCustomProxy(proxyURLStr string) (*http.Client, error) {

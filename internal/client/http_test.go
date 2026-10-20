@@ -293,3 +293,37 @@ func TestUpstreamCheckRedirect_PassthroughStyleNoLeak(t *testing.T) {
 		t.Fatalf("B must not receive the passthrough request body/auth; got %d", b.count())
 	}
 }
+
+// TestMaskProxySecret 覆盖日志展示用的代理打码: 密码段必须隐去, 且掩码本身不得被
+// net/url 转义成 %2A(否则日志里读不出"这是打码"反而像一段乱码); 用户名(含 {account}
+// 解析出的别名)与协议/主机/端口须原样保留, 便于按出口与实际配置逐字比对。
+func TestMaskProxySecret(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+		leak string // 输出中不得出现的原始凭据子串
+	}{
+		{"socks5h 带密码", "socks5h://temp:1@resin:2260", "socks5h://temp:****@resin:2260", ":1@"},
+		{"http 带密码", "http://user:secret@10.0.0.8:8080", "http://user:****@10.0.0.8:8080", "secret"},
+		{"无 userinfo 原样", "socks5h://resin:2260", "socks5h://resin:2260", ""},
+		{"有用户名无密码", "socks5h://u.alias@host:1080", "socks5h://u.alias@host:1080", ""},
+		{"用户名含需转义字符", "socks5h://a%40b:pw@host:2260", "socks5h://a%40b:****@host:2260", ":pw@"},
+		{"首尾空白", "  socks5://u:p@host  ", "socks5://u:****@host", ":p@"},
+		{"非法地址不回显原文", "socks5h://%zz@host:2260", "(invalid proxy url)", "%zz"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MaskProxySecret(tt.in)
+			if got != tt.want {
+				t.Fatalf("MaskProxySecret(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+			if strings.Contains(got, "%2A") {
+				t.Fatalf("掩码被转义成 %%2A, 日志无法直读: %q", got)
+			}
+			if tt.leak != "" && strings.Contains(got, tt.leak) {
+				t.Fatalf("输出泄漏原始凭据 %q: %q", tt.leak, got)
+			}
+		})
+	}
+}
