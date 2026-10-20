@@ -63,5 +63,5 @@ Status: implemented
 
 - `grep -n "contextFitsWindow\|estimateRequestTokens" internal/relay/` 只应有定义与 handler 的一处调用。
 - `ContextWindow` 为 0 的成员在开关开启时仍被选中（放行分支）。
-- 全部成员窗口都不足时，客户端收到「没有候选模型的上下文窗口能容纳当前请求」，而非「暂无可用渠道」。
+- 全部成员窗口都不足时，客户端收到「没有候选模型的上下文窗口能容纳当前请求（请求约 X token，候选集最大窗口 Y token）」，带量化提示方便调用方主动截断；而非「暂无可用渠道」。
 - 分组配置 JSON 里 `context_fit_enabled` 缺省为 false，旧分组行为不变。

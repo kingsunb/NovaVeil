@@ -179,6 +179,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		refSkips := 0                                  // 本请求内结构性跳过的引用计数, 超过成员总数说明全部引用均不可用。
 		nonRetryable := make(map[int]bool)             // 出现过确定性 4xx(400/404/422)的成员集合, 全部成员都出现时终止请求。
 		contextSkipped := make(map[int]bool)           // 上下文窗口装不下本请求而跳过的成员集合。
+		maxCandidateWindow := 0                        // 被跳过成员中最大的窗口值, 供拒绝消息给出量化提示。
 		busyRejected := make(map[int]bool)             // 并发槽位满被本地准入拒绝的成员集合: 每成员满载一次即换下一优先级, 全部满载时终止请求。
 		rounds := 0                                    // 本请求已消耗的尝试轮次, 含引用链结构性跳过等一切循环路径。
 		startedAt := time.Now()                        // 请求进入转发循环的时刻, 用于整体安全截止时间判定。
@@ -444,12 +445,22 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			contextWindow := effectiveContextWindow(channel.ModelLimits, channelModel.Name, channelModel.ContextWindow)
 			if relayConfig.ContextFitEnabled && !contextFitsWindow(raw.Body, contextWindow) {
 				contextSkipped[item.ID] = true
+				if contextWindow > maxCandidateWindow {
+					maxCandidateWindow = contextWindow
+				}
 				// 与失败分支同口径归还引用链探测占用: 跳过不是失败, 但占用不还会让整组钉死。
 				releaseRefChainHops(hops[:len(hops)-1])
 				if len(contextSkipped) >= routableLeafCount(hops[0].group) {
-					request.markFailed(errContextWindowTooSmall, "", nil)
+					// 报出请求规模与候选集最大窗口, 调用方可据此截断请求或换模型。
+					detail := fmt.Errorf(
+						"%s（请求约 %d token，候选集最大窗口 %d token）",
+						errContextWindowTooSmall.Error(),
+						estimateRequestTokens(raw.Body),
+						maxCandidateWindow,
+					)
+					request.markFailed(detail, "", nil)
 					recordErrorLog(request)
-					rejectRequest(c, inbound, errContextWindowTooSmall)
+					rejectRequest(c, inbound, detail)
 					return
 				}
 				exclude = item.ID
