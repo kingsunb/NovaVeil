@@ -70,11 +70,16 @@ func TestSanitizeUsageRules(t *testing.T) {
 			if got.PromptTokens != tc.wantEstimate {
 				t.Fatalf("输入 token 应估算为 %d, 实际 %d", tc.wantEstimate, got.PromptTokens)
 			}
-			if want := tc.wantEstimate + tc.usage.CompletionTokens; got.TotalTokens != want {
+			// nil 用量用例没有原 CompletionTokens 可保留, 期望值为 0。
+			wantCompletion := int64(0)
+			if tc.usage != nil {
+				wantCompletion = tc.usage.CompletionTokens
+			}
+			if want := tc.wantEstimate + wantCompletion; got.TotalTokens != want {
 				t.Fatalf("总 token 应重算为 %d, 实际 %d", want, got.TotalTokens)
 			}
-			if got.CompletionTokens != tc.usage.CompletionTokens {
-				t.Fatalf("输出 token 应保留 %d, 实际 %d", tc.usage.CompletionTokens, got.CompletionTokens)
+			if got.CompletionTokens != wantCompletion {
+				t.Fatalf("输出 token 应保留 %d, 实际 %d", wantCompletion, got.CompletionTokens)
 			}
 			if tc.wantDetail != nil && got.PromptTokensDetails == nil || tc.wantDetail != nil && *got.PromptTokensDetails != *tc.wantDetail {
 				t.Fatalf("输入明细应保留 %+v, 实际 %+v", tc.wantDetail, got.PromptTokensDetails)
