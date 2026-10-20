@@ -18,13 +18,17 @@ import { Pill } from "@/components/ui/pill";
 /** 单次探测允许的最大规模，与后端 contextProbeMaxTokens 一致。 */
 const MAX_PROBE_TOKENS = 1_048_576;
 
-/** 固定档位，上限与后端一致。 */
+/**
+ * 固定档位的目标值内建冗余: 贴着上限探测容易因 chat 模板开销或上游计数差异踩线。
+ * 各档在标称值基础上少 1K; 1M 按 2% 冗余取 980,000——不少上游(如 minimax)的
+ * 「1M context」是十进制 1,000,000, 二进制 1,048,576 必然超限, 0.2% 冗余不够。
+ */
 const PROBE_SIZES = [
-  { label: "64K", value: 65_536 },
-  { label: "128K", value: 131_072 },
-  { label: "256K", value: 262_144 },
-  { label: "500K", value: 512_000 },
-  { label: "1M", value: MAX_PROBE_TOKENS },
+  { label: "64K", value: 64_512 },
+  { label: "128K", value: 130_048 },
+  { label: "256K", value: 261_120 },
+  { label: "500K", value: 510_976 },
+  { label: "1M", value: 980_000 },
 ] as const;
 
 interface ProbeTarget {
