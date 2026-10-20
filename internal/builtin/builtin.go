@@ -41,9 +41,10 @@ func init() {
 //   - IsFree 与 Builtin 由 freeChannelFromDefinition 强制写入 true，
 //     不需要在条目里重复设置；
 //   - Enabled 默认 true；
-//   - AutoSync 默认 false：内置免费渠道出厂不自动同步模型列表，避免每次启动
-//     自动向第三方域名发 outbound 请求暴露服务器 IP。管理员按需在渠道编辑器
-//     手动开启 AutoSync 后，同步任务才会对该渠道拉取 /v1/models；
+//   - AutoSync 默认 true：内置免费渠道跟随上游模型列表，服务启动后会触发一次同步
+//     任务（仅对开启 AutoSync 的渠道拉取 /v1/models 与目录）。预置的种子模型标记为
+//     auto，同步成功即被上游真实列表替换，失败时仍可兜底。代价是每次启动都会向
+//     第三方域名发起 outbound 请求，介意时可在渠道编辑器手动关闭 AutoSync；
 //   - Proxy 默认 false：内置免费渠道出厂不走代理（直连）。如需通过代理同步模型
 //     或转发请求，管理员需在渠道编辑器手动开启代理开关（系统代理或渠道专属代理）；
 //   - 自定义请求头/OpencodeCompat 等按渠道需要填写。
@@ -629,6 +630,8 @@ func freeChannelFromDefinition(def model.Channel) model.Channel {
 	channel.Enabled = true
 	channel.IsFree = true
 	channel.Builtin = true
+	// 内置免费渠道跟随上游模型列表: 出厂开启自动同步, 种子模型标 auto 由同步替换。
+	channel.AutoSync = true
 
 	channel.Keys = append([]model.ChannelKey(nil), channel.Keys...)
 	channel.Models = append([]model.ChannelModel(nil), channel.Models...)
@@ -636,7 +639,7 @@ func freeChannelFromDefinition(def model.Channel) model.Channel {
 		channel.Models[i].ID = 0
 		channel.Models[i].ChannelID = 0
 		if channel.Models[i].Source == "" {
-			channel.Models[i].Source = model.ChannelModelSourceManual
+			channel.Models[i].Source = model.ChannelModelSourceAuto
 		}
 	}
 	channel.CustomHeader = append([]model.CustomHeader(nil), channel.CustomHeader...)

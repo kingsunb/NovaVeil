@@ -464,7 +464,7 @@ func TestFreeChannelFromDefinitionKeepsUpstreamProtocol(t *testing.T) {
 	if got.Models[0].UpstreamProtocol != model.UpstreamProtocolChat {
 		t.Fatalf("protocol = %q", got.Models[0].UpstreamProtocol)
 	}
-	if got.Models[0].Source != model.ChannelModelSourceManual {
+	if got.Models[0].Source != model.ChannelModelSourceAuto {
 		t.Fatalf("source = %q", got.Models[0].Source)
 	}
 }

@@ -91,6 +91,13 @@ var startCmd = &cobra.Command{
 			return fmt.Errorf("评估调度器启动失败: %w", err)
 		}
 
+		// 内置免费渠道出厂开启 AutoSync: 启动后异步同步一次, 让模型跟随上游而非内定列表。
+		go func() {
+			if syncErr := task.SyncModelsTask(); syncErr != nil {
+				log.Warnf("builtin channel model sync skipped: %v", syncErr)
+			}
+		}()
+
 		if err := server.Start(); err != nil {
 			log.Errorf("server start error: %v", err)
 			return fmt.Errorf("服务启动失败: %w", err)
