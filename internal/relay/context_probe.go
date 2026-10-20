@@ -239,17 +239,17 @@ func usageFromPayload(payload []byte) (*llm.Usage, bool) {
 		return nil, false
 	}
 	if usage.PromptTokens == 0 {
-		usage.PromptTokens = raw.Get("input_tokens").Int64()
+		usage.PromptTokens = raw.Get("input_tokens").Int()
 	}
 	if usage.CompletionTokens == 0 {
-		usage.CompletionTokens = raw.Get("output_tokens").Int64()
+		usage.CompletionTokens = raw.Get("output_tokens").Int()
 	}
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
 	// Anthropic 的缓存读量不在 prompt_tokens_details 里, 单独映射。
 	if usage.PromptTokensDetails == nil {
-		if cached := raw.Get("cache_read_input_tokens").Int64(); cached > 0 {
+		if cached := raw.Get("cache_read_input_tokens").Int(); cached > 0 {
 			usage.PromptTokensDetails = &llm.PromptTokensDetails{CachedTokens: cached}
 		}
 	}
