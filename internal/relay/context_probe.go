@@ -52,6 +52,16 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 	if err != nil {
 		return nil, err
 	}
+	// 免费档按出口 IP 轮换: 探测必须用池内账号, 否则永远撞同一个被标记的 IP。
+	proxyAccount := ""
+	if proxyNeedsOpencodeAccount(channel) {
+		candidate := pickOpencodeProxyAccount(ctx, channel.ID)
+		if resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate); resolveErr == nil {
+			addr := resolved.String()
+			effective.ChannelProxy = &addr
+			proxyAccount = candidate
+		}
+	}
 	format, _, target := testRequestTarget(effective, modelName, "")
 	raw, err := newTestRequest(format, modelName, buildContextProbeText(tokens), 1)
 	if err != nil {
@@ -97,27 +107,59 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 	case response.StatusCode == http.StatusBadRequest ||
 		response.StatusCode == http.StatusRequestEntityTooLarge ||
 		response.StatusCode == http.StatusUnprocessableEntity:
-		result.Accepted = false
+		// 只有响应体指向上下文超限才是容量结论; 其余 4xx 多为模型或参数问题。
+		if looksLikeContextOverflow(result.Detail) {
+			result.Accepted = false
+		} else {
+			probeErr = fmt.Errorf("请求被拒绝但不像是上下文超限: %s %s", response.Status, result.Detail)
+		}
 	case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden ||
 		response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500:
 		probeErr = fmt.Errorf("探测被认证、限流或上游故障拒绝: %s %s", response.Status, result.Detail)
 	default:
-		result.Accepted = false
+		probeErr = fmt.Errorf("上游返回异常状态: %s %s", response.Status, result.Detail)
 	}
 	finishTestRequest(logRequest, result.Detail, nil, probeErr)
+	// 探测结果回填账号池: 成功记成功, 403 按 IP 被标记冷却, 下次自动换号。
+	if proxyAccount != "" {
+		switch {
+		case result.Accepted:
+			markOpencodeProxySuccess(channel.ID, proxyAccount)
+		case response.StatusCode == http.StatusForbidden:
+			markOpencodeProxyForbidden(channel.ID, proxyAccount)
+		}
+	}
 	if probeErr != nil {
 		return nil, probeErr
 	}
 	return result, nil
 }
 
+// contextOverflowHints 是上游报上下文超限时的常见措辞, 用于把容量结论与参数错误分开。
+var contextOverflowHints = []string{
+	"context_length", "context length", "context window", "maximum context",
+	"too many tokens", "too long", "exceed", "max_tokens", "token limit",
+	"上下文", "超出", "过长", "太长",
+}
+
+// looksLikeContextOverflow 判断拒绝原因是否指向上下文容量。
+func looksLikeContextOverflow(detail string) bool {
+	lowered := strings.ToLower(detail)
+	for _, hint := range contextOverflowHints {
+		if strings.Contains(lowered, hint) {
+			return true
+		}
+	}
+	return false
+}
+
 // truncateSnippet 截断响应片段, 按 UTF-8 边界裁剪避免出现半个汉字。
 func truncateSnippet(value string) string {
 	value = strings.TrimSpace(value)
-	if len(value) <= 200 {
+	if len(value) <= 500 {
 		return value
 	}
-	cut := 200
+	cut := 500
 	for cut > 0 && (value[cut]&0xC0) == 0x80 {
 		cut--
 	}
