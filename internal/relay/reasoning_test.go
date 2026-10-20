@@ -207,7 +207,7 @@ func TestInjectMissingReasoningsMissNoPlaceholder(t *testing.T) {
 	body := []byte(`{"model":"g","messages":[
 		{"role":"assistant","tool_calls":[{"id":"call_unknown"},{"id":"call_second"}]}
 	]}`)
-	got := injectMissingReasonings(body, llm.APIFormatOpenAIChatCompletion, model.ChannelProviderVolcengine)
+	got := injectMissingReasonings(body, llm.APIFormatOpenAIChatCompletion, model.ChannelProviderOpenAI)
 	if bytes.Contains(got, []byte("reasoning_content")) {
 		t.Fatalf("未命中首个 tool_call.id 时不得注入或造占位符, 实际: %s", got)
 	}
@@ -229,7 +229,7 @@ func TestInjectMissingReasoningsIdempotent(t *testing.T) {
 }
 
 // TestInjectMissingReasoningsChannelMatrix 验证注入条件的渠道类型矩阵:
-// 仅 OpenAI 与 Volcengine 注入, 其余渠道原样返回。
+// 仅 OpenAI 注入, 其余渠道原样返回。
 func TestInjectMissingReasoningsChannelMatrix(t *testing.T) {
 	isolateReasoningCache(t)
 	setReasonings(map[string]string{"call_matrix": "matrix-think"})
@@ -241,9 +241,7 @@ func TestInjectMissingReasoningsChannelMatrix(t *testing.T) {
 		inject   bool
 	}{
 		{model.ChannelProviderOpenAI, true},
-		{model.ChannelProviderVolcengine, true},
 		{model.ChannelProviderAnthropic, false},
-		{model.ChannelProviderGemini, false},
 		{model.ChannelProviderOpenAIResponses, false},
 	}
 	for _, testCase := range cases {
@@ -263,7 +261,7 @@ func TestInjectMissingReasoningsChannelMatrix(t *testing.T) {
 	if !bytes.Equal(body, got) {
 		t.Fatal("anthropic 客户端协议不应改动请求体")
 	}
-	got = injectMissingReasonings(body, llm.APIFormatOpenAIResponse, model.ChannelProviderVolcengine)
+	got = injectMissingReasonings(body, llm.APIFormatOpenAIResponse, model.ChannelProviderOpenAI)
 	if !bytes.Equal(body, got) {
 		t.Fatal("responses 客户端协议不应改动请求体")
 	}

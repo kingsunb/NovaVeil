@@ -200,8 +200,6 @@ func TestBuiltinFreeChannelsDefinitions(t *testing.T) {
 		case model.ChannelProviderOpenAI,
 			model.ChannelProviderOpenAIResponses,
 			model.ChannelProviderAnthropic,
-			model.ChannelProviderGemini,
-			model.ChannelProviderVolcengine,
 			model.ChannelProviderCustom:
 		default:
 			t.Fatalf("builtin free channel %q uses unsupported Type %q", def.Name, def.Type)

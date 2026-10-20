@@ -23,7 +23,6 @@
 | `claude_handler.go` (Anthropic) | ✅ | Claude Messages |
 | `image_handler.go` (图片) | ✅ | 图片生成/编辑 |
 | `responses_handler.go` (Responses) | ✅ | OpenAI Responses |
-| `gemini_handler.go` (Gemini) | ✅ | Gemini |
 | `rerank_handler.go` (Rerank) | ✅ | 重排序 |
 | `audio_handler.go` (语音) | ❌ | 无透传，始终经 adaptor |
 | `embedding_handler.go` (嵌入) | ❌ | 无透传，始终经 adaptor |
@@ -82,7 +81,6 @@
 5. **多 Key 轮询不受影响**：Key 选择和轮询在 `sendPassthrough` 之前完成。
 6. **`##` 模式**：BaseURL 以 `##` 结尾时 URL 已完整不追加路径，`PassThroughBodyEnabled` 对 URL 无影响，但仍影响响应处理（跳过 TransformResponse）。
 7. **custom 渠道**：`PassThroughBodyEnabled` 对 custom（固定回复）渠道无效。
-8. **Gemini / Volcengine 渠道**：`buildOutbound` 对这两种渠道硬编码 `return outbound, false, err`。改为 `return outbound, passthrough, err` 不会出错（透传下不用于 TransformResponse），但 Gemini 上游通常不支持 OpenAI/Anthropic 协议，开了也没意义。
 
 ## 前端
 

@@ -15,8 +15,6 @@ import (
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/looplj/axonhub/llm/transformer"
 	"github.com/looplj/axonhub/llm/transformer/anthropic"
-	"github.com/looplj/axonhub/llm/transformer/doubao"
-	"github.com/looplj/axonhub/llm/transformer/gemini"
 	"github.com/looplj/axonhub/llm/transformer/openai"
 	"github.com/looplj/axonhub/llm/transformer/openai/responses"
 	"github.com/tidwall/gjson"
@@ -173,12 +171,6 @@ func buildOutbound(channel model.Channel, channelModel *model.ChannelModel, form
 	case model.ChannelProviderAnthropic:
 		outbound, err := anthropic.NewOutboundTransformerWithConfig(&anthropic.Config{Type: anthropic.PlatformDirect, BaseURL: channel.BaseURL, APIKeyProvider: staticKey})
 		return outbound, passthrough, err
-	case model.ChannelProviderGemini:
-		outbound, err := gemini.NewOutboundTransformerWithConfig(gemini.Config{BaseURL: channel.BaseURL, APIKeyProvider: staticKey})
-		return outbound, false, err
-	case model.ChannelProviderVolcengine:
-		outbound, err := doubao.NewOutboundTransformerWithConfig(&doubao.Config{BaseURL: channel.BaseURL, APIKeyProvider: staticKey})
-		return outbound, false, err
 	case model.ChannelProviderCustom:
 		// 固定回复渠道按 OpenAI Chat 出站构造: 真实传输被 cannedTransport 顶替,
 		// BaseURL 仅为占位, 永远不会被拨号; 永不透传, 一律经管线转换到客户端协议。
@@ -189,24 +181,23 @@ func buildOutbound(channel model.Channel, channelModel *model.ChannelModel, form
 	}
 }
 
-// thinkingBudgets 返回思考等级在各协议下对应的 token 预算, Anthropic 与 Gemini 使用。
-// max 档在 Gemini 上使用 -1 表示交由模型动态决定最大思考预算。
-func thinkingBudgets(level string) (anthropicBudget int, geminiBudget int, ok bool) {
+// thinkingBudgets 返回思考等级对应的 Anthropic thinking 预算。
+func thinkingBudgets(level string) (budget int, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "minimal":
-		return 1024, 512, true
+		return 1024, true
 	case "low":
-		return 2048, 1024, true
+		return 2048, true
 	case "medium":
-		return 8192, 8192, true
+		return 8192, true
 	case "high":
-		return 16384, 24576, true
+		return 16384, true
 	case "xhigh":
-		return 32768, 32768, true
+		return 32768, true
 	case "max":
-		return 64000, -1, true
+		return 64000, true
 	default:
-		return 0, 0, false
+		return 0, false
 	}
 }
 
@@ -320,7 +311,7 @@ func applyChannelModelLimits(channel model.Channel, request *httpclient.Request)
 			}
 		}
 	case model.ChannelProviderAnthropic:
-		budget, _, hasBudget := thinkingBudgets(level)
+		budget, hasBudget := thinkingBudgets(level)
 		maxTokens := 0
 		if maxOutput != nil {
 			maxTokens = *maxOutput
@@ -339,39 +330,6 @@ func applyChannelModelLimits(channel model.Channel, request *httpclient.Request)
 				return err
 			}
 			if err := set("thinking.budget_tokens", budget); err != nil {
-				return err
-			}
-		}
-	case model.ChannelProviderGemini:
-		if maxOutput != nil && *maxOutput > 0 {
-			if err := set("generationConfig.maxOutputTokens", *maxOutput); err != nil {
-				return err
-			}
-		}
-		// Gemini 用 0 表示关闭思考, 其余等级映射为具体预算。
-		_, geminiBudget, hasBudget := thinkingBudgets(level)
-		if level == "off" || hasBudget {
-			budget := 0
-			if hasBudget {
-				budget = geminiBudget
-			}
-			if err := set("generationConfig.thinkingConfig.thinkingBudget", budget); err != nil {
-				return err
-			}
-		}
-	case model.ChannelProviderVolcengine:
-		if maxOutput != nil && *maxOutput > 0 {
-			if err := set("max_tokens", *maxOutput); err != nil {
-				return err
-			}
-		}
-		// 豆包思考模型仅区分开与关。
-		if level == "off" {
-			if err := set("thinking.type", "disabled"); err != nil {
-				return err
-			}
-		} else if level != "" {
-			if err := set("thinking.type", "enabled"); err != nil {
 				return err
 			}
 		}

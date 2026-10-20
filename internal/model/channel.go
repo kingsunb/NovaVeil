@@ -7,8 +7,6 @@ const (
 	ChannelProviderOpenAI          ChannelProvider = "openai"
 	ChannelProviderOpenAIResponses ChannelProvider = "openai_responses"
 	ChannelProviderAnthropic       ChannelProvider = "anthropic"
-	ChannelProviderGemini          ChannelProvider = "gemini"
-	ChannelProviderVolcengine      ChannelProvider = "volcengine"
 	// ChannelProviderCustom 自定义固定回复渠道: 不对接任何上游, 命中即以渠道上
 	// 配置的 FixedReply 文案合成响应; 经固定回复通道的转换管线天然支持全部客户端协议。
 	ChannelProviderCustom ChannelProvider = "custom"

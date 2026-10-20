@@ -37,8 +37,6 @@ func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 	switch request.Type {
 	case model.ChannelProviderAnthropic:
 		fetchModel, err = fetchAnthropicModels(client, ctx, request)
-	case model.ChannelProviderGemini:
-		fetchModel, err = fetchGeminiModels(client, ctx, request)
 	default:
 		fetchModel, err = fetchOpenAIModels(client, ctx, request)
 	}
@@ -90,9 +88,6 @@ func FetchModels(ctx context.Context, request model.Channel) ([]string, error) {
 // refer: https://platform.openai.com/docs/api-reference/models/list
 func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
 	baseURL := transformer.NormalizeBaseURL(request.BaseURL, "v1")
-	if request.Type == model.ChannelProviderVolcengine {
-		baseURL = transformer.NormalizeBaseURL(request.BaseURL, "v3")
-	}
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
@@ -129,69 +124,6 @@ func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.C
 		models = append(models, m.ID)
 	}
 	return models, nil
-}
-
-// refer: https://ai.google.dev/api/models
-func fetchGeminiModels(client *http.Client, ctx context.Context, request model.Channel) ([]string, error) {
-	var allModels []string
-	pageToken := ""
-	baseURL := transformer.NormalizeBaseURL(request.BaseURL, "v1beta")
-	// Gemini transformer 会保留用户显式填写的 /v1；这里同样处理，避免把 /v1 拼成 /v1/v1beta。
-	if strings.HasSuffix(strings.TrimRight(request.BaseURL, "/"), "/v1") {
-		baseURL = transformer.NormalizeBaseURL(request.BaseURL, "")
-	}
-
-	for page := 0; page < maxModelListPages; page++ {
-		req, err := http.NewRequestWithContext(
-			ctx,
-			http.MethodGet,
-			baseURL+"/models",
-			nil,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("build gemini models request: %w", err)
-		}
-		req.Header.Set("X-Goog-Api-Key", request.Key)
-		applyCustomHeaders(req, request)
-		if pageToken != "" {
-			q := req.URL.Query()
-			q.Add("pageToken", pageToken)
-			req.URL.RawQuery = q.Encode()
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		// 每页都校验状态码: 分页循环中任一页返回 401/403/429 都须中止, 不能把错误体当成
-		// 空页继续累加(H-01)。错误体读一段用于上下文, 显式关闭后提前返回。
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			err := fmt.Errorf("upstream returned HTTP %d: %s", resp.StatusCode, readUpstreamErrorSnippet(resp.Body))
-			resp.Body.Close()
-			return nil, err
-		}
-		var result model.GeminiModelList
-		decodeErr := decodeModelList(resp.Body, &result)
-		// 逐页显式关闭: 循环内 defer 会累积到函数返回, 多页渠道会同时持有 N 个响应体。
-		resp.Body.Close()
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-
-		for _, m := range result.Models {
-			name := strings.TrimPrefix(m.Name, "models/")
-			allModels = append(allModels, name)
-		}
-
-		if result.NextPageToken == "" {
-			break
-		}
-		pageToken = result.NextPageToken
-	}
-	if len(allModels) == 0 {
-		return fetchOpenAIModels(client, ctx, request)
-	}
-	return allModels, nil
 }
 
 // refer: https://platform.claude.com/docs

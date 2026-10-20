@@ -25,9 +25,6 @@ const testPathAnthropicResponse = `{"id":"msg_path","type":"message","role":"ass
 // openai_responses 渠道的假上游返回。
 const testPathOpenAIResponsesResponse = `{"id":"resp_path","object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`
 
-// testPathGeminiResponse 是一条完整的 Gemini 非流式响应, 供 gemini 渠道的假上游返回。
-const testPathGeminiResponse = `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1}}`
-
 // cleanupProbeRequests 删除 id > beforeID 的所有探针请求, 供测试清理日志流条目,
 // 避免探针写入的 RequestState 污染其余测试。
 func cleanupProbeRequests(beforeID uint64) {
@@ -63,8 +60,6 @@ func newTestPathUpstream(t *testing.T, capturedPath *string, responseBody string
 //   - openai 渠道透传 /v1/chat/completions
 //   - anthropic 渠道透传 /v1/messages
 //   - openai_responses 渠道透传 /v1/responses
-//   - gemini 渠道经转换走 generateContent 路径
-//   - volcengine 渠道经转换走 chat/completions 路径
 func TestSendChannelTestRequestPathConsistency(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -90,18 +85,6 @@ func TestSendChannelTestRequestPathConsistency(t *testing.T) {
 			channelType:  model.ChannelProviderOpenAIResponses,
 			wantPath:     "/v1/responses",
 			responseBody: testPathOpenAIResponsesResponse,
-		},
-		{
-			name:         "gemini 渠道转换路径包含 generateContent",
-			channelType:  model.ChannelProviderGemini,
-			pathContains: "generateContent",
-			responseBody: testPathGeminiResponse,
-		},
-		{
-			name:         "volcengine 渠道转换路径包含 chat/completions",
-			channelType:  model.ChannelProviderVolcengine,
-			pathContains: "chat/completions",
-			responseBody: testPathOpenAIChatResponse,
 		},
 	}
 	for _, tt := range tests {
@@ -154,8 +137,6 @@ func TestBuildOutboundPassthroughConsistency(t *testing.T) {
 		{"openai 渠道透传", model.ChannelProviderOpenAI, true},
 		{"anthropic 渠道透传", model.ChannelProviderAnthropic, true},
 		{"openai_responses 渠道透传", model.ChannelProviderOpenAIResponses, true},
-		{"gemini 渠道转换", model.ChannelProviderGemini, false},
-		{"volcengine 渠道转换", model.ChannelProviderVolcengine, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

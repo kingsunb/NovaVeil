@@ -1022,9 +1022,9 @@ function CredTab({
             disabled={builtin}
             onChange={(e) => update("type", e.target.value as Draft["type"])}
           >
-            {Object.entries(PROVIDER_LABELS).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v}
+            {Object.entries(PROVIDER_LABELS).map(([key, label]) => (
+              <option key={key} value={key}>
+                {label}
               </option>
             ))}
           </Select>

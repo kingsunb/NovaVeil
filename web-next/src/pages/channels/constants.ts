@@ -6,6 +6,4 @@ export const PROVIDER_LABELS: Record<string, string> = {
   openai: "OpenAI Chat",
   openai_responses: "OpenAI Response",
   anthropic: "Anthropic",
-  gemini: "Gemini",
-  volcengine: "火山引擎",
 };

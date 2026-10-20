@@ -161,8 +161,8 @@ func collectReasonings(responseBody []byte) {
 }
 
 // injectMissingReasonings 在每轮发送前按缓存补齐客户端剥离的历史 reasoning_content。
-// 仅对 OpenAI Chat 客户端协议且渠道类型为 OpenAI 系(ChannelProviderOpenAI 或
-// ChannelProviderVolcengine)生效。遍历 role=="assistant" 且含 tool_calls 的消息:
+// 仅对 OpenAI Chat 客户端协议且渠道类型为 ChannelProviderOpenAI 生效。遍历
+// role=="assistant" 且含 tool_calls 的消息:
 // 首个 tool_call.id 命中缓存且消息尚无 reasoning_content 字段时注入; 已有值(哪怕空串)
 // 一律不覆盖, 未命中不注入也不造占位符。同一 body 重复调用幂等, 不产生重复字段。
 func injectMissingReasonings(body []byte, format llm.APIFormat, channelType model.ChannelProvider) []byte {
@@ -170,7 +170,7 @@ func injectMissingReasonings(body []byte, format llm.APIFormat, channelType mode
 		return body
 	}
 	switch channelType {
-	case model.ChannelProviderOpenAI, model.ChannelProviderVolcengine:
+	case model.ChannelProviderOpenAI:
 	default:
 		return body
 	}

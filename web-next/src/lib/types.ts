@@ -28,8 +28,6 @@ export type ChannelProvider =
   | "openai"
   | "openai_responses"
   | "anthropic"
-  | "gemini"
-  | "volcengine"
   /** 自定义固定回复：命中即以 fixed_reply 文案合成响应，不对接上游 */
   | "custom";
 

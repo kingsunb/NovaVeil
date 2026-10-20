@@ -574,8 +574,8 @@ func sendTestRequest(ctx context.Context, channel model.Channel, clientModel, mo
 	}, nil
 }
 
-// channelNativeFormat 返回网关支持的对应入站格式。Gemini/Volcengine/Custom
-// 无独立原生入站, 使用 OpenAI Chat 并交给现有转换器适配上游。
+// channelNativeFormat 返回网关支持的对应入站格式。Custom 无独立原生入站,
+// 使用 OpenAI Chat 并交给现有转换器适配上游。
 func channelNativeFormat(channelType model.ChannelProvider) llm.APIFormat {
 	switch channelType {
 	case model.ChannelProviderOpenAI:
