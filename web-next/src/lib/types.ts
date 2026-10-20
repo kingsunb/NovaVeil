@@ -90,6 +90,21 @@ export interface ContextProbeResult {
   accepted: boolean;
   status: number;
   detail: string;
+  latency_ms: number;
+}
+
+/** 探测历史记录。 */
+export interface ContextProbeRecord {
+  id: number;
+  channel_id: number;
+  channel_name: string;
+  model_name: string;
+  tokens: number;
+  accepted: boolean;
+  status: number;
+  detail: string;
+  latency_ms: number;
+  created_at: string;
 }
 
 export interface CustomHeader {

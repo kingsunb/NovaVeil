@@ -27,6 +27,7 @@ func init() {
 		AddRoute(router.NewRoute("/stats", http.MethodGet).Handle(listModelEvalStats)).
 		AddRoute(router.NewRoute("/history/clear-failures", http.MethodPost).Handle(clearModelEvalFailures)).
 		AddRoute(router.NewRoute("/probe-context", http.MethodPost).Handle(probeModelContext)).
+		AddRoute(router.NewRoute("/probe-history", http.MethodGet).Handle(listContextProbeRecords)).
 		AddRoute(router.NewRoute("/apply-context", http.MethodPost).Handle(applyModelContext)).
 		AddRoute(router.NewRoute("/:id", http.MethodGet).Handle(getModelEval))
 }
@@ -45,12 +46,40 @@ func probeModelContext(c *gin.Context) {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
 	}
+	record := &model.ContextProbeRecord{
+		ChannelID: request.ChannelID,
+		ModelName: request.Model,
+		Tokens:    request.Tokens,
+		CreatedAt: time.Now(),
+	}
+	if channel, err := op.ChannelGet(request.ChannelID); err == nil {
+		record.ChannelName = channel.Name
+	}
 	result, err := relay.ProbeContextWindow(c.Request.Context(), request.ChannelID, request.Model, request.Tokens)
 	if err != nil {
+		record.Detail = err.Error()
+		_ = op.SaveContextProbeRecord(record)
 		resp.ErrorExposed(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	record.Accepted = result.Accepted
+	record.Status = result.Status
+	record.Detail = result.Detail
+	record.LatencyMS = result.LatencyMS
+	_ = op.SaveContextProbeRecord(record)
 	resp.Success(c, result)
+}
+
+// listContextProbeRecords 返回探测历史, 供页面回看历次结果。
+func listContextProbeRecords(c *gin.Context) {
+	channelID, _ := strconv.Atoi(c.Query("channel_id"))
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	rows, err := op.ListContextProbeRecords(channelID, limit)
+	if err != nil {
+		resp.ErrorExposed(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp.Success(c, rows)
 }
 
 // contextApplyRequest 把探测结果写回按模型限制。

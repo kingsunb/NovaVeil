@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/kingsunb/NovaVeil/internal/helper"
@@ -22,10 +23,11 @@ const contextProbeAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 
 // ContextProbeResult 是一次上下文探测的结论。
 type ContextProbeResult struct {
-	Tokens   int    `json:"tokens"`
-	Accepted bool   `json:"accepted"`
-	Status   int    `json:"status"`
-	Detail   string `json:"detail"`
+	Tokens    int    `json:"tokens"`
+	Accepted  bool   `json:"accepted"`
+	Status    int    `json:"status"`
+	Detail    string `json:"detail"`
+	LatencyMS int64  `json:"latency_ms"`
 }
 
 // ProbeContextWindow 用指定 token 规模的请求探测渠道模型能否接受。
@@ -50,13 +52,17 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 	if err != nil {
 		return nil, err
 	}
-	format, _, _ := testRequestTarget(effective, modelName, "")
+	format, _, target := testRequestTarget(effective, modelName, "")
 	raw, err := newTestRequest(format, modelName, buildContextProbeText(tokens), 1)
 	if err != nil {
 		return nil, fmt.Errorf("构造探测请求失败: %w", err)
 	}
+	// 探测也进请求日志面板, 便于与真实请求对照排查。
+	logRequest := startTestRequest(modelName, raw.Body, target, nil)
+	started := time.Now()
 	built, err := buildPassthroughRequest(format, raw, effective, uuid.NewString(), generateOpencodeSessionID())
 	if err != nil {
+		finishTestRequest(logRequest, "", nil, err)
 		return nil, fmt.Errorf("构造出站请求失败: %w", err)
 	}
 	if isOpencodeFreeModel(effective, modelName) {
@@ -67,19 +73,24 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 	}
 	client, err := helper.ChannelHttpClient(&effective)
 	if err != nil {
+		finishTestRequest(logRequest, "", nil, err)
 		return nil, fmt.Errorf("构造渠道客户端失败: %w", err)
 	}
-	request, err := httpclient.BuildHttpRequest(ctx, built)
+	httpReq, err := httpclient.BuildHttpRequest(ctx, built)
 	if err != nil {
+		finishTestRequest(logRequest, "", nil, err)
 		return nil, fmt.Errorf("构造请求失败: %w", err)
 	}
-	response, err := client.Do(request)
+	response, err := client.Do(httpReq)
 	if err != nil {
+		finishTestRequest(logRequest, "", nil, err)
 		return nil, fmt.Errorf("探测请求失败: %w", err)
 	}
 	defer response.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-	result := &ContextProbeResult{Tokens: tokens, Status: response.StatusCode, Detail: truncateSnippet(string(body))}
+	latency := time.Since(started).Milliseconds()
+	result := &ContextProbeResult{Tokens: tokens, Status: response.StatusCode, Detail: truncateSnippet(string(body)), LatencyMS: latency}
+	var probeErr error
 	switch {
 	case response.StatusCode >= 200 && response.StatusCode < 300:
 		result.Accepted = true
@@ -89,9 +100,13 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 		result.Accepted = false
 	case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden ||
 		response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500:
-		return nil, fmt.Errorf("探测被认证、限流或上游故障拒绝: %s %s", response.Status, result.Detail)
+		probeErr = fmt.Errorf("探测被认证、限流或上游故障拒绝: %s %s", response.Status, result.Detail)
 	default:
 		result.Accepted = false
+	}
+	finishTestRequest(logRequest, result.Detail, nil, probeErr)
+	if probeErr != nil {
+		return nil, probeErr
 	}
 	return result, nil
 }

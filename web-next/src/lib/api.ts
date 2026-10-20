@@ -9,6 +9,7 @@ import type {
   ChannelUpdateRequest,
   ChannelImportResult,
   ClientStats,
+  ContextProbeRecord,
   ContextProbeResult,
   DBDump,
   BuildInfo,
@@ -1026,6 +1027,12 @@ export const api = {
       method: "POST",
       body: { channel_id: channelId, model, context_window: contextWindow },
     }),
+  /** 读取探测历史。 */
+  listContextProbeRecords: (channelId?: number, signal?: AbortSignal) => {
+    const query = new URLSearchParams();
+    if (channelId) query.set("channel_id", String(channelId));
+    return http<ContextProbeRecord[]>(`/model-eval/probe-history?${query}`, { signal });
+  },
   getEvalRankContent: (id: number, signal?: AbortSignal) =>
     http<EvalRankContent>(`/model-eval/rank/content/${id}`, { signal }),
   moveEvalRank: (id: number, direction: -1 | 1) =>
