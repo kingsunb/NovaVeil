@@ -36,7 +36,7 @@ export default function ContextProbePage() {
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<Record<string, ContextProbeResult>>({});
 
-  const channels = channelsQuery.data ?? [];
+  const channels = useMemo(() => channelsQuery.data ?? [], [channelsQuery.data]);
   const currentChannel = useMemo(
     () => channels.find((c) => c.id === channelId),
     [channels, channelId],
