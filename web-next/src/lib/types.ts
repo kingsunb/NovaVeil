@@ -89,6 +89,8 @@ export interface ContextProbeResult {
   status: number;
   detail: string;
   latency_ms: number;
+  /** 上游 usage 报告的真实输入 token 数，0 表示未取到（如强制流式）。 */
+  actual_tokens: number;
 }
 
 /** 探测历史记录。 */
@@ -102,6 +104,7 @@ export interface ContextProbeRecord {
   status: number;
   detail: string;
   latency_ms: number;
+  actual_tokens: number;
   created_at: string;
 }
 

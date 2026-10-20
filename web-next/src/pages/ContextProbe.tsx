@@ -191,6 +191,7 @@ export default function ContextProbePage() {
                       status: 0,
                       detail: message,
                       latency_ms: 0,
+                      actual_tokens: 0,
                     },
                   }
                 : item,
@@ -223,7 +224,8 @@ export default function ContextProbePage() {
         <CardHeader>
           <CardTitle>上下文探测</CardTitle>
           <CardDescription>
-            勾选任意渠道下的模型与目标规模，按队列逐个探测。探测消耗上游额度，付费渠道按输入 token 计费。
+            勾选任意渠道下的模型与目标规模，按队列逐个探测。规模按 4 字符约 1 token
+            估算，接受的行会回显上游 usage 报告的真实 token 数。探测消耗上游额度，付费渠道按输入 token 计费。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -377,7 +379,14 @@ export default function ContextProbePage() {
                     <tr key={task.key} className="border-t border-border">
                       <td className="max-w-[10rem] truncate py-2">{task.channelName}</td>
                       <td className="mono max-w-[14rem] truncate py-2">{task.model}</td>
-                      <td className="py-2">{formatTokens(task.tokens)}</td>
+                      <td className="py-2">
+                        {formatTokens(task.tokens)}
+                        {result?.actual_tokens ? (
+                          <span className="ml-1 text-xs text-ink-muted">
+                            实 {formatTokens(result.actual_tokens)}
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="py-2">
                         {task.state === "pending" ? (
                           <Pill tone="neutral">排队中</Pill>
@@ -453,7 +462,14 @@ export default function ContextProbePage() {
                     </td>
                     <td className="max-w-[10rem] truncate py-2">{row.channel_name}</td>
                     <td className="mono max-w-[14rem] truncate py-2">{row.model_name}</td>
-                    <td className="py-2">{formatTokens(row.tokens)}</td>
+                    <td className="py-2">
+                      {formatTokens(row.tokens)}
+                      {row.actual_tokens ? (
+                        <span className="ml-1 text-xs text-ink-muted">
+                          实 {formatTokens(row.actual_tokens)}
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="py-2">
                       {row.status === 0 ? (
                         <Pill tone="neutral">失败</Pill>

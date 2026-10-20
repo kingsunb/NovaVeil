@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
@@ -12,14 +13,27 @@ import (
 	"github.com/google/uuid"
 	"github.com/kingsunb/NovaVeil/internal/helper"
 	"github.com/kingsunb/NovaVeil/internal/op"
+	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
+	"github.com/tidwall/gjson"
 )
 
 // contextProbeMaxTokens 是单次探测允许的最大规模。
 const contextProbeMaxTokens = 1 << 20
 
-// contextProbeAlphabet 用于生成不可压缩的填充文本。
-const contextProbeAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+// contextProbeWords 是填充文本的词汇表。
+// 用随机常见英文单词而非随机字母数字串: 后者的 BPE 密度约 2.5-3 字符/token,
+// 按 4 字符/token 生成会让实际 token 数比目标大 40% 左右; 英文单词序列的密度
+// 接近自然文本, 与「4 字符约 1 token」的口径一致。
+var contextProbeWords = []string{
+	"signal", "process", "network", "quality", "context", "buffer", "verify",
+	"token", "channel", "request", "response", "upstream", "gateway", "latency",
+	"budget", "stream", "retry", "cache", "probe", "limit", "scale", "record",
+	"history", "invoice", "balance", "mountain", "river", "garden", "morning",
+	"evening", "student", "teacher", "library", "machine", "engine", "picture",
+	"weather", "travel", "holiday", "kitchen", "chapter", "opinion", "measure",
+	"collect", "compare", "explain", "imagine", "deliver", "prepare", "consider",
+}
 
 // ContextProbeResult 是一次上下文探测的结论。
 type ContextProbeResult struct {
@@ -28,6 +42,9 @@ type ContextProbeResult struct {
 	Status    int    `json:"status"`
 	Detail    string `json:"detail"`
 	LatencyMS int64  `json:"latency_ms"`
+	// ActualTokens 是上游 usage 报告的输入 token 数; 0 表示上游未返回
+	// (免费档被强制流式时, 前若干字节里拿不到末尾的 usage 事件)。
+	ActualTokens int64 `json:"actual_tokens"`
 }
 
 // ProbeContextWindow 用指定 token 规模的请求探测渠道模型能否接受。
@@ -97,9 +114,18 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 		return nil, fmt.Errorf("探测请求失败: %w", err)
 	}
 	defer response.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 256*1024))
 	latency := time.Since(started).Milliseconds()
-	result := &ContextProbeResult{Tokens: tokens, Status: response.StatusCode, Detail: truncateSnippet(string(body)), LatencyMS: latency}
+	usage, actual := parseProbeUsage(body, raw.Body)
+	result := &ContextProbeResult{
+		Tokens:    tokens,
+		Status:    response.StatusCode,
+		Detail:    truncateSnippet(string(body)),
+		LatencyMS: latency,
+	}
+	if actual {
+		result.ActualTokens = usage.PromptTokens
+	}
 	var probeErr error
 	switch {
 	case response.StatusCode >= 200 && response.StatusCode < 300:
@@ -119,7 +145,7 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 	default:
 		probeErr = fmt.Errorf("上游返回异常状态: %s %s", response.Status, result.Detail)
 	}
-	finishTestRequest(logRequest, result.Detail, nil, probeErr)
+	finishTestRequest(logRequest, result.Detail, usage, probeErr)
 	// 探测结果回填账号池: 成功记成功, 403 按 IP 被标记冷却, 下次自动换号。
 	if proxyAccount != "" {
 		switch {
@@ -166,17 +192,69 @@ func truncateSnippet(value string) string {
 	return value[:cut]
 }
 
-// buildContextProbeText 按 4 字符约 1 token 的口径生成不可压缩填充文本。
+// buildContextProbeText 按 4 字符约 1 token 的口径生成填充文本。
 func buildContextProbeText(tokens int) string {
 	target := tokens * 4
 	var builder strings.Builder
 	builder.Grow(target + 16)
 	for builder.Len() < target {
-		length := 6 + rand.Intn(4)
-		for i := 0; i < length; i++ {
-			builder.WriteByte(contextProbeAlphabet[rand.Intn(len(contextProbeAlphabet))])
-		}
+		builder.WriteString(contextProbeWords[rand.Intn(len(contextProbeWords))])
 		builder.WriteByte(' ')
 	}
 	return builder.String()
+}
+
+// parseProbeUsage 从响应体里取上游统计的用量: 先按非流式 JSON 取, 再扫 SSE 的
+// data 行取最后一个带 usage 的事件。都取不到时按请求体估算, 与转发路径同口径,
+// 避免日志里显示 0/0。第二个返回值为 true 表示这是上游上报的真实值。
+func parseProbeUsage(body []byte, requestBody []byte) (*llm.Usage, bool) {
+	if usage, ok := usageFromPayload(body); ok {
+		return usage, true
+	}
+	var found *llm.Usage
+	for _, line := range strings.Split(string(body), "\n") {
+		payload := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		if usage, ok := usageFromPayload([]byte(payload)); ok {
+			found = usage
+		}
+	}
+	if found != nil {
+		return found, true
+	}
+	estimated, _ := sanitizeUsage(&llm.Usage{}, string(requestBody))
+	return estimated, false
+}
+
+// usageFromPayload 解析单个 JSON 载荷里的 usage 字段, 兼容 OpenAI 与 Anthropic 口径。
+func usageFromPayload(payload []byte) (*llm.Usage, bool) {
+	raw := gjson.GetBytes(payload, "usage")
+	if !raw.Exists() || !raw.IsObject() {
+		return nil, false
+	}
+	var usage llm.Usage
+	if err := json.Unmarshal([]byte(raw.Raw), &usage); err != nil {
+		return nil, false
+	}
+	if usage.PromptTokens == 0 {
+		usage.PromptTokens = raw.Get("input_tokens").Int64()
+	}
+	if usage.CompletionTokens == 0 {
+		usage.CompletionTokens = raw.Get("output_tokens").Int64()
+	}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	// Anthropic 的缓存读量不在 prompt_tokens_details 里, 单独映射。
+	if usage.PromptTokensDetails == nil {
+		if cached := raw.Get("cache_read_input_tokens").Int64(); cached > 0 {
+			usage.PromptTokensDetails = &llm.PromptTokensDetails{CachedTokens: cached}
+		}
+	}
+	if usage.PromptTokens == 0 && usage.CompletionTokens == 0 {
+		return nil, false
+	}
+	return &usage, true
 }

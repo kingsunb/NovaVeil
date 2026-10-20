@@ -14,7 +14,8 @@ Status: implemented
 
 `ProbeContextWindow(ctx, channelID, model, tokens)` 按指定规模构造一条请求并发出去，只回答「接受还是拒绝」：
 
-- 填充文本用随机字母数字词（6~10 字符），按「4 字符约 1 token」生成，刻意避开重复单字符——BPE 会把长串重复字符压缩成一个 token，那样发出去的规模远小于声称值。
+- 填充文本用随机常见英文单词（非随机字母数字串），按「4 字符约 1 token」生成。随机字母数字的 BPE 密度约 2.5-3 字符/token，用它生成会让实际 token 数比目标大 40% 左右，判定偏保守；英文单词序列的密度接近自然文本，与口径一致。
+- **估算不等于精确**：各家 tokenizer 密度不同，本地只能给近似值。请求被接受时解析响应 `usage.prompt_tokens`（Anthropic 为 `usage.input_tokens`）拿到真实 token 数，随结果返回 `actual_tokens`，界面显示「实 26.8万」。免费档被强制流式时前若干字节里没有末尾的 usage 事件，该值为 0。
 - 出站构造复用 `newTestRequest` + `testRequestTarget`，并在命中 OpenCode 免费档时套用 `applyOpencodeFreeLaneHeaders` 与 `shapeOpencodeFreeBody`，与真实转发同形。不套这层的话免费档会被指纹校验 403，探测会把 403 误读成「容量不足」，二分直接判死。
 - 判定以状态码为骨架，但不只看状态码：2xx 接受；400 / 413 / 422 还要看响应体是否指向上下文超限（`contextOverflowHints` 关键词匹配，含中英文措辞），指向才判「拒绝」，否则按「失败」带原因返回——参数错误、模型不认 `max_tokens` 之类的问题不能被误当成容量上限；401 / 403 / 429 / 5xx 与其余 4xx 一律按失败返回并附状态与响应片段。
 
@@ -44,6 +45,7 @@ Status: implemented
 
 - 每次探测（含失败）写一条 `context_probe_records`，字段是渠道名与模型名的快照，渠道删除后历史仍可读。
 - 探测走 `startTestRequest` / `finishTestRequest` 记账，因此也会出现在请求日志面板，可与真实请求对照排查；客户端 IP 用 `testProbeClientIP` 标识。
+- 记账会带上 usage，日志里不会出现 0/0：先取非流式响应的顶层 `usage`，再扫 SSE 的 `data:` 事件取最后一个带 usage 的（免费档被强制流式时走这条），两者都拿不到时用 `sanitizeUsage` 按请求体长度估算，与转发路径同口径。缓存字段按 OpenAI 的 `cached_tokens` 自动带出，Anthropic 的 `cache_read_input_tokens` 单独映射。
 - 页面按渠道过滤历史（`GET /model-eval/probe-history?channel_id=`），探测结束自动刷新。
 
 ## 备选方案

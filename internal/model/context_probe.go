@@ -14,7 +14,9 @@ type ContextProbeRecord struct {
 	Status      int       `json:"status"`
 	Detail      string    `json:"detail" gorm:"type:text"`
 	LatencyMS   int64     `json:"latency_ms"`
-	CreatedAt   time.Time `json:"created_at" gorm:"index"`
+	// ActualTokens 是上游 usage 报告的真实输入 token 数, 0 表示未取到。
+	ActualTokens int64     `json:"actual_tokens"`
+	CreatedAt    time.Time `json:"created_at" gorm:"index"`
 }
 
 // TableName 固定表名, 避免 GORM 复数化差异。

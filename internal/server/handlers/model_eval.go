@@ -66,6 +66,7 @@ func probeModelContext(c *gin.Context) {
 	record.Status = result.Status
 	record.Detail = result.Detail
 	record.LatencyMS = result.LatencyMS
+	record.ActualTokens = result.ActualTokens
 	_ = op.SaveContextProbeRecord(record)
 	resp.Success(c, result)
 }
