@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kingsunb/NovaVeil/internal/helper"
+	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -48,6 +50,9 @@ type ContextProbeResult struct {
 }
 
 // ProbeContextWindow 用指定 token 规模的请求探测渠道模型能否接受。
+// 各家 tokenizer 密度差异极大(实测 4~7.5 字符/token), 固定口径必然偏差过半:
+// 这里先发 4000 token 的小探针测出该「渠道+模型」的真实密度比并缓存,
+// 之后按比例构造正式请求; 结果偏差超 1% 时用回写后的比例重试一次。
 // 出站构造与业务转发同形(渠道配置、免费档改写、代理与 Bun 传输), 只按状态码判定容量,
 // 不复用会校验回答内容的透传路径: 探测请求故意只留 1 个输出 token, 回答不可用属预期。
 func ProbeContextWindow(ctx context.Context, channelID int, modelName string, tokens int) (*ContextProbeResult, error) {
@@ -61,6 +66,50 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 	if err != nil {
 		return nil, fmt.Errorf("channel not found: %w", err)
 	}
+	ratio := 1.0
+	if cached, ok := tokenDensityCache.Load(tokenDensityKey(channelID, modelName)); ok {
+		ratio = clampTokenDensity(cached.(float64))
+	} else {
+		// 校准探针规模很小, 成本可忽略; 失败时不缓存, 下次探测重新校准。
+		calib, calibErr := probeOnce(ctx, channel, modelName, probeCalibrationTokens, 1.0)
+		if calibErr != nil {
+			return nil, fmt.Errorf("校准探针失败: %w", calibErr)
+		}
+		if calib.Accepted && calib.ActualTokens > 0 {
+			ratio = clampTokenDensity(float64(calib.ActualTokens) / float64(probeCalibrationTokens))
+			tokenDensityCache.Store(tokenDensityKey(channelID, modelName), ratio)
+		}
+	}
+	result, err := probeOnce(ctx, channel, modelName, tokens, ratio)
+	if err != nil {
+		return nil, err
+	}
+	// 用主请求的真实值回写密度比, 下次探测直接命中缓存。
+	if result.ActualTokens > 0 {
+		tokenDensityCache.Store(tokenDensityKey(channelID, modelName), clampTokenDensity(float64(result.ActualTokens)*ratio/float64(tokens)))
+	}
+	// 实际值与目标偏差超 1% 时, 用回写后的最新比例重试一次, 收敛到目标附近。
+	if result.Accepted && result.ActualTokens > 0 {
+		deviation := math.Abs(float64(result.ActualTokens-tokens)) / float64(tokens)
+		if deviation > 0.01 {
+			if updated, ok := tokenDensityCache.Load(tokenDensityKey(channelID, modelName)); ok {
+				latest := clampTokenDensity(updated.(float64))
+				if retry, retryErr := probeOnce(ctx, channel, modelName, tokens, latest); retryErr == nil && retry.ActualTokens > 0 {
+					tokenDensityCache.Store(tokenDensityKey(channelID, modelName), clampTokenDensity(float64(retry.ActualTokens)*latest/float64(tokens)))
+					result = retry
+				}
+			}
+		}
+	}
+	return result, nil
+}
+
+// probeCalibrationTokens 是密度校准探针的目标规模, 足够小以控制成本。
+// 密度比的存储(tokenDensityCache)与夹取(clampTokenDensity)在 context_fit.go,
+// 与路由过滤共用同一份, 保证「测试判定」与「路由过滤」同尺。
+
+// probeOnce 发送一次指定规模的探测请求并按状态码判定容量。
+func probeOnce(ctx context.Context, channel model.Channel, modelName string, tokens int, ratio float64) (*ContextProbeResult, error) {
 	candidates := channelKeyTestCandidates(channel)
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("渠道未配置任何密钥")
@@ -80,7 +129,7 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 		}
 	}
 	format, _, target := testRequestTarget(effective, modelName, "")
-	raw, err := newTestRequest(format, modelName, buildContextProbeText(tokens), 1)
+	raw, err := newTestRequest(format, modelName, buildContextProbeText(tokens, ratio), 1)
 	if err != nil {
 		return nil, fmt.Errorf("构造探测请求失败: %w", err)
 	}
@@ -192,9 +241,11 @@ func truncateSnippet(value string) string {
 	return value[:cut]
 }
 
-// buildContextProbeText 按 4 字符约 1 token 的口径生成填充文本。
-func buildContextProbeText(tokens int) string {
-	target := tokens * 4
+// buildContextProbeText 按「4 字符约 1 token」的基准口径生成填充文本,
+// 并按校准出的密度比 ratio 反推字符量: ratio = actual/claimed, 比值越大说明
+// 该模型 tokenizer 越省, 需要的字符数按比例增加。
+func buildContextProbeText(tokens int, ratio float64) string {
+	target := int(float64(tokens) * 4 / ratio)
 	var builder strings.Builder
 	builder.Grow(target + 16)
 	for builder.Len() < target {

@@ -14,8 +14,8 @@ Status: implemented
 
 `ProbeContextWindow(ctx, channelID, model, tokens)` 按指定规模构造一条请求并发出去，只回答「接受还是拒绝」：
 
-- 填充文本用随机常见英文单词（非随机字母数字串），按「4 字符约 1 token」生成。随机字母数字的 BPE 密度约 2.5-3 字符/token，用它生成会让实际 token 数比目标大 40% 左右，判定偏保守；英文单词序列的密度接近自然文本，与口径一致。
-- **估算不等于精确**：各家 tokenizer 密度不同，本地只能给近似值。请求被接受时解析响应 `usage.prompt_tokens`（Anthropic 为 `usage.input_tokens`）拿到真实 token 数，随结果返回 `actual_tokens`，界面显示「实 26.8万」。免费档被强制流式时前若干字节里没有末尾的 usage 事件，该值为 0。
+- 填充文本用随机常见英文单词, 基准口径「4 字符约 1 token」只是起点: 实测各家 tokenizer 密度差异极大, DeepSeek 对常见英文词约 1 词 1 token(7.5 字符/token), 固定口径会让 200K 实发 107K。因此探测做自适应校准: 先发 4000 token 小探针, 从 usage 读出真实密度比 actual/claimed 并按「渠道:模型」缓存(进程内 sync.Map), 正式请求按该比例反推字符量; 主请求实际值偏差超 1% 时用回写后的比例重试一次, 收敛到目标附近。
+- usage 回显与校准共用同一解析(非流式顶层 usage / 流式扫 SSE data 事件 / 都没有时 sanitizeUsage 兜底)。校准探针自身失败会让本次探测直接报错, 不缓存比例。
 - 出站构造复用 `newTestRequest` + `testRequestTarget`，并在命中 OpenCode 免费档时套用 `applyOpencodeFreeLaneHeaders` 与 `shapeOpencodeFreeBody`，与真实转发同形。不套这层的话免费档会被指纹校验 403，探测会把 403 误读成「容量不足」，二分直接判死。
 - 判定以状态码为骨架，但不只看状态码：2xx 接受；400 / 413 / 422 还要看响应体是否指向上下文超限（`contextOverflowHints` 关键词匹配，含中英文措辞），指向才判「拒绝」，否则按「失败」带原因返回——参数错误、模型不认 `max_tokens` 之类的问题不能被误当成容量上限；401 / 403 / 429 / 5xx 与其余 4xx 一律按失败返回并附状态与响应片段。
 
