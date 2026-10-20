@@ -14,6 +14,9 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Pill } from "@/components/ui/pill";
 
+/** 单次探测允许的最大规模，与后端 contextProbeMaxTokens 一致。 */
+const MAX_PROBE_TOKENS = 1_048_576;
+
 /** 可选的目标规模，上限与后端 contextProbeMaxTokens 一致。 */
 const PROBE_SIZES = [
   { label: "64K", value: 65_536 },
@@ -23,7 +26,7 @@ const PROBE_SIZES = [
   { label: "500K", value: 512_000 },
   { label: "888K", value: 909_312 },
   { label: "980K", value: 1_003_520 },
-  { label: "1M", value: 1_048_576 },
+  { label: "1M", value: MAX_PROBE_TOKENS },
 ] as const;
 
 function formatTokens(n: number): string {
@@ -39,6 +42,7 @@ export default function ContextProbePage() {
   const [channelId, setChannelId] = useState<number | "">("");
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [selectedSizes, setSelectedSizes] = useState<number[]>([131_072]);
+  const [customSize, setCustomSize] = useState("");
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<Record<string, ContextProbeResult>>({});
   const [applied, setApplied] = useState<Record<string, number>>({});
@@ -73,6 +77,26 @@ export default function ContextProbePage() {
     setSelectedSizes((prev) =>
       prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value],
     );
+  }
+
+  /** 固定档位之外的规模：来自自定义输入，显示成可移除的按钮。 */
+  const customSizes = useMemo(
+    () => selectedSizes.filter((value) => !PROBE_SIZES.some((item) => item.value === value)),
+    [selectedSizes],
+  );
+
+  function addCustomSize() {
+    const value = Math.floor(Number(customSize));
+    if (!Number.isFinite(value) || value <= 0) {
+      toast.error("请输入大于 0 的 token 数");
+      return;
+    }
+    if (value > MAX_PROBE_TOKENS) {
+      toast.error(`不能超过 ${formatTokens(MAX_PROBE_TOKENS)}（${MAX_PROBE_TOKENS}）`);
+      return;
+    }
+    setSelectedSizes((prev) => (prev.includes(value) ? prev : [...prev, value]));
+    setCustomSize("");
   }
 
   async function runProbe() {
@@ -166,8 +190,8 @@ export default function ContextProbePage() {
             </Field>
           </div>
 
-          <Field label="目标规模（可多选）">
-            <div className="flex flex-wrap gap-2">
+          <Field label="目标规模（可多选，可自定义）">
+            <div className="flex flex-wrap items-center gap-2">
               {PROBE_SIZES.map((option) => (
                 <Button
                   key={option.value}
@@ -178,6 +202,32 @@ export default function ContextProbePage() {
                   {option.label}
                 </Button>
               ))}
+              {customSizes.map((value) => (
+                <Button
+                  key={value}
+                  size="sm"
+                  variant="primary"
+                  onClick={() => toggleSize(value)}
+                >
+                  {formatTokens(value)}
+                </Button>
+              ))}
+              <span className="flex items-center gap-1">
+                <Input
+                  type="number"
+                  min={1}
+                  max={MAX_PROBE_TOKENS}
+                  value={customSize}
+                  onChange={(e) => setCustomSize(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addCustomSize();
+                  }}
+                  placeholder="自定义 token 数"
+                />
+                <Button size="sm" variant="ghost" onClick={addCustomSize}>
+                  加入
+                </Button>
+              </span>
             </div>
           </Field>
 
