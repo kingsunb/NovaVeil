@@ -256,7 +256,7 @@ func TestMustChangePasswordWhitelist(t *testing.T) {
 	}
 }
 
-const respMessageMustChangePassword = "Password change required"
+const respMessageMustChangePassword = "请先修改初始密码"
 
 func TestAfterPasswordChangeAllPathsAllowedOldTokensInvalid(t *testing.T) {
 	seedUser(t, "password-3", true)

@@ -166,8 +166,9 @@ const forbiddenGuideExemptPaths = new Set<string>([
 function isPasswordChangeRequired(res: Response, message: string): boolean {
   return (
     res.headers.get("x-novaveil-error") === "password_change_required" ||
-    // 兼容未带标记头的老版本后端, 文案需与 resp.ErrMustChangePassword 保持一致。
-    message === "请先修改初始密码，再执行该操作"
+    // 兼容未带标记头的后端: 中文文案与 resp.ErrMustChangePassword 一致, 英文为旧版残留。
+    message === "请先修改初始密码，再执行该操作" ||
+    message === "Password change required before performing this operation"
   );
 }
 
