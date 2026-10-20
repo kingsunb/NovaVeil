@@ -74,7 +74,7 @@ export function Topbar({ onOpenCommand, onOpenNavigation }: TopbarProps) {
             aria-keyshortcuts="Control+k Meta+k"
             aria-haspopup="dialog"
             title="打开命令面板（Ctrl/Cmd + K）"
-            className="h-11 w-11 rounded-control lg:w-auto lg:px-3"
+            className="h-11 w-11 shrink-0 rounded-control lg:w-auto lg:px-3"
           >
             <Search className="h-4 w-4" aria-hidden />
             <span className="hidden lg:inline">命令面板</span>
