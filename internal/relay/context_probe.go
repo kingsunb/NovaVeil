@@ -90,7 +90,7 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 	}
 	// 实际值与目标偏差超 1% 时, 用回写后的最新比例重试一次, 收敛到目标附近。
 	if result.Accepted && result.ActualTokens > 0 {
-		deviation := math.Abs(float64(result.ActualTokens-tokens)) / float64(tokens)
+		deviation := math.Abs(float64(result.ActualTokens)-float64(tokens)) / float64(tokens)
 		if deviation > 0.01 {
 			if updated, ok := tokenDensityCache.Load(tokenDensityKey(channelID, modelName)); ok {
 				latest := clampTokenDensity(updated.(float64))
@@ -107,6 +107,7 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 // probeCalibrationTokens 是密度校准探针的目标规模, 足够小以控制成本。
 // 密度比的存储(tokenDensityCache)与夹取(clampTokenDensity)在 context_fit.go,
 // 与路由过滤共用同一份, 保证「测试判定」与「路由过滤」同尺。
+const probeCalibrationTokens = 4000
 
 // probeOnce 发送一次指定规模的探测请求并按状态码判定容量。
 func probeOnce(ctx context.Context, channel model.Channel, modelName string, tokens int, ratio float64) (*ContextProbeResult, error) {
