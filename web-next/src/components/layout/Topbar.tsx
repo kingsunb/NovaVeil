@@ -64,27 +64,26 @@ export function Topbar({ onOpenCommand, onOpenNavigation }: TopbarProps) {
       </div>
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={onOpenCommand}
-          aria-label="打开命令面板"
-          aria-keyshortcuts="Control+k Meta+k"
-          aria-haspopup="dialog"
-          title="打开命令面板（Ctrl/Cmd + K）"
-          className="h-11 w-11 shrink-0 rounded-control lg:w-auto lg:px-3"
-        >
-          <Search className="h-4 w-4" aria-hidden />
-          <span className="hidden lg:inline">命令面板</span>
-          {/* 快捷键由 aria-keyshortcuts 表达; 这里隐藏可见文本, 避免与 aria-label 不一致 */}
-          <kbd
-            aria-hidden
-            className="hidden rounded border border-border px-1 text-[10px] text-ink-subtle lg:inline"
+        <div className="flex shrink-0 items-center">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onOpenCommand}
+            aria-label="打开命令面板"
+            aria-keyshortcuts="Control+k Meta+k"
+            aria-haspopup="dialog"
+            title="打开命令面板（Ctrl/Cmd + K）"
+            className="h-11 w-11 rounded-control lg:w-auto lg:px-3"
           >
+            <Search className="h-4 w-4" aria-hidden />
+            <span className="hidden lg:inline">命令面板</span>
+          </Button>
+          {/* 快捷键必须在按钮外: 放进按钮会被算作可见文本, 与 aria-label 不一致 */}
+          <kbd className="hidden -ml-1.5 rounded border border-border px-1 text-[10px] text-ink-subtle lg:inline">
             Ctrl/Cmd + K
           </kbd>
-        </Button>
+        </div>
         <Button
           variant="ghost"
           size="icon"
