@@ -64,58 +64,87 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 	if tokens <= 0 || tokens > contextProbeMaxTokens {
 		return nil, fmt.Errorf("tokens 超出范围: %d", tokens)
 	}
+	// 留出冗余再探测: 贴上限容易因 chat 模板开销或上游计数差异踩线。
+	// 标称值原样返回给调用方(result.Tokens), 「应用」写回的窗口即标称而非扣除后的值。
+	nominal := tokens
+	tokens = probeTargetTokens(tokens)
 	channel, err := op.ChannelGet(channelID)
 	if err != nil {
 		return nil, fmt.Errorf("channel not found: %w", err)
 	}
 	ratio := 1.0
-	if cached, ok := tokenDensityCache.Load(tokenDensityKey(channelID, modelName)); ok {
-		ratio = clampTokenDensity(cached.(float64))
-	} else {
-		// 校准探针规模很小, 成本可忽略; 失败时不缓存, 下次探测重新校准。
-		calib, calibErr := probeOnce(ctx, channel, modelName, probeCalibrationTokens, 1.0)
-		if calibErr != nil {
-			return nil, fmt.Errorf("校准探针失败: %w", calibErr)
-		}
-		if calib.Accepted && calib.ActualTokens > 0 {
-			ratio = clampTokenDensity(float64(calib.ActualTokens) / float64(probeCalibrationTokens))
-			tokenDensityCache.Store(tokenDensityKey(channelID, modelName), ratio)
+	// 只有 usage 口径虚高的上游(inference 端点的 OpenCode 免费档)需要校准补偿;
+	// 其余上游 usage 与基准口径一致, 一律基准构造, 也不发校准探针。
+	calibrates := tokenDensityApplies(channel.BaseURL)
+	if calibrates {
+		if cached, ok := tokenDensityCache.Load(tokenDensityKey(channel.BaseURL, modelName)); ok {
+			ratio = clampTokenDensity(cached.(float64))
+		} else {
+			// 校准探针规模很小, 成本可忽略; 失败时不缓存, 下次探测重新校准。
+			calib, calibErr := probeOnce(ctx, channel, modelName, probeCalibrationTokens, 1.0)
+			if calibErr != nil {
+				return nil, fmt.Errorf("校准探针失败: %w", calibErr)
+			}
+			if calib.Accepted && calib.ActualTokens > 0 {
+				ratio = clampTokenDensity(float64(calib.ActualTokens) / float64(probeCalibrationTokens))
+				tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), ratio)
+			}
 		}
 	}
 	result, err := probeOnce(ctx, channel, modelName, tokens, ratio)
 	if err != nil {
 		return nil, err
 	}
-	// 反馈源优先级: 拒绝体里上游报告的实际规模 > 成功响应的 usage。
+	result.Tokens = nominal
+	// 校准渠道的反馈源优先级: 拒绝体里上游报告的实际规模 > 成功响应的 usage。
 	// 小探针校准的密度在大请求上可能非线性(实测差 1.7 倍), 拒绝体的报告值是
 	// 唯一能反映真实规模反馈的来源, 用它修正比例后重试一次即可收敛。
 	density := ratio
-	if reported, ok := parseRequestedOverflowTokens(result.Detail); ok {
-		density = clampTokenDensity(float64(reported) * ratio / float64(tokens))
-		tokenDensityCache.Store(tokenDensityKey(channelID, modelName), density)
-	} else if result.ActualTokens > 0 {
-		density = clampTokenDensity(float64(result.ActualTokens) * ratio / float64(tokens))
-		tokenDensityCache.Store(tokenDensityKey(channelID, modelName), density)
+	if calibrates {
+		if reported, ok := parseRequestedOverflowTokens(result.Detail); ok {
+			density = clampTokenDensity(float64(reported) * ratio / float64(tokens))
+			tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), density)
+		} else if result.ActualTokens > 0 {
+			density = clampTokenDensity(float64(result.ActualTokens) * ratio / float64(tokens))
+			tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), density)
+		}
 	}
 	// 两种情形重试一次: 接受但偏差超 1%; 拒绝且上游报出了实际规模。
+	// 非校准渠道比例恒为 1, 重试只是原样重发, 没有意义。
 	shouldRetry := false
-	if result.Accepted && result.ActualTokens > 0 {
-		deviation := math.Abs(float64(result.ActualTokens)-float64(tokens)) / float64(tokens)
-		shouldRetry = deviation > 0.01
-	} else if !result.Accepted {
-		_, shouldRetry = parseRequestedOverflowTokens(result.Detail)
+	if calibrates {
+		if result.Accepted && result.ActualTokens > 0 {
+			deviation := math.Abs(float64(result.ActualTokens)-float64(tokens)) / float64(tokens)
+			shouldRetry = deviation > 0.01
+		} else if !result.Accepted {
+			_, shouldRetry = parseRequestedOverflowTokens(result.Detail)
+		}
 	}
 	if shouldRetry {
 		if retry, retryErr := probeOnce(ctx, channel, modelName, tokens, density); retryErr == nil {
 			if retry.ActualTokens > 0 {
-				tokenDensityCache.Store(tokenDensityKey(channelID, modelName), clampTokenDensity(float64(retry.ActualTokens)*density/float64(tokens)))
+				tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), clampTokenDensity(float64(retry.ActualTokens)*density/float64(tokens)))
 			} else if reported, ok := parseRequestedOverflowTokens(retry.Detail); ok {
-				tokenDensityCache.Store(tokenDensityKey(channelID, modelName), clampTokenDensity(float64(reported)*density/float64(tokens)))
+				tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), clampTokenDensity(float64(reported)*density/float64(tokens)))
 			}
 			result = retry
 		}
 	}
 	return result, nil
+}
+
+// probeTargetTokens 计算扣除冗余后的实际构造规模:
+// 100 万级按 2% 留(1,000,000 → 980,000), 其余留 1K。
+func probeTargetTokens(tokens int) int {
+	margin := 1024
+	if tokens >= 1_000_000 {
+		margin = tokens / 50
+	}
+	target := tokens - margin
+	if target < 1 {
+		target = 1
+	}
+	return target
 }
 
 // probeCalibrationTokens 是密度校准探针的目标规模, 足够小以控制成本。

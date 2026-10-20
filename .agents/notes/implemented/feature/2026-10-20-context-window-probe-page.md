@@ -14,7 +14,7 @@ Status: implemented
 
 `ProbeContextWindow(ctx, channelID, model, tokens)` 按指定规模构造一条请求并发出去，只回答「接受还是拒绝」：
 
-- 填充文本用随机常见英文单词, 基准口径「4 字符约 1 token」只是起点: 实测各家 tokenizer 密度差异极大, DeepSeek 对常见英文词约 1 词 1 token(7.5 字符/token), 固定口径会让 200K 实发 107K。因此探测做自适应校准: 先发 4000 token 小探针, 从 usage 读出真实密度比 actual/claimed 并按「渠道:模型」缓存(进程内 sync.Map), 正式请求按该比例反推字符量。
+- 填充文本用随机常见英文单词, 基准口径「4 字符约 1 token」。实测多数上游 usage 与该口径一致, **一律基准构造、不发校准探针**; 唯一例外是 opencode.ai/inference(OpenCode 免费档, 白名单 `tokenDensityEnabledBaseURLs`): 它报的 prompt_tokens 虚高约一倍且同端点不同请求还会波动(978K vs 538K), 不校准则探测必拒, 因此仅该端点走自适应校准——4K 小探针测密度比, 按「端点:模型」缓存, 正式请求按比例反推字符量。
 - **密度可能非线性, 拒绝反馈是第二把尺**: 实测 minimax 在 OpenRouter 上小探针密度 6.9 字符/token, 1M 大请求却变成 4 字符/token(上游报 1.8M), 小探针校准失效。因此主请求被拒时从拒绝体提取上游报告的真实规模(`requested (about) N tokens` 正则), 用它修正比例并自动重试一次; 成功响应的 usage 与拒绝体的报告值都会回写缓存, 同模型下一次探测直接命中。
 - usage 回显与校准共用同一解析(非流式顶层 usage / 流式扫 SSE data 事件 / 都没有时 sanitizeUsage 兜底)。校准探针自身失败会让本次探测直接报错, 不缓存比例。
 - 出站构造复用 `newTestRequest` + `testRequestTarget`，并在命中 OpenCode 免费档时套用 `applyOpencodeFreeLaneHeaders` 与 `shapeOpencodeFreeBody`，与真实转发同形。不套这层的话免费档会被指纹校验 403，探测会把 403 误读成「容量不足」，二分直接判死。

@@ -19,17 +19,19 @@ import { Pill } from "@/components/ui/pill";
 const MAX_PROBE_TOKENS = 1_048_576;
 
 /**
- * 固定档位的目标值内建冗余: 贴着上限探测容易因 chat 模板开销或上游计数差异踩线。
- * 各档在标称值基础上少 1K; 1M 按 2% 冗余取 980,000——不少上游(如 minimax)的
- * 「1M context」是十进制 1,000,000, 二进制 1,048,576 必然超限, 0.2% 冗余不够。
+ * 固定档位为标称值: 后端构造请求时会自动留冗余(100 万级按 2%, 其余 1K),
+ * 「应用」写回的窗口也是这里的标称值(如 1M 档写 1,000,000), 不带冗余。
  */
 const PROBE_SIZES = [
-  { label: "64K", value: 64_512 },
-  { label: "128K", value: 130_048 },
-  { label: "256K", value: 261_120 },
-  { label: "500K", value: 510_976 },
-  { label: "1M", value: 980_000 },
+  { label: "64K", value: 65_536 },
+  { label: "128K", value: 131_072 },
+  { label: "256K", value: 262_144 },
+  { label: "500K", value: 512_000 },
+  { label: "1M", value: 1_000_000 },
 ] as const;
+
+/** 队列并发数: 同一上游的免费渠道不宜压太狠, 3 路足够。 */
+const PROBE_CONCURRENCY = 3;
 
 interface ProbeTarget {
   key: string;
@@ -171,38 +173,46 @@ export default function ContextProbePage() {
     setTasks(plan);
     setRunning(true);
     try {
-      for (let index = 0; index < plan.length; index++) {
-        const task = plan[index];
-        setTasks((prev) =>
-          prev.map((item, i) => (i === index ? { ...item, state: "running" } : item)),
-        );
-        try {
-          const reply = await api.probeModelContext(task.channelId, task.model, task.tokens);
+      // 三路并发消费队列: 游标推进, 每路完成一组就更新对应任务状态。
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < plan.length) {
+          const index = cursor++;
+          const task = plan[index];
           setTasks((prev) =>
-            prev.map((item, i) => (i === index ? { ...item, state: "done", result: reply } : item)),
+            prev.map((item, i) => (i === index ? { ...item, state: "running" } : item)),
           );
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "探测失败";
-          setTasks((prev) =>
-            prev.map((item, i) =>
-              i === index
-                ? {
-                    ...item,
-                    state: "done",
-                    result: {
-                      tokens: task.tokens,
-                      accepted: false,
-                      status: 0,
-                      detail: message,
-                      latency_ms: 0,
-                      actual_tokens: 0,
-                    },
-                  }
-                : item,
-            ),
-          );
+          try {
+            const reply = await api.probeModelContext(task.channelId, task.model, task.tokens);
+            setTasks((prev) =>
+              prev.map((item, i) => (i === index ? { ...item, state: "done", result: reply } : item)),
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "探测失败";
+            setTasks((prev) =>
+              prev.map((item, i) =>
+                i === index
+                  ? {
+                      ...item,
+                      state: "done",
+                      result: {
+                        tokens: task.tokens,
+                        accepted: false,
+                        status: 0,
+                        detail: message,
+                        latency_ms: 0,
+                        actual_tokens: 0,
+                      },
+                    }
+                  : item,
+              ),
+            );
+          }
         }
-      }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(PROBE_CONCURRENCY, plan.length) }, () => worker()),
+      );
       await queryClient.invalidateQueries({ queryKey: ["probe-history"] });
       toast.success("探测结束");
     } finally {
