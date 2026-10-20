@@ -1476,6 +1476,12 @@ function GroupEditor({
                 checked={relayConfig.echo_response_model}
                 onChange={(v) => updateRelay("echo_response_model", v)}
               />
+              <Toggle
+                label="上下文窗口过滤"
+                description="按请求估算 token 跳过上下文窗口装不下的成员；窗口未知（0）的成员始终放行，依赖模型同步的窗口数据"
+                checked={relayConfig.context_fit_enabled}
+                onChange={(v) => updateRelay("context_fit_enabled", v)}
+              />
             </div>
           </div>
         )}

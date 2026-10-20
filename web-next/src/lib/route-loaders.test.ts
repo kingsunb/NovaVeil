@@ -9,6 +9,7 @@ const LOADER_NAMES = [
   "loadCustomModelsPage",
   "loadGroupsPage",
   "loadModelEvalPage",
+  "loadContextProbePage",
   "loadMaskPage",
   "loadKeysPage",
   "loadLogsPage",

@@ -27,6 +27,7 @@ type OpencodeModelInfo struct {
 	Reasoning       bool     // 是否支持推理(thinking/reasoning)。
 	ToolCall        bool     // 是否支持工具调用(function calling)。
 	InputModalities []string // 输入模态: text/image/audio/video/pdf 等。
+	MaxReasoningEffort string // 目录声明的最大思考等级; 空表示未声明可选等级。
 }
 
 // FetchOpencodeCatalog 读取公开目录，返回该渠道档位上已识别的模型协议与能力元数据。
@@ -77,12 +78,18 @@ type opencodeCatalogProvider struct {
 }
 
 type opencodeCatalogModel struct {
-	ID       string                        `json:"id"`
-	Provider *opencodeCatalogModelProvider `json:"provider"`
-	Limit    *opencodeCatalogModelLimit    `json:"limit"`
-	Reasoning bool                         `json:"reasoning"`
-	ToolCall  bool                         `json:"tool_call"`
-	Modalities *opencodeCatalogModalities  `json:"modalities"`
+	ID               string                           `json:"id"`
+	Provider         *opencodeCatalogModelProvider    `json:"provider"`
+	Limit            *opencodeCatalogModelLimit       `json:"limit"`
+	Reasoning        bool                             `json:"reasoning"`
+	ToolCall         bool                             `json:"tool_call"`
+	Modalities       *opencodeCatalogModalities       `json:"modalities"`
+	ReasoningOptions []opencodeCatalogReasoningOption `json:"reasoning_options"`
+}
+
+type opencodeCatalogReasoningOption struct {
+	Type   string   `json:"type"`
+	Values []string `json:"values"`
 }
 
 type opencodeCatalogModelProvider struct {
@@ -96,6 +103,23 @@ type opencodeCatalogModelLimit struct {
 
 type opencodeCatalogModalities struct {
 	Input []string `json:"input"`
+}
+
+// maxEffortFromOptions 取 effort 枚举里最大的等级; none 不是等级, 跳过。
+func maxEffortFromOptions(options []opencodeCatalogReasoningOption) string {
+	for _, option := range options {
+		if option.Type != "effort" {
+			continue
+		}
+		for i := len(option.Values) - 1; i >= 0; i-- {
+			level := strings.ToLower(strings.TrimSpace(option.Values[i]))
+			if level == "" || level == "none" {
+				continue
+			}
+			return level
+		}
+	}
+	return ""
 }
 
 // ParseOpencodeCatalog 从目录 JSON 抽出指定档位的模型协议与能力元数据。
@@ -156,6 +180,7 @@ func ParseOpencodeCatalog(data []byte, tier string) (map[string]OpencodeModelInf
 				continue
 			}
 			info := OpencodeModelInfo{Protocol: protocol}
+			info.MaxReasoningEffort = maxEffortFromOptions(entry.ReasoningOptions)
 			if entry.Limit != nil {
 				info.ContextWindow = entry.Limit.Context
 				info.MaxOutput = entry.Limit.Output

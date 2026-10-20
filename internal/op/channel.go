@@ -789,6 +789,9 @@ func syncChannelModels(tx *gorm.DB, channelID int, requested []model.ChannelMode
 			if current.InputModalities != requestedModel.InputModalities {
 				updates["input_modalities"] = requestedModel.InputModalities
 			}
+			if current.MaxReasoningEffort != requestedModel.MaxReasoningEffort {
+				updates["max_reasoning_effort"] = requestedModel.MaxReasoningEffort
+			}
 			if len(updates) > 0 {
 				if err := tx.Model(&model.ChannelModel{}).Where("id = ?", current.ID).Updates(updates).Error; err != nil {
 					return fmt.Errorf("更新渠道模型失败: %w", err)
@@ -807,6 +810,7 @@ func syncChannelModels(tx *gorm.DB, channelID int, requested []model.ChannelMode
 			Reasoning:       requestedModel.Reasoning,
 			ToolCall:        requestedModel.ToolCall,
 			InputModalities: requestedModel.InputModalities,
+			MaxReasoningEffort: requestedModel.MaxReasoningEffort,
 		}).Error; err != nil {
 			return fmt.Errorf("创建渠道模型失败: %w", err)
 		}

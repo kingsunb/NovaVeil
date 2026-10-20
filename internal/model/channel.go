@@ -72,6 +72,7 @@ type Channel struct {
 type ChannelModelLimit struct {
 	MaxOutput     *int   `json:"max_output,omitempty"`     // 注入上游请求的最大输出 token 数, 未配置表示不限制。
 	ThinkingLevel string `json:"thinking_level,omitempty"` // 思考等级: off/minimal/low/medium/high/xhigh/max, 未配置表示不注入。
+	ContextWindow *int   `json:"context_window,omitempty"` // 手动覆盖的上下文窗口; 空或 <=0 表示沿用同步来的元数据。
 }
 
 // 渠道提供的单个上游模型。
@@ -86,6 +87,7 @@ type ChannelModel struct {
 	Reasoning         bool               `json:"reasoning" gorm:"not null;default:false"`                        // 是否支持推理(thinking/reasoning)。
 	ToolCall          bool               `json:"tool_call" gorm:"not null;default:false"`                        // 是否支持工具调用(function calling)。
 	InputModalities   string             `json:"input_modalities" gorm:"not null;default:''"`                    // 输入模态, 逗号分隔: text,image,audio,video,pdf; 空表示未知。
+	MaxReasoningEffort string           `json:"max_reasoning_effort" gorm:"not null;default:''"`                  // 目录声明的最大思考等级; 空表示未声明。
 }
 
 // 追加到上游请求的单个 Header。

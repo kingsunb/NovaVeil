@@ -1,0 +1,125 @@
+package relay
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"math/rand"
+	"net/http"
+	"strings"
+
+	"github.com/google/uuid"
+	"github.com/kingsunb/NovaVeil/internal/helper"
+	"github.com/kingsunb/NovaVeil/internal/op"
+	"github.com/looplj/axonhub/llm/httpclient"
+)
+
+// contextProbeMaxTokens 是单次探测允许的最大规模。
+const contextProbeMaxTokens = 1 << 20
+
+// contextProbeAlphabet 用于生成不可压缩的填充文本。
+const contextProbeAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+// ContextProbeResult 是一次上下文探测的结论。
+type ContextProbeResult struct {
+	Tokens   int    `json:"tokens"`
+	Accepted bool   `json:"accepted"`
+	Status   int    `json:"status"`
+	Detail   string `json:"detail"`
+}
+
+// ProbeContextWindow 用指定 token 规模的请求探测渠道模型能否接受。
+// 出站构造与业务转发同形(渠道配置、免费档改写、代理与 Bun 传输), 只按状态码判定容量,
+// 不复用会校验回答内容的透传路径: 探测请求故意只留 1 个输出 token, 回答不可用属预期。
+func ProbeContextWindow(ctx context.Context, channelID int, modelName string, tokens int) (*ContextProbeResult, error) {
+	if strings.TrimSpace(modelName) == "" {
+		return nil, fmt.Errorf("model is required")
+	}
+	if tokens <= 0 || tokens > contextProbeMaxTokens {
+		return nil, fmt.Errorf("tokens 超出范围: %d", tokens)
+	}
+	channel, err := op.ChannelGet(channelID)
+	if err != nil {
+		return nil, fmt.Errorf("channel not found: %w", err)
+	}
+	candidates := channelKeyTestCandidates(channel)
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("渠道未配置任何密钥")
+	}
+	effective, err := effectiveChannelForKey(channel, candidates[0])
+	if err != nil {
+		return nil, err
+	}
+	format, _, _ := testRequestTarget(effective, modelName, "")
+	raw, err := newTestRequest(format, modelName, buildContextProbeText(tokens), 1)
+	if err != nil {
+		return nil, fmt.Errorf("构造探测请求失败: %w", err)
+	}
+	built, err := buildPassthroughRequest(format, raw, effective, uuid.NewString(), generateOpencodeSessionID())
+	if err != nil {
+		return nil, fmt.Errorf("构造出站请求失败: %w", err)
+	}
+	if isOpencodeFreeModel(effective, modelName) {
+		applyOpencodeFreeLaneHeaders(effective, built, modelName)
+		if isChatFormat(format) {
+			built.Body, _ = shapeOpencodeFreeBody(built.Body, isOpencodeV1Lane(effective))
+		}
+	}
+	client, err := helper.ChannelHttpClient(&effective)
+	if err != nil {
+		return nil, fmt.Errorf("构造渠道客户端失败: %w", err)
+	}
+	request, err := httpclient.BuildHttpRequest(ctx, built)
+	if err != nil {
+		return nil, fmt.Errorf("构造请求失败: %w", err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("探测请求失败: %w", err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
+	result := &ContextProbeResult{Tokens: tokens, Status: response.StatusCode, Detail: truncateSnippet(string(body))}
+	switch {
+	case response.StatusCode >= 200 && response.StatusCode < 300:
+		result.Accepted = true
+	case response.StatusCode == http.StatusBadRequest ||
+		response.StatusCode == http.StatusRequestEntityTooLarge ||
+		response.StatusCode == http.StatusUnprocessableEntity:
+		result.Accepted = false
+	case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden ||
+		response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500:
+		return nil, fmt.Errorf("探测被认证、限流或上游故障拒绝: %s %s", response.Status, result.Detail)
+	default:
+		result.Accepted = false
+	}
+	return result, nil
+}
+
+// truncateSnippet 截断响应片段, 按 UTF-8 边界裁剪避免出现半个汉字。
+func truncateSnippet(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 200 {
+		return value
+	}
+	cut := 200
+	for cut > 0 && (value[cut]&0xC0) == 0x80 {
+		cut--
+	}
+	return value[:cut]
+}
+
+// buildContextProbeText 按 4 字符约 1 token 的口径生成不可压缩填充文本。
+func buildContextProbeText(tokens int) string {
+	target := tokens * 4
+	var builder strings.Builder
+	builder.Grow(target + 16)
+	for builder.Len() < target {
+		length := 6 + rand.Intn(4)
+		for i := 0; i < length; i++ {
+			builder.WriteByte(contextProbeAlphabet[rand.Intn(len(contextProbeAlphabet))])
+		}
+		builder.WriteByte(' ')
+	}
+	return builder.String()
+}

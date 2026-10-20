@@ -117,11 +117,16 @@ func SyncModelsTask() error {
 		// 重建 auto 模型时必须带上协议：目录识别到的值优先，否则抄回上一轮的非空协议。
 		// 只写名字和 Source 会在 ChannelUpdate 时把协议抹掉。
 		// 目录还提供上下文窗口、输出上限、推理/工具调用能力与输入模态，一并写入。
+		// OpenCode 免费渠道只同步名字含 free 的模型。
+		onlyFree := channel.IsFree && channel.OpencodeCompat && model.OpenCodeTier(channel.BaseURL) == "zen"
 		seen := make(map[string]struct{}, len(fetchModels))
 		autoModels := make([]model.ChannelModel, 0, len(fetchModels))
 		for _, modelName := range fetchModels {
 			modelName = strings.TrimSpace(modelName)
 			if modelName == "" {
+				continue
+			}
+			if onlyFree && !strings.Contains(strings.ToLower(modelName), "free") {
 				continue
 			}
 			if _, ok := manualNames[modelName]; ok {
@@ -147,6 +152,7 @@ func SyncModelsTask() error {
 					cm.Reasoning = info.Reasoning
 					cm.ToolCall = info.ToolCall
 					cm.InputModalities = strings.Join(info.InputModalities, ",")
+					cm.MaxReasoningEffort = info.MaxReasoningEffort
 				}
 			}
 			autoModels = append(autoModels, cm)
@@ -177,13 +183,15 @@ func SyncModelsTask() error {
 					prev.MaxOutput != channelModel.MaxOutput ||
 					prev.Reasoning != channelModel.Reasoning ||
 					prev.ToolCall != channelModel.ToolCall ||
-					prev.InputModalities != channelModel.InputModalities {
+					prev.InputModalities != channelModel.InputModalities ||
+					prev.MaxReasoningEffort != channelModel.MaxReasoningEffort {
 					metadataDirty = true
 				}
 			} else {
 				// 新增模型带元数据也算 dirty
 				if channelModel.ContextWindow != 0 || channelModel.MaxOutput != 0 ||
-					channelModel.Reasoning || channelModel.ToolCall || channelModel.InputModalities != "" {
+					channelModel.Reasoning || channelModel.ToolCall || channelModel.InputModalities != "" ||
+					channelModel.MaxReasoningEffort != "" {
 					metadataDirty = true
 				}
 			}

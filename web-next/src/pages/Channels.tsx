@@ -492,6 +492,11 @@ export default function ChannelsPage() {
                   <span className="font-semibold text-ink">{c.name}</span>
                   {c.is_free && <Pill tone="success">免费</Pill>}
                   {c.builtin && <Pill tone="neutral">内置</Pill>}
+                  {c.auto_sync ? (
+                    <Pill tone="info">自动同步</Pill>
+                  ) : (
+                    <Pill tone="neutral">未自动同步</Pill>
+                  )}
                   {c.tags?.map((t) => (
                     <Pill key={t} tone="info">
                       {t}

@@ -73,11 +73,23 @@ export interface ChannelModel {
   tool_call?: boolean;
   /** 输入模态, 逗号分隔: text,image,audio,video,pdf; 空表示未知。 */
   input_modalities?: string;
+  /** 目录声明的最大思考等级；空表示未声明可选等级。来自 OpenCode 公开目录。 */
+  max_reasoning_effort?: string;
 }
 
 export interface ChannelModelLimit {
   max_output?: number;
   thinking_level?: string;
+  /** 手动覆盖的上下文窗口；空或 <=0 表示沿用同步来的元数据。 */
+  context_window?: number;
+}
+
+/** 一次上下文容量探测的结论。 */
+export interface ContextProbeResult {
+  tokens: number;
+  accepted: boolean;
+  status: number;
+  detail: string;
 }
 
 export interface CustomHeader {
@@ -252,6 +264,8 @@ export interface GroupRelayConfig {
   auto_match_models: boolean;
   /** 是否把响应里的模型名改写回客户端请求的分组名，避免聚合分组透传真实上游模型名，默认 false。 */
   echo_response_model: boolean;
+  /** 是否按请求估算跳过上下文窗口不足的成员，默认 false；窗口未知（0）的成员始终放行。 */
+  context_fit_enabled: boolean;
 }
 
 /**
@@ -282,6 +296,7 @@ export const DEFAULT_GROUP_RELAY_CONFIG: GroupRelayConfig = {
   prefer_passthrough: false,
   auto_match_models: false,
   echo_response_model: false,
+  context_fit_enabled: false,
 };
 
 export interface GroupItem {

@@ -9,6 +9,7 @@ import type {
   ChannelUpdateRequest,
   ChannelImportResult,
   ClientStats,
+  ContextProbeResult,
   DBDump,
   BuildInfo,
   GroupClearCooldownResult,
@@ -1012,6 +1013,19 @@ export const api = {
     http<EvalStatsList>("/model-eval/stats", { signal }),
   listEvalRanks: (signal?: AbortSignal) =>
     http<EvalRankList>("/model-eval/rank/list", { signal }),
+  /** 按指定 token 规模探测渠道模型能否接受该长度的请求。 */
+  probeModelContext: (channelId: number, model: string, tokens: number, signal?: AbortSignal) =>
+    http<ContextProbeResult>("/model-eval/probe-context", {
+      method: "POST",
+      body: { channel_id: channelId, model, tokens },
+      signal,
+    }),
+  /** 把探测出的窗口写入渠道按模型限制。 */
+  applyModelContext: (channelId: number, model: string, contextWindow: number) =>
+    http<null>("/model-eval/apply-context", {
+      method: "POST",
+      body: { channel_id: channelId, model, context_window: contextWindow },
+    }),
   getEvalRankContent: (id: number, signal?: AbortSignal) =>
     http<EvalRankContent>(`/model-eval/rank/content/${id}`, { signal }),
   moveEvalRank: (id: number, direction: -1 | 1) =>

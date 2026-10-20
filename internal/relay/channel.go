@@ -237,6 +237,24 @@ func lookupModelLimit(limits map[string]model.ChannelModelLimit, modelName strin
 	return model.ChannelModelLimit{}, false
 }
 
+// maxReasoningEffortFor 返回模型目录声明的最大思考等级。
+func maxReasoningEffortFor(channel model.Channel, modelName string) string {
+	for i := range channel.Models {
+		if strings.EqualFold(channel.Models[i].Name, modelName) {
+			return channel.Models[i].MaxReasoningEffort
+		}
+	}
+	return ""
+}
+
+// effectiveContextWindow 优先用手动覆盖值, 否则回落到上游元数据。
+func effectiveContextWindow(limits map[string]model.ChannelModelLimit, modelName string, metadata int) int {
+	if limit, ok := lookupModelLimit(limits, modelName); ok && limit.ContextWindow != nil && *limit.ContextWindow > 0 {
+		return *limit.ContextWindow
+	}
+	return metadata
+}
+
 // applyChannelModelLimits 将模型输出与思考配置按渠道协议写入上游请求体。
 // 经过出站转换后请求体始终是渠道协议的原生格式, 因此这里可以按渠道类型直接注入。
 // 限制按请求中的真实模型名从渠道的 model_limits 中读取, 未配置则保持上游默认行为。
@@ -261,6 +279,9 @@ func applyChannelModelLimits(channel model.Channel, request *httpclient.Request)
 	}
 
 	level := strings.ToLower(strings.TrimSpace(thinkingLevel))
+	if level == "auto" {
+		level = maxReasoningEffortFor(channel, modelName)
+	}
 
 	switch channel.Type {
 	case model.ChannelProviderOpenAI:

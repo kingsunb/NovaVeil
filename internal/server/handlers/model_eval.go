@@ -26,7 +26,68 @@ func init() {
 		AddRoute(router.NewRoute("/list", http.MethodGet).Handle(listModelEvals)).
 		AddRoute(router.NewRoute("/stats", http.MethodGet).Handle(listModelEvalStats)).
 		AddRoute(router.NewRoute("/history/clear-failures", http.MethodPost).Handle(clearModelEvalFailures)).
+		AddRoute(router.NewRoute("/probe-context", http.MethodPost).Handle(probeModelContext)).
+		AddRoute(router.NewRoute("/apply-context", http.MethodPost).Handle(applyModelContext)).
 		AddRoute(router.NewRoute("/:id", http.MethodGet).Handle(getModelEval))
+}
+
+// contextProbeRequest 是一次上下文容量探测请求。
+type contextProbeRequest struct {
+	ChannelID int    `json:"channel_id" binding:"required"`
+	Model     string `json:"model" binding:"required"`
+	Tokens    int    `json:"tokens" binding:"required"`
+}
+
+// probeModelContext 按指定规模探测渠道模型能否接受该长度的请求。
+func probeModelContext(c *gin.Context) {
+	var request contextProbeRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
+		return
+	}
+	result, err := relay.ProbeContextWindow(c.Request.Context(), request.ChannelID, request.Model, request.Tokens)
+	if err != nil {
+		resp.ErrorExposed(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp.Success(c, result)
+}
+
+// contextApplyRequest 把探测结果写回按模型限制。
+type contextApplyRequest struct {
+	ChannelID     int    `json:"channel_id" binding:"required"`
+	Model         string `json:"model" binding:"required"`
+	ContextWindow int    `json:"context_window" binding:"required,min=1"`
+}
+
+// applyModelContext 把手动探测出的窗口写入渠道的 model_limits, 同步不会覆盖。
+func applyModelContext(c *gin.Context) {
+	var request contextApplyRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
+		return
+	}
+	channel, err := op.ChannelGet(request.ChannelID)
+	if err != nil {
+		resp.Error(c, http.StatusNotFound, err.Error())
+		return
+	}
+	limits := channel.ModelLimits
+	if limits == nil {
+		limits = make(map[string]model.ChannelModelLimit)
+	}
+	limit := limits[request.Model]
+	value := request.ContextWindow
+	limit.ContextWindow = &value
+	limits[request.Model] = limit
+	if _, err := op.ChannelUpdate(&model.ChannelUpdateRequest{
+		ID:          request.ChannelID,
+		ModelLimits: &limits,
+	}, c.Request.Context()); err != nil {
+		resp.ErrorExposed(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp.Success(c, nil)
 }
 
 // runModelEval 复用渠道测试的真实出站逻辑，仅模型评估入口保存评估历史。

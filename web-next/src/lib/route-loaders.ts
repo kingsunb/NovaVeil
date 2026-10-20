@@ -15,6 +15,7 @@ export {
   loadCustomModelsPage,
   loadGroupsPage,
   loadModelEvalPage,
+  loadContextProbePage,
   loadMaskPage,
   loadKeysPage,
   loadLogsPage,

@@ -28,6 +28,7 @@ import {
   loadLogsPage,
   loadMaskPage,
   loadModelEvalPage,
+  loadContextProbePage,
   loadSettingsPage,
 } from "@/lib/route-loaders";
 import { apiForbiddenEvent, apiUnauthorizedEvent } from "@/lib/api";
@@ -45,6 +46,7 @@ const ChannelsPage = lazy(loadChannelsPage);
 const CustomModelsPage = lazy(loadCustomModelsPage);
 const GroupsPage = lazy(loadGroupsPage);
 const ModelEvalPage = lazy(loadModelEvalPage);
+const ContextProbePage = lazy(loadContextProbePage);
 const MaskPage = lazy(loadMaskPage);
 const KeysPage = lazy(loadKeysPage);
 const LogsPage = lazy(loadLogsPage);
@@ -227,6 +229,14 @@ export default function App() {
           element={
             <LazyPage fallback={<TableSkeleton />}>
               <ModelEvalPage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="/context-probe"
+          element={
+            <LazyPage fallback={<TableSkeleton />}>
+              <ContextProbePage />
             </LazyPage>
           }
         />

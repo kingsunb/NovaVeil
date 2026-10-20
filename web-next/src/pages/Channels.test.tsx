@@ -183,6 +183,8 @@ describe("<ChannelsPage />", () => {
     // 类型 Pill 渲染为「OpenAI Chat」（label 字典映射，详见 constants.ts）
     expect(screen.getByText("OpenAI Chat")).toBeInTheDocument();
     expect(screen.getByText("https://api.example.com")).toBeInTheDocument();
+    // sampleChannel.auto_sync=false, 列表须显式标出未开启自动同步
+    expect(screen.getByText("未自动同步")).toBeInTheDocument();
   });
 
   it("点击「新建渠道」打开 Sheet 抽屉", async () => {

@@ -178,6 +178,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		exclude := 0                                   // 本请求已放弃的成员 ID, 重扫时跳过以免再次选中。
 		refSkips := 0                                  // 本请求内结构性跳过的引用计数, 超过成员总数说明全部引用均不可用。
 		nonRetryable := make(map[int]bool)             // 出现过确定性 4xx(400/404/422)的成员集合, 全部成员都出现时终止请求。
+		contextSkipped := make(map[int]bool)           // 上下文窗口装不下本请求而跳过的成员集合。
 		busyRejected := make(map[int]bool)             // 并发槽位满被本地准入拒绝的成员集合: 每成员满载一次即换下一优先级, 全部满载时终止请求。
 		rounds := 0                                    // 本请求已消耗的尝试轮次, 含引用链结构性跳过等一切循环路径。
 		startedAt := time.Now()                        // 请求进入转发循环的时刻, 用于整体安全截止时间判定。
@@ -436,6 +437,22 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
 					return
 				}
+				continue
+			}
+
+			// 上下文装不下时跳过该成员, 不计成员失败。
+			contextWindow := effectiveContextWindow(channel.ModelLimits, channelModel.Name, channelModel.ContextWindow)
+			if relayConfig.ContextFitEnabled && !contextFitsWindow(raw.Body, contextWindow) {
+				contextSkipped[item.ID] = true
+				// 与失败分支同口径归还引用链探测占用: 跳过不是失败, 但占用不还会让整组钉死。
+				releaseRefChainHops(hops[:len(hops)-1])
+				if len(contextSkipped) >= routableLeafCount(hops[0].group) {
+					request.markFailed(errContextWindowTooSmall, "", nil)
+					recordErrorLog(request)
+					rejectRequest(c, inbound, errContextWindowTooSmall)
+					return
+				}
+				exclude = item.ID
 				continue
 			}
 

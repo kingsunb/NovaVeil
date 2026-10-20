@@ -26,6 +26,7 @@ import type {
   Channel,
   ChannelKey,
   ChannelKeyTestResult,
+  ChannelModel,
   ChannelModelLimit,
   ChannelUpdateRequest,
   ProxyEntry,
@@ -1338,9 +1339,11 @@ const THINKING_LEVEL_OPTIONS = [
 function modelLimitBadge(limit: ChannelModelLimit | undefined): string {
   if (!limit) return "";
   const hasMax = typeof limit.max_output === "number" && limit.max_output > 0;
+  const hasContext = typeof limit.context_window === "number" && limit.context_window > 0;
   const hasThinking = Boolean(limit.thinking_level);
-  if (hasMax && hasThinking) return "限制·思考";
-  if (hasMax) return "限制";
+  const hasLimit = hasMax || hasContext;
+  if (hasLimit && hasThinking) return "限制·思考";
+  if (hasLimit) return "限制";
   return "思考";
 }
 
@@ -1441,10 +1444,17 @@ function ModelsTab({
     const limits = { ...draft.model_limits };
     const empty =
       (merged.max_output == null || merged.max_output === 0) &&
+      (merged.context_window == null || merged.context_window === 0) &&
       !merged.thinking_level;
     if (empty) delete limits[name];
     else limits[name] = merged;
     update("model_limits", limits);
+  }
+
+  /** 上下文窗口：手动覆盖优先，否则沿用同步来的元数据。 */
+  function effectiveContextWindow(m: ChannelModel): number {
+    const manual = draft.model_limits[m.name]?.context_window;
+    return manual && manual > 0 ? manual : (m.context_window ?? 0);
   }
 
   const allChecked =
@@ -1708,9 +1718,9 @@ function ModelsTab({
                     {draft.opencode_compat ? (
                       <UpstreamProtocolLabel protocol={m.upstream_protocol} />
                     ) : null}
-                    {m.context_window && m.context_window > 0 ? (
+                    {effectiveContextWindow(m) > 0 ? (
                       <Pill tone="neutral" className="text-[10px]">
-                        {formatTokens(m.context_window)} ctx
+                        {formatTokens(effectiveContextWindow(m))} ctx
                       </Pill>
                     ) : null}
                     {m.max_output && m.max_output > 0 ? (
@@ -1721,6 +1731,11 @@ function ModelsTab({
                     {m.reasoning ? (
                       <Pill tone="info" className="text-[10px]">
                         reasoning
+                      </Pill>
+                    ) : null}
+                    {m.max_reasoning_effort ? (
+                      <Pill tone="neutral" className="text-[10px]">
+                        thinking: {m.max_reasoning_effort}
                       </Pill>
                     ) : null}
                     {m.tool_call ? (
@@ -1882,6 +1897,24 @@ function ModelsTab({
                     className="grid grid-cols-2 gap-3 rounded-md border border-border bg-surface-subtle/40 p-3"
                   >
                     <Field
+                      label="上下文窗口"
+                      hint="手动覆盖模型窗口；留空沿用同步来的上游值"
+                    >
+                      <Input
+                        type="number"
+                        min={0}
+                        value={limit?.context_window ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value.trim();
+                          setModelLimit(
+                            m.name,
+                            v ? { context_window: Math.max(0, Number(v)) } : { context_window: undefined },
+                          );
+                        }}
+                        placeholder="沿用上游"
+                      />
+                    </Field>
+                    <Field
                       label="最大输出 token"
                       hint="注入上游请求的 max_output；留空不限制"
                     >
@@ -1913,6 +1946,9 @@ function ModelsTab({
                         }
                       >
                         <option value="">未配置</option>
+                        <option value="auto">
+                          自动（模型最大{m.max_reasoning_effort ? `：${m.max_reasoning_effort}` : "，无目录数据"}）
+                        </option>
                         {THINKING_LEVEL_OPTIONS.map((v) => (
                           <option key={v} value={v}>
                             {v}
