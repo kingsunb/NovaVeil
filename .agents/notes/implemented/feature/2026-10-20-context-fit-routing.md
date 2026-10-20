@@ -64,4 +64,6 @@ Status: implemented
 - `grep -n "contextFitsWindow\|estimateRequestTokens" internal/relay/` 只应有定义与 handler 的一处调用。
 - `ContextWindow` 为 0 的成员在开关开启时仍被选中（放行分支）。
 - 全部成员窗口都不足时，客户端收到「没有候选模型的上下文窗口能容纳当前请求（请求约 X token，候选集最大窗口 Y token）」，带量化提示方便调用方主动截断；而非「暂无可用渠道」。
+- 窗口值只信人工验证过的来源: 探测「应用」或编辑器手填写入的 `model_limits.context_window`。同步目录带来的窗口是文档值, 未经实测, **不参与过滤**(未验证不拦, 宁可放行也不基于猜测误拒); 它仍在前端展示, 供管理员决定是否探测验证。`effectiveContextWindow` 因此不再回落元数据, 无覆盖即返回 0(放行)。
+- 估算与探测共用一套尺子: `contextFitsWindow` 走 `estimateModelTokens`, 在基准口径(ASCII 4 字符/token, 非 ASCII 每字 1)之上乘以探测校准出的 tokenizer 密度比(按「渠道:模型」缓存于 `tokenDensityCache`, 探测写入, 进程内有效)。探测说装得下的, 路由判定同尺; 未校准过的模型维持基准口径。拒绝消息里的「请求约 X token」也用同一估算, 保证消息数字与判定依据一致。
 - 分组配置 JSON 里 `context_fit_enabled` 缺省为 false，旧分组行为不变。

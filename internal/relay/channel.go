@@ -238,12 +238,14 @@ func maxReasoningEffortFor(channel model.Channel, modelName string) string {
 	return ""
 }
 
-// effectiveContextWindow 优先用手动覆盖值, 否则回落到上游元数据。
-func effectiveContextWindow(limits map[string]model.ChannelModelLimit, modelName string, metadata int) int {
+// effectiveContextWindow 返回人工验证过的窗口覆盖值(探测「应用」或编辑器手填)。
+// 同步目录带来的窗口是文档值, 未经实测, 不作为过滤依据: 未验证不拦, 宁可放行
+// 也不基于猜测误拒; 返回 0 表示该模型没有可信窗口, 调用方应放行。
+func effectiveContextWindow(limits map[string]model.ChannelModelLimit, modelName string) int {
 	if limit, ok := lookupModelLimit(limits, modelName); ok && limit.ContextWindow != nil && *limit.ContextWindow > 0 {
 		return *limit.ContextWindow
 	}
-	return metadata
+	return 0
 }
 
 // applyChannelModelLimits 将模型输出与思考配置按渠道协议写入上游请求体。

@@ -442,8 +442,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			}
 
 			// 上下文装不下时跳过该成员, 不计成员失败。
-			contextWindow := effectiveContextWindow(channel.ModelLimits, channelModel.Name, channelModel.ContextWindow)
-			if relayConfig.ContextFitEnabled && !contextFitsWindow(raw.Body, contextWindow) {
+			contextWindow := effectiveContextWindow(channel.ModelLimits, channelModel.Name)
+			// 未验证(无人工覆盖)的模型没有可信窗口, 直接放行不猜; 只拦已验证的。
+			if relayConfig.ContextFitEnabled && contextWindow > 0 && !contextFitsWindow(raw.Body, contextWindow, channel.ID, channelModel.Name) {
 				contextSkipped[item.ID] = true
 				if contextWindow > maxCandidateWindow {
 					maxCandidateWindow = contextWindow
@@ -455,7 +456,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					detail := fmt.Errorf(
 						"%s（请求约 %d token，候选集最大窗口 %d token）",
 						errContextWindowTooSmall.Error(),
-						estimateRequestTokens(raw.Body),
+						estimateModelTokens(raw.Body, channel.ID, channelModel.Name),
 						maxCandidateWindow,
 					)
 					request.markFailed(detail, "", nil)
