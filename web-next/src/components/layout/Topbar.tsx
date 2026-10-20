@@ -77,7 +77,11 @@ export function Topbar({ onOpenCommand, onOpenNavigation }: TopbarProps) {
         >
           <Search className="h-4 w-4" aria-hidden />
           <span className="hidden lg:inline">命令面板</span>
-          <kbd className="hidden rounded border border-border px-1 text-[10px] text-ink-subtle lg:inline">
+          {/* 快捷键由 aria-keyshortcuts 表达; 这里隐藏可见文本, 避免与 aria-label 不一致 */}
+          <kbd
+            aria-hidden
+            className="hidden rounded border border-border px-1 text-[10px] text-ink-subtle lg:inline"
+          >
             Ctrl/Cmd + K
           </kbd>
         </Button>
