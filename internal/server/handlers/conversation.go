@@ -30,7 +30,7 @@ func clearConversations(c *gin.Context) {
 	removed, err := op.ClearConversationArchives(c.Request.Context())
 	if err != nil {
 		log.Errorf("failed to clear conversation archives: %v", err)
-		resp.Error(c, http.StatusInternalServerError, resp.ErrInternalServer)
+		resp.Error(c, http.StatusInternalServerError, "清理对话归档失败: "+err.Error())
 		return
 	}
 	resp.Success(c, gin.H{"removed": removed})
@@ -43,7 +43,7 @@ func getConversationStats(c *gin.Context) {
 	stats, err := op.GetConversationStats(c.Request.Context())
 	if err != nil {
 		log.Errorf("failed to read conversation stats: %v", err)
-		resp.Error(c, http.StatusInternalServerError, resp.ErrInternalServer)
+		resp.Error(c, http.StatusInternalServerError, "读取对话统计失败: "+err.Error())
 		return
 	}
 	resp.Success(c, stats)

@@ -64,7 +64,7 @@ func testProxy(c *gin.Context) {
 	}
 	url := strings.TrimSpace(req.URL)
 	if url == "" {
-		resp.Error(c, http.StatusBadRequest, "proxy url is required")
+		resp.Error(c, http.StatusBadRequest, "请填写代理地址")
 		return
 	}
 

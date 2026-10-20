@@ -84,22 +84,22 @@ func stopRequest(c *gin.Context) {
 		return
 	}
 	if !relay.StopRequestByID(id) {
-		resp.Error(c, http.StatusNotFound, "request not found")
+		resp.Error(c, http.StatusNotFound, "请求不存在")
 		return
 	}
-	resp.Success(c, "request stopped")
+	resp.Success(c, "请求已停止")
 }
 
 // interruptRound 中止请求当前轮次匹配的上游调用。
 func interruptRound(c *gin.Context) {
 	requestID, err := strconv.ParseUint(c.Param("request_id"), 10, 64)
 	if err != nil {
-		resp.Error(c, http.StatusBadRequest, "invalid request id")
+		resp.Error(c, http.StatusBadRequest, "请求 ID 无效")
 		return
 	}
 	round, err := strconv.Atoi(c.Param("round"))
 	if err != nil || round < 1 {
-		resp.Error(c, http.StatusBadRequest, "invalid round")
+		resp.Error(c, http.StatusBadRequest, "轮次无效")
 		return
 	}
 	if !relay.Interrupt(requestID, round) {
@@ -151,7 +151,7 @@ func getStopAllState(c *gin.Context) {
 func getRequestBody(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		resp.Error(c, http.StatusBadRequest, "invalid request id")
+		resp.Error(c, http.StatusBadRequest, "请求 ID 无效")
 		return
 	}
 	resp.Success(c, relay.RequestBody(id))
@@ -161,7 +161,7 @@ func getRequestBody(c *gin.Context) {
 func getResponseBody(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		resp.Error(c, http.StatusBadRequest, "invalid request id")
+		resp.Error(c, http.StatusBadRequest, "请求 ID 无效")
 		return
 	}
 	resp.Success(c, relay.ResponseBody(id))
@@ -173,7 +173,7 @@ func listFailures(c *gin.Context) {
 	if raw := c.Query("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 {
-			resp.Error(c, http.StatusBadRequest, "invalid limit")
+			resp.Error(c, http.StatusBadRequest, "limit 无效")
 			return
 		}
 		limit = parsed
@@ -187,7 +187,7 @@ func listErrorLogs(c *gin.Context) {
 	if raw := c.Query("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 {
-			resp.Error(c, http.StatusBadRequest, "invalid limit")
+			resp.Error(c, http.StatusBadRequest, "limit 无效")
 			return
 		}
 		limit = parsed

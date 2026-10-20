@@ -57,7 +57,7 @@ func createAPIKey(c *gin.Context) {
 	if req.APIKey == "" {
 		generated, genErr := auth.GenerateAPIKey()
 		if genErr != nil {
-			resp.Error(c, http.StatusInternalServerError, resp.ErrInternalServer)
+			resp.Error(c, http.StatusInternalServerError, "生成 API 密钥失败: "+genErr.Error())
 			return
 		}
 		req.APIKey = generated
@@ -69,7 +69,7 @@ func createAPIKey(c *gin.Context) {
 			resp.Error(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, op.ErrAPIKeyValueExists):
 			// 用户提交了与现有 Key 相同的明文: 客户端冲突, 应明确 409。
-			resp.Error(c, http.StatusConflict, "API key value already exists")
+			resp.Error(c, http.StatusConflict, "该 API 密钥已存在")
 		default:
 			resp.Error(c, http.StatusInternalServerError, err.Error())
 		}
@@ -146,9 +146,9 @@ func updateAPIKey(c *gin.Context) {
 		case errors.Is(err, op.ErrAPIKeyValidation):
 			resp.Error(c, http.StatusBadRequest, err.Error())
 		case errors.Is(err, op.ErrAPIKeyValueExists):
-			resp.Error(c, http.StatusConflict, "API key value already exists")
+			resp.Error(c, http.StatusConflict, "该 API 密钥已存在")
 		case errors.Is(err, op.ErrAPIKeyNotFound):
-			resp.Error(c, http.StatusNotFound, "API key not found")
+			resp.Error(c, http.StatusNotFound, "API 密钥不存在")
 		default:
 			resp.Error(c, http.StatusInternalServerError, err.Error())
 		}
@@ -166,7 +166,7 @@ func deleteAPIKey(c *gin.Context) {
 	}
 	if err := op.APIKeyDelete(idNum, c.Request.Context()); err != nil {
 		if errors.Is(err, op.ErrAPIKeyNotFound) {
-			resp.Error(c, http.StatusNotFound, "API key not found")
+			resp.Error(c, http.StatusNotFound, "API 密钥不存在")
 			return
 		}
 		resp.Error(c, http.StatusInternalServerError, err.Error())

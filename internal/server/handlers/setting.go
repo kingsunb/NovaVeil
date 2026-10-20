@@ -63,7 +63,7 @@ func getSettingList(c *gin.Context) {
 func getSetting(c *gin.Context) {
 	key := strings.TrimSpace(c.Query("key"))
 	if key == "" {
-		resp.Error(c, http.StatusBadRequest, "missing key")
+		resp.Error(c, http.StatusBadRequest, "缺少 key 参数")
 		return
 	}
 	value, err := op.SettingGetString(model.SettingKey(key))
@@ -152,7 +152,7 @@ func importDB(c *gin.Context) {
 			if errors.As(err, &maxBytesErr) {
 				resp.Error(c, http.StatusRequestEntityTooLarge, errDBImportTooLarge.Error())
 			} else {
-				resp.Error(c, http.StatusBadRequest, "missing upload file field 'file'")
+				resp.Error(c, http.StatusBadRequest, "缺少上传文件字段 file")
 			}
 			return
 		}

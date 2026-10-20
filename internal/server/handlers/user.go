@@ -70,7 +70,7 @@ func login(c *gin.Context) {
 	loginLimiter.reset(c.Request.Context(), ip)
 	token, maxAge, err := auth.GenerateJWTToken(user.Remember)
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, resp.ErrInternalServer)
+		resp.Error(c, http.StatusInternalServerError, "签发登录令牌失败: "+err.Error())
 		return
 	}
 	middleware.SetAuthCookie(c, token, maxAge)
@@ -84,7 +84,7 @@ func logout(c *gin.Context) {
 	middleware.ClearAuthCookie(c)
 	// 单管理员: 登出即轮换 JWT 密钥, 已签发 token 全部失效, 而不仅清 cookie。
 	if err := op.AuthJWTRotateSecret(); err != nil {
-		resp.Error(c, http.StatusInternalServerError, resp.ErrInternalServer)
+		resp.Error(c, http.StatusInternalServerError, "轮换登录密钥失败: "+err.Error())
 		return
 	}
 	resp.Success(c, nil)
@@ -98,7 +98,7 @@ func changePassword(c *gin.Context) {
 	}
 	if err := op.UserChangePassword(user.OldPassword, user.NewPassword); err != nil {
 		if errors.Is(err, op.ErrIncorrectOldPassword) {
-			resp.Error(c, http.StatusBadRequest, "incorrect old password")
+			resp.Error(c, http.StatusBadRequest, "原密码不正确")
 			return
 		}
 		if errors.Is(err, op.ErrPasswordValidation) {
@@ -108,13 +108,13 @@ func changePassword(c *gin.Context) {
 		if errors.Is(err, op.ErrInitialPasswordFileCleanupFailed) {
 			// 改密已生效, 仅初始密码文件清理失败: 返回成功并附带告警,
 			// 不让客户端误以为改密未发生。
-			resp.Success(c, "password changed successfully, but failed to remove the initial password file")
+			resp.Success(c, "密码已修改，但删除初始密码文件失败")
 			return
 		}
 		resp.Error(c, http.StatusInternalServerError, resp.ErrDatabase)
 		return
 	}
-	resp.Success(c, "password changed successfully")
+	resp.Success(c, "密码已修改")
 }
 
 func changeUsername(c *gin.Context) {
@@ -135,13 +135,13 @@ func changeUsername(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, op.ErrIncorrectOldPassword) {
-			resp.Error(c, http.StatusBadRequest, "incorrect password")
+			resp.Error(c, http.StatusBadRequest, "密码不正确")
 			return
 		}
-		resp.Error(c, http.StatusInternalServerError, resp.ErrInternalServer)
+		resp.Error(c, http.StatusInternalServerError, "修改密码失败: "+err.Error())
 		return
 	}
-	resp.Success(c, "username changed successfully")
+	resp.Success(c, "用户名已修改")
 }
 
 func status(c *gin.Context) {

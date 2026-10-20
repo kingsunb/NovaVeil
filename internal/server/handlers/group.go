@@ -23,7 +23,7 @@ import (
 func writeGroupOpError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, op.ErrGroupNotFound):
-		resp.Error(c, http.StatusNotFound, "group not found")
+		resp.Error(c, http.StatusNotFound, "分组不存在")
 	case errors.Is(err, op.ErrGroupRefTargetMissing):
 		// 引用成员指向不存在的目标分组, 属「目标资源缺失」, 400 即可, i18n 友好。
 		resp.Error(c, http.StatusBadRequest, err.Error())
@@ -178,7 +178,7 @@ func deleteGroup(c *gin.Context) {
 	}
 	// 回收已删除分组的进程内路由状态与会话粘合, 防止跨建删的条目永久滞留。
 	relay.RemoveGroupRoute(id)
-	resp.Success(c, "group deleted successfully")
+	resp.Success(c, "分组已删除")
 }
 
 // clearGroupCooldown 清理指定分组下全部成员级冷却、Key 冷却与限速窗口, 含引用成员间接命中的渠道;

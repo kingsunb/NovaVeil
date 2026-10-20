@@ -166,7 +166,8 @@ const forbiddenGuideExemptPaths = new Set<string>([
 function isPasswordChangeRequired(res: Response, message: string): boolean {
   return (
     res.headers.get("x-novaveil-error") === "password_change_required" ||
-    message === "Password change required before performing this operation"
+    // 兼容未带标记头的老版本后端, 文案需与 resp.ErrMustChangePassword 保持一致。
+    message === "请先修改初始密码，再执行该操作"
   );
 }
 
@@ -249,11 +250,11 @@ async function http<T>(
     raw = await res.text();
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
-    throw new APIError(0, message || "Failed to read response", undefined, "network");
+    throw new APIError(0, message || "读取响应失败", undefined, "network");
   }
 
   if (!res.ok) {
-    const errorMessage = parseErrorMessage(raw, `Request failed: ${res.status}`);
+    const errorMessage = parseErrorMessage(raw, `请求失败（HTTP ${res.status}）`);
     broadcastAuthFailure(
       res.status,
       errorMessage,
@@ -327,11 +328,11 @@ async function rawDownload(
     throw new APIError(0, message || "Network request failed", undefined, "network");
   }
   if (init.signal?.aborted) {
-    throw new APIError(0, "Request aborted", undefined, "network");
+    throw new APIError(0, "请求已取消", undefined, "network");
   }
   const text = await res.text();
   if (!res.ok) {
-    let message = res.statusText || "Request failed";
+    let message = `请求失败（HTTP ${res.status}）`;
     try {
       const env = JSON.parse(text) as Partial<Envelope<unknown>>;
       message = env.message || message;
