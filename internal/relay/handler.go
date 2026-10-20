@@ -19,6 +19,7 @@ import (
 	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
 	"github.com/kingsunb/NovaVeil/internal/client"
+	"github.com/kingsunb/NovaVeil/internal/helper"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/kingsunb/NovaVeil/internal/relay/mask"
@@ -390,6 +391,16 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 写入该 Key 的明文并使用其 Account/ID 解析代理模板; Remark 仅展示不参与。
 				effective, dispatchErr = effectiveChannelForKey(channel, selectedKey)
 			}
+			// OpenCode 免费档按出口 IP 轮换代理账号。
+			proxyAccount := ""
+			if dispatchErr == nil && proxyNeedsOpencodeAccount(channel) {
+				candidate := pickOpencodeProxyAccount(ctx, channel.ID)
+				if resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate); resolveErr == nil {
+					addr := resolved.String()
+					effective.ChannelProxy = &addr
+					proxyAccount = candidate
+				}
+			}
 
 			if dispatchErr != nil {
 				// 客户端已取消时不再落账失败, 直接以取消终态结束请求。
@@ -500,6 +511,14 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			if err == nil && metadataStreaming && roundCtx.Err() != nil {
 				result.Close()
 				err = memberTimeoutError(metadataStreaming, timeoutSeconds)
+			}
+			// 代理账号结果回填: 成功记成功, 403 冷却 12 小时。
+			if proxyAccount != "" {
+				if err == nil {
+					markOpencodeProxySuccess(channel.ID, proxyAccount)
+				} else if code, ok := UpstreamStatusCode(err); ok && code == http.StatusForbidden {
+					markOpencodeProxyForbidden(channel.ID, proxyAccount)
+				}
 			}
 
 			if err != nil {

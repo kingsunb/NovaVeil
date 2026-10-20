@@ -76,6 +76,7 @@ func InitDB(dbType, dsn string, debug bool) error {
 		&model.ErrorLog{},
 		&model.ClientStat{},
 		&model.UsageBucket{},
+		&model.OpencodeProxyAccount{},
 		&migrate.MigrationRecord{},
 	); err != nil {
 		return err
