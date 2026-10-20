@@ -91,17 +91,21 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	// 之后, 保证 model 名已写入正文且渠道参数/请求头已应用; 折叠仅在客户端非流式且改写
 	// 把 stream 置真时触发(此时上游返回 SSE, 需聚合回 JSON)。
 	collapsed := false
+	// OpenCode 免费档的 Accept 由官方客户端决定(见 opencodeFreeLaneAccept), 需绕过流式透传
+	// 的默认 text/event-stream; 其余渠道留空, 行为与改动前完全一致。
+	opencodeAccept := ""
 	if isOpencodeFreeModel(channel, bodyModelName(request.Body)) {
-		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)不动。
+		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)只补 Accept。
 		applyOpencodeFreeLaneHeaders(channel, request, bodyModelName(request.Body))
+		opencodeAccept = opencodeFreeLaneAccept(channel)
 		if isChatFormat(format) {
 			var shaped bool
-			request.Body, shaped = shapeOpencodeFreeBody(request.Body)
+			request.Body, shaped = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(channel))
 			collapsed = shaped && !streaming
 		}
 	}
 	if streaming {
-		resp, streamErr := sendPassthroughStream(ctx, format, request, client)
+		resp, streamErr := sendPassthroughStream(ctx, format, request, client, opencodeAccept)
 		if streamErr != nil {
 			releaseConcurrency()
 			return nil, streamErr
@@ -112,7 +116,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		return resp, nil
 	}
 	if collapsed {
-		resp, err := sendPassthroughStream(ctx, format, request, client)
+		resp, err := sendPassthroughStream(ctx, format, request, client, opencodeAccept)
 		if err != nil {
 			releaseConcurrency()
 			return nil, err
@@ -172,13 +176,19 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 }
 
 // sendPassthroughStream 发起同协议流式请求并预读有效性窗口, 窗口通过验证才算本轮取得可提交响应。
-func sendPassthroughStream(ctx context.Context, format llm.APIFormat, request *httpclient.Request, client *http.Client) (*upstreamResponse, error) {
+// accept 非空时用它作为出站 Accept(OpenCode 免费档的官方值), 否则用默认 text/event-stream。
+func sendPassthroughStream(ctx context.Context, format llm.APIFormat, request *httpclient.Request, client *http.Client, accept string) (*upstreamResponse, error) {
 	rawRequest, err := httpclient.BuildHttpRequest(ctx, request)
 	if err != nil {
 		return nil, err
 	}
 	// 客户端的 Accept 属于库自管头不会透传, 需显式声明才能让上游按 SSE 返回。
-	rawRequest.Header.Set("Accept", "text/event-stream")
+	// OpenCode 免费档由调用方传入官方 Accept(v1 */*, v2 application/json, text/event-stream),
+	// 不能用默认值覆盖——上游会把 Accept 与官方客户端不一致当作指纹差异。
+	if accept == "" {
+		accept = "text/event-stream"
+	}
+	rawRequest.Header.Set("Accept", accept)
 
 	// client 由 ChannelHttpClient 取得, 内置 upstreamCheckRedirect: 跨源重定向与 HTTPS→HTTP
 	// 降级被拒绝、跳转次数受限。被拒绝的 3xx 在此以 err 返回(Body 已由 net/http 关闭),
@@ -282,7 +292,7 @@ func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *
 		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)不动。
 		applyOpencodeFreeLaneHeaders(m.channel, request, bodyModelName(request.Body))
 		if m.format == llm.APIFormatOpenAIChatCompletion {
-			request.Body, _ = shapeOpencodeFreeBody(request.Body)
+			request.Body, _ = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(m.channel))
 		}
 	}
 	// 角色归一与渠道参数覆盖之后再回写。Chat 归一会剥掉白名单外的顶层字段,

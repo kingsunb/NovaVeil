@@ -23,10 +23,10 @@ opencode2api 在 2026-10-17 前后关闭了一批 OpenCode 免费档兼容缺口
 
 ### v1 档动态头（`internal/relay/opencode_free.go`）
 
-新增 `applyOpencodeFreeLaneHeaders(channel, request, modelName)`，在 `upstream.go` 两处 `isOpencodeFreeModel` 块内、`applyChannelConfig` 之后调用。仅对 v1 档（`isOpencodeV1Lane`：`OpenCodeTier=="zen"` 且 BaseURL 含 `/zen`）改写头，v2 档（`/inference`）不动：
+新增 `applyOpencodeFreeLaneHeaders(channel, request, modelName)`，在 `upstream.go` 两处 `isOpencodeFreeModel` 块内、`applyChannelConfig` 之后调用。v1 档（`isOpencodeV1Lane`：`OpenCodeTier=="zen"` 且 BaseURL 含 `/zen`）改写下列头；v2 档（`/inference`）只补官方 Accept，其余头由渠道静态 `CustomHeader` 决定（Accept 的补全见 [头集合对齐](../bug-fix/2026-10-20-opencode-free-lane-header-parity.md)）：
 
 - **User-Agent**：按出站协议（`opencodeModelProtocol` 查 `channel.Models[].UpstreamProtocol`，默认 chat）选 provider-utils 版本（chat=4.0.23 / responses=4.0.40 / anthropic=4.0.46），拼成 `opencode/1.19.3 ai-sdk/provider-utils/<ver> runtime/bun/1.3.14`。
-- **x-opencode-request**：`opencodeid.GenerateMessageID()`（`msg_` + 12hex + 14alnum 递增 id）。v2 档不发此头（网关 403）。
+- **x-opencode-request**：`opencodeid.GenerateMessageID()`（`msg_` + 12hex + 14alnum，时间部分按 `Identifier.ascending()` 升序编码；会话 ID 的 descending 不适用于消息 ID，见 [头集合对齐](../bug-fix/2026-10-20-opencode-free-lane-header-parity.md)）。v2 档不发此头（网关 403）。
 - **x-opencode-project**：移除 `OpenCode Free Old` 的静态 `prj_<24hex>` CustomHeader，改由既有 `injectOpencodeCorrelationHeaders` 注入裸 40-hex（`opencodeid.ProjectID()`）。
 
 `opencodeid.go` 抽出 `generateOpencodePrefixedID(prefix)` 共用毫秒计数器，`GenerateSessionID`（`ses_`）与新增 `GenerateMessageID`（`msg_`）同形且同毫秒递增。
@@ -42,6 +42,7 @@ opencode2api 在 2026-10-17 前后关闭了一批 OpenCode 免费档兼容缺口
 - 部分取代 [OpenCode Free Old 内置渠道](../feature/2026-10-17-opencode-free-legacy-zen-channel.md)：那篇的 v1 静态 UA/`prj_` 项目头事实已就地同步为动态注入，本篇承载动态化与 `x-opencode-request` 策略翻转的理由。两篇互链，那篇仍活跃。
 - 正交 [opencode v2 客户端头与端点对齐](../bug-fix/2026-10-15-opencode-v2-client-header-endpoint-alignment.md)：那篇对齐 v2 头集合，本篇在其上 bump 版本号并加 v1 动态头与 Bun 传输，互不取代。
 - 正交 [OpenCode Zen 免费档 Agent 形态请求改写](../bug-fix/2026-09-29-opencode-free-tier-agent-shape-rewrite.md)：那篇是请求体改写，本篇是请求头与传输层，互不取代。
+- 后续 [OpenCode 免费档头集合对齐官方客户端](../bug-fix/2026-10-20-opencode-free-lane-header-parity.md)：那篇在本篇之上修正 `x-opencode-request` 的编码方向、按档位补 Accept、并按档位收窄 v1 关联头；本篇的 Bun 传输与 v1 动态头事实仍成立，不取代。
 - 活跃树无 proposed / rejected 覆盖 Bun 传输或 v1 动态头；无完全吸收或需归档的笔记。
 
 ## 备选方案

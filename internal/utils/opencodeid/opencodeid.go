@@ -7,8 +7,10 @@ package opencodeid
 
 import (
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
+	"math/big"
+	"regexp"
 	"sync/atomic"
 	"time"
 )
@@ -24,26 +26,31 @@ var opencodeIDTimestamp atomic.Int64
 
 // GenerateSessionID 生成 opencode 格式的会话 ID:
 //   - 前缀 "ses_"
-//   - 12 个十六进制字符: 由 ~(timestamp_ms * 4096 + counter) 的高 6 字节(大端)编码
+//   - 12 个十六进制字符: 由 ~(timestamp_ms * 4096 + counter) 的低 6 字节(大端)编码
 //   - 14 个随机字符: 从 [0-9A-Za-z] 中选取
 //
+// 会话 ID 用 descending 编码(时间部分取反), 与 opencode 的 Identifier.descending() 一致,
 // 算法逆向自 opencode 二进制中的 tU(!0) 函数。
 func GenerateSessionID() string {
-	return generateOpencodePrefixedID("ses_")
+	return generateOpencodePrefixedID("ses_", true)
 }
 
-// GenerateMessageID 生成 v1 档(/zen) x-opencode-request 头所需的递增消息 ID,
+// GenerateMessageID 生成 v1 档(/zen) x-opencode-request 头所需的消息 ID,
 // 格式 msg_ + 12 位十六进制 + 14 位字母数字, 与 opencode 1.x 客户端的消息 ID 同形。
 // opencode2api 在 v1 档每个模型请求上发送此头(递增 msg_ id); v2 档(/inference)不发
 // (v2 网关对 x-opencode-request 返回 403 FreeTierError)。
+//
+// 消息 ID 用 ascending 编码(时间部分不取反), 与 opencode 的 Identifier.ascending() 一致:
+// 官方客户端只有会话 ID 走 descending, 消息 ID 是升序。取反后时间戳方向相反, 解出来的
+// 时间会落在未来并把同一会话内的消息序颠倒, 属于可被上游识别的编码差异。
 func GenerateMessageID() string {
-	return generateOpencodePrefixedID("msg_")
+	return generateOpencodePrefixedID("msg_", false)
 }
 
 // generateOpencodePrefixedID 生成 <prefix> + 12 位十六进制 + 14 位字母数字的 ID,
-// 复用 opencode 的毫秒计数器保证同毫秒内递增。会话 ID(ses_)与 v1 请求消息 ID(msg_)共用,
-// 保证两处注入值格式与递增性一致。算法逆向自 opencode 二进制中的 tU(!0) 函数。
-func generateOpencodePrefixedID(prefix string) string {
+// 复用 opencode 的毫秒计数器保证同毫秒内递增。descending 决定时间部分的编码方向:
+// true 取反(会话 id), false 保持升序(消息 id)。
+func generateOpencodePrefixedID(prefix string, descending bool) string {
 	now := time.Now().UnixMilli()
 
 	// 计数器管理: 时间戳变更时重置, 每次调用递增。与 opencode 的 tU() 行为一致。
@@ -58,14 +65,17 @@ func generateOpencodePrefixedID(prefix string) string {
 	// val = timestamp_ms * 4096 + counter, 与 opencode 的 BigInt(Y)*0x1000n+BigInt(cU) 一致。
 	val := now*0x1000 + counter
 
-	// ID 使用按位取反(^), 与 opencode 的 tU(true) → ~$ 一致。
-	// Go 的 int64 对负数的 >> 做算术右移(符号扩展), 与 JS BigInt 行为一致。
-	inverted := ^val
+	// descending 取反, 与 opencode 的 tU(true) → ~$ 一致; ascending 原样保留。
+	// 统一换算成 uint64 再移位, 避免负数算术右移的符号扩展参与取字节。
+	encoded := uint64(val)
+	if descending {
+		encoded = uint64(^val)
+	}
 
-	// 提取高 6 字节(大端序) → 12 个十六进制字符。
+	// 提取低 6 字节(大端序) → 12 个十六进制字符。
 	buf := make([]byte, 6)
 	for i := 0; i < 6; i++ {
-		buf[i] = byte((inverted >> uint(40-8*i)) & 0xff)
+		buf[i] = byte((encoded >> uint(40-8*i)) & 0xff)
 	}
 	hexPart := hex.EncodeToString(buf)
 
@@ -102,17 +112,59 @@ func GenerateRequestID() string {
 	return "req_" + hex.EncodeToString(buf)
 }
 
-// defaultProjectSignal 是固定默认项目信号, 与 opencode 官方客户端的 directory-based
-// project ID 语义对齐: 无项目信号的请求共享同一稳定项目 ID。
+// defaultProjectSignal 是缺省项目信号: 入站请求未带项目标识时统一使用。
 const defaultProjectSignal = "directory:novaveil:default-project"
 
-// projectIDHash 预先计算固定默认项目信号的 SHA-1, 生成裸 40-hex 项目 ID。
-// opencode v2 官方客户端用 Hash.fast = SHA-1 生成项目 ID(packages/util/src/hash.ts),
-// 格式为裸 40-hex, 不带 prj_ 前缀(packages/schema/src/project-id.ts 无前缀)。
-var projectIDHash = sha1.Sum([]byte(defaultProjectSignal))
+// officialSessionPattern 等识别官方会话号形态。
+var (
+	officialSessionPattern    = regexp.MustCompile(`^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`)
+	descendingTimePartPattern = regexp.MustCompile(`^[0-9a-f]{9}f[c-f][0-9a-f]$`)
+	gitCommitPattern          = regexp.MustCompile(`^[0-9a-f]{40}$`)
+)
 
-// ProjectID 返回 opencode 关联项目 ID, 格式为裸 40-hex(SHA-1),
-// 对所有请求稳定不变。与 opencode v2 官方客户端的 directory-based project ID 格式一致。
-func ProjectID() string {
-	return hex.EncodeToString(projectIDHash[:])
+// SessionIDFromSignal 由信号确定性派生官方 ses_ 会话号。
+func SessionIDFromSignal(signal string) string {
+	if officialSessionPattern.MatchString(signal) && descendingTimePartPattern.MatchString(signal[4:16]) {
+		return signal
+	}
+	sum := sha256.Sum256([]byte("ses\x00" + signal))
+	return "ses_" + descendingTimePart(sum[:6]) + base62Fixed(sum[6:16], 14)
 }
+
+// descendingTimePart 取反 48 位时间部分, 落在官方 descending 形态。
+func descendingTimePart(hash []byte) string {
+	current := (uint64(hash[0])<<28 | uint64(hash[1])<<20 | uint64(hash[2])<<12 |
+		uint64(hash[3])<<4 | uint64(hash[4])>>4) << 12
+	current |= 1
+	inverted := ^current & 0xFFFFFFFFFFFF
+	return hex.EncodeToString([]byte{
+		byte(inverted >> 40), byte(inverted >> 32), byte(inverted >> 24),
+		byte(inverted >> 16), byte(inverted >> 8), byte(inverted),
+	})
+}
+
+// base62Fixed 把字节串编码成定宽 Base62。
+func base62Fixed(data []byte, width int) string {
+	n := new(big.Int).SetBytes(data)
+	base := big.NewInt(62)
+	out := make([]byte, width)
+	remainder := new(big.Int)
+	for i := width - 1; i >= 0; i-- {
+		n.DivMod(n, base, remainder)
+		out[i] = opencodeIDCharset[remainder.Int64()]
+	}
+	return string(out)
+}
+
+// ProjectIDForLane 按档位渲染裸 40-hex 项目号。
+func ProjectIDForLane(signal string, v1 bool) string {
+	if signal == "" {
+		signal = defaultProjectSignal
+	}
+	if v1 && (signal == "global" || gitCommitPattern.MatchString(signal)) {
+		return signal
+	}
+	sum := sha256.Sum256([]byte("opencode-project\x00" + signal))
+	return hex.EncodeToString(sum[:20])
+}
+

@@ -45,7 +45,7 @@ func TestIsOpencodeFreeModel(t *testing.T) {
 // TestShapeOpencodeFreeBodyForcesAgentShape 验证非流式无工具正文被规范成 Agent 形态:
 // stream=true、include_usage=true、注入全部五个核心工具。
 func TestShapeOpencodeFreeBodyForcesAgentShape(t *testing.T) {
-	body, changed := shapeOpencodeFreeBody([]byte(`{"model":"deepseek-v4-flash-free","messages":[{"role":"user","content":"hi"}]}`))
+	body, changed := shapeOpencodeFreeBody([]byte(`{"model":"deepseek-v4-flash-free","messages":[{"role":"user","content":"hi"}]}`), false)
 	if !changed {
 		t.Fatalf("应判定发生改写")
 	}
@@ -86,7 +86,7 @@ func TestShapeOpencodeFreeBodyIdempotent(t *testing.T) {
 			}
 			return strings.Join(parts, ",")
 		}() + `]}`)
-	_, changed := shapeOpencodeFreeBody(body)
+	_, changed := shapeOpencodeFreeBody(body, false)
 	if changed {
 		t.Fatalf("已完备的 Agent 形态应无改写")
 	}
@@ -94,7 +94,7 @@ func TestShapeOpencodeFreeBodyIdempotent(t *testing.T) {
 
 // TestShapeOpencodeFreeBodyReplacesSameNameTools 验证客户端声明的同名核心工具被替换为真实定义。
 func TestShapeOpencodeFreeBodyReplacesSameNameTools(t *testing.T) {
-	body, changed := shapeOpencodeFreeBody([]byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[{"type":"function","function":{"name":"shell","description":"my custom","parameters":{"type":"object","properties":{"x":{"type":"string"}}}}}]}`))
+	body, changed := shapeOpencodeFreeBody([]byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[{"type":"function","function":{"name":"shell","description":"my custom","parameters":{"type":"object","properties":{"x":{"type":"string"}}}}}]}`), false)
 	if !changed {
 		t.Fatalf("同名核心工具应被替换为真实定义")
 	}
@@ -109,7 +109,7 @@ func TestShapeOpencodeFreeBodyReplacesSameNameTools(t *testing.T) {
 
 // TestShapeOpencodeFreeBodyMergesMissingTools 验证非核心工具原样保留、缺失核心工具被追加。
 func TestShapeOpencodeFreeBodyMergesMissingTools(t *testing.T) {
-	body, _ := shapeOpencodeFreeBody([]byte(`{"model":"x-free","tools":[{"type":"function","function":{"name":"mytool","description":"custom","parameters":{"type":"object","properties":{"x":{"type":"string"}}}}}]}`))
+	body, _ := shapeOpencodeFreeBody([]byte(`{"model":"x-free","tools":[{"type":"function","function":{"name":"mytool","description":"custom","parameters":{"type":"object","properties":{"x":{"type":"string"}}}}}]}`), false)
 	raw := gjson.GetBytes(body, "tools").Raw
 	// 非核心工具 mytool 字节完全保留。
 	if !strings.Contains(raw, `"description":"custom"`) {
@@ -128,7 +128,7 @@ func TestShapeOpencodeFreeBodyMergesMissingTools(t *testing.T) {
 
 // TestShapeOpencodeFreeBodyNonArrayToolsUntouched 验证 tools 非数组(客户端异常)时不改写。
 func TestShapeOpencodeFreeBodyNonArrayToolsUntouched(t *testing.T) {
-	body, changed := shapeOpencodeFreeBody([]byte(`{"model":"x-free","tools":"nope"}`))
+	body, changed := shapeOpencodeFreeBody([]byte(`{"model":"x-free","tools":"nope"}`), false)
 	if gjson.GetBytes(body, "tools").String() != "nope" {
 		t.Fatalf("tools 非数组时不应篡改")
 	}
@@ -137,4 +137,40 @@ func TestShapeOpencodeFreeBodyNonArrayToolsUntouched(t *testing.T) {
 		t.Fatalf("原 tools 值应保留: %s", body)
 	}
 	_ = changed
+}
+
+// TestShapeOpencodeFreeBodyV1ReadTool 验证 v1 档只保证单个 read 工具, 且不改名客户端工具。
+func TestShapeOpencodeFreeBodyV1ReadTool(t *testing.T) {
+	t.Run("无工具时补 read 占位", func(t *testing.T) {
+		body, changed := shapeOpencodeFreeBody([]byte(`{"model":"x-free","messages":[]}`), true)
+		if !changed {
+			t.Fatalf("v1 档缺工具时应注入 read")
+		}
+		tools := gjson.GetBytes(body, "tools").Array()
+		if len(tools) != 1 || tools[0].Get("function.name").String() != v1ReadToolName {
+			t.Fatalf("应只注入单个 %q, 实际 %s", v1ReadToolName, gjson.GetBytes(body, "tools").Raw)
+		}
+	})
+
+	t.Run("已有 read 时不动", func(t *testing.T) {
+		body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[{"type":"function","function":{"name":"read","description":"client","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}]}`)
+		got, changed := shapeOpencodeFreeBody(body, true)
+		if changed {
+			t.Fatalf("已有 read 时不应改写: %s", got)
+		}
+		if !strings.Contains(string(got), `"description":"client"`) {
+			t.Fatalf("客户端 read 定义应原样保留: %s", got)
+		}
+	})
+
+	t.Run("read 别名保持原名并补占位", func(t *testing.T) {
+		body, _ := shapeOpencodeFreeBody([]byte(`{"model":"x-free","tools":[{"type":"function","function":{"name":"ReadFile","description":"client","parameters":{"type":"object","properties":{}}}}]}`), true)
+		raw := gjson.GetBytes(body, "tools").Raw
+		if !strings.Contains(raw, `"name":"ReadFile"`) {
+			t.Fatalf("客户端别名不应被重命名: %s", raw)
+		}
+		if !strings.Contains(raw, `"name":"read"`) {
+			t.Fatalf("应补一个 read 占位: %s", raw)
+		}
+	})
 }

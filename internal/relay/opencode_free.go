@@ -116,20 +116,55 @@ func opencodeModelProtocol(channel model.Channel, modelName string) string {
 	return model.UpstreamProtocolChat
 }
 
+// opencodeV1Accept / opencodeV2Accept 是两档官方客户端发出的 Accept: v1 模型请求由
+// AI SDK 以 fetch 默认值发出(*/*), v2 CLI 显式要求 JSON 或 SSE。
+const (
+	opencodeV1Accept = "*/*"
+	opencodeV2Accept = "application/json, text/event-stream"
+)
+
+// isOpencodeFreeLane 报告渠道是否属于 OpenCode 免费档: OpencodeCompat 且档位为 "zen"
+// (/zen 与 /inference)。/zen/v1、/zen/go 的 go 档与其余渠道均不在内。
+// 与 helper.ChannelHttpClient 选择 Bun 传输的门控同口径。
+func isOpencodeFreeLane(channel model.Channel) bool {
+	return channel.OpencodeCompat && model.OpenCodeTier(channel.BaseURL) == "zen"
+}
+
+// opencodeFreeLaneAccept 返回该免费档官方客户端的 Accept 值; 非免费档返回空串。
+// 调用方据此让出站请求使用官方 Accept, 而不是流式透传的默认 text/event-stream:
+// 上游会把 Accept 不一致视为非官方客户端。
+func opencodeFreeLaneAccept(channel model.Channel) string {
+	if !isOpencodeFreeLane(channel) {
+		return ""
+	}
+	if isOpencodeV1Lane(channel) {
+		return opencodeV1Accept
+	}
+	return opencodeV2Accept
+}
+
 // applyOpencodeFreeLaneHeaders 在连线上游前按档位设置 OpenCode 免费档的请求头:
 //   - v1 档(/zen): User-Agent 用协议相关的 opencode/1.19.3 ai-sdk/provider-utils/<ver>
-//     runtime/bun/1.3.14(<ver> 按出站协议), 并发送 x-opencode-request(msg_ 递增 id);
+//     runtime/bun/1.3.14(<ver> 按出站协议), Accept 用 */*, 并发送 x-opencode-request
+//     (msg_ 升序 id);
 //   - v2 档(/inference): User-Agent 由渠道 CustomHeader 静态设置(opencode/latest/2.0.32/cli),
-//     且不发送 x-opencode-request(v2 网关对此头 403), 本函数对 v2 不改写任何头。
+//     Accept 用 application/json, text/event-stream, 且不发送 x-opencode-request
+//     (v2 网关对此头 403)。
 //
-// 仅对 v1 档改写头, 改写发生在 applyChannelConfig 之后, 覆盖渠道静态 User-Agent(若有)。
+// 仅对免费档改写头, 改写发生在 applyChannelConfig 之后, 覆盖渠道静态同名头。
 // x-opencode-project 的裸 40-hex 由 injectOpencodeCorrelationHeaders 注入, 此处不重复。
 func applyOpencodeFreeLaneHeaders(channel model.Channel, request *httpclient.Request, modelName string) {
-	if !isOpencodeV1Lane(channel) || request == nil {
+	accept := opencodeFreeLaneAccept(channel)
+	if accept == "" || request == nil {
 		return
 	}
 	if request.Headers == nil {
 		request.Headers = make(http.Header)
+	}
+	request.Headers.Set("Accept", accept)
+	if !isOpencodeV1Lane(channel) {
+		// v2 档其余头由渠道静态 CustomHeader 配置, 这里只补 Accept。
+		return
 	}
 	ver := opencodeV1ProviderUtils[opencodeModelProtocol(channel, modelName)]
 	if ver == "" {
@@ -145,12 +180,8 @@ func bodyModelName(body []byte) string {
 	return gjson.GetBytes(body, "model").String()
 }
 
-// shapeOpencodeFreeBody 把免费档的 Chat 请求体规范化成 Agent 形态:
-// 强制 stream=true、补齐 stream_options.include_usage、注入缺失的核心工具名。
-// 已满足全部条件或不是 JSON 对象的正文原样返回。第二个返回值表示是否发生了改写;
-// 调用方据此判定折叠需要: 客户端原非流式且改写把 stream 置真时, 上游返回 SSE 须折叠回 JSON。
-// 使用 sjson/gjson 做点状改写而非整体 Marshal, 保持既有工具与消息字段的字节原样。
-func shapeOpencodeFreeBody(body []byte) ([]byte, bool) {
+// shapeOpencodeFreeBody 把免费档正文规范成 Agent 形态。
+func shapeOpencodeFreeBody(body []byte, v1Lane bool) ([]byte, bool) {
 	out := body
 	changed := false
 
@@ -165,10 +196,56 @@ func shapeOpencodeFreeBody(body []byte) ([]byte, bool) {
 			out, changed = next, true
 		}
 	}
+	if v1Lane {
+		if next, injected := ensureV1ReadTool(out); injected {
+			return next, true
+		}
+		return out, changed
+	}
 	if next, injected := ensureOpencodeFreeTools(out); injected {
 		out, changed = next, true
 	}
 	return out, changed
+}
+
+// v1ReadToolName 是 v1 档(/zen)唯一要求的工具名, 该档不校验工具定义。
+const v1ReadToolName = "read"
+
+// v1DeprecatedReadDescription 让模型忽略注入的占位 read 工具。
+const v1DeprecatedReadDescription = "DEPRECATED: This tool is deprecated and disabled. Do NOT call or reference this tool under any circumstances; ignore it completely."
+
+// ensureV1ReadTool 保证 v1 档存在单个 read 工具。
+func ensureV1ReadTool(body []byte) ([]byte, bool) {
+	tools := gjson.GetBytes(body, "tools")
+	if tools.Exists() && !tools.IsArray() {
+		return body, false
+	}
+	items := make([]string, 0, len(tools.Array())+1)
+	for _, t := range tools.Array() {
+		if t.Get("function.name").String() == v1ReadToolName {
+			return body, false
+		}
+		items = append(items, t.Raw)
+	}
+	items = append(items, v1DeprecatedReadTool())
+	next, err := sjson.SetRawBytes(body, "tools", []byte("["+strings.Join(items, ",")+"]"))
+	if err != nil {
+		return body, false
+	}
+	return next, true
+}
+
+// v1DeprecatedReadTool 生成 v1 档的禁用 read 占位定义。
+func v1DeprecatedReadTool() string {
+	b, _ := json.Marshal(map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name":        v1ReadToolName,
+			"description": v1DeprecatedReadDescription,
+			"parameters":  map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+	})
+	return string(b)
 }
 
 // ensureOpencodeFreeTools 确保核心工具存在且定义真实, 报告是否改写。

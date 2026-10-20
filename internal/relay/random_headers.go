@@ -12,6 +12,7 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/kingsunb/NovaVeil/internal/utils/opencodeid"
 	"github.com/looplj/axonhub/llm/httpclient"
+	"github.com/tidwall/gjson"
 )
 
 // opencodeSessionHeader opencode 兼容请求头的固定头名。
@@ -24,10 +25,12 @@ const opencodeSessionHeader = "x-opencode-session"
 // 对顶层会话, affinity == session.id, 故 x-opencode-session-id / x-session-affinity / X-Session-Id
 // 三者同值, 均镜像 x-opencode-session。
 const (
-	opencodeAffinityHeader  = "x-session-affinity"
-	opencodeSessionIDHeader = "x-opencode-session-id"
-	opencodeUpstreamSessID  = "X-Session-Id"
-	opencodeProjectHeader   = "x-opencode-project"
+	opencodeAffinityHeader      = "x-session-affinity"
+	opencodeSessionIDHeader     = "x-opencode-session-id"
+	opencodeUpstreamSessID      = "X-Session-Id"
+	opencodeProjectHeader       = "x-opencode-project"
+	opencodeParentHeader        = "x-parent-session-id"
+	opencodeParentSessionHeader = "x-opencode-parent-session-id"
 )
 
 // opencodeSessionIDPattern 是上游接受的 x-opencode-session 整段格式:
@@ -252,12 +255,34 @@ func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient
 		request.Headers = make(http.Header)
 	}
 	if session := request.Headers.Get(opencodeSessionHeader); session != "" {
-		request.Headers.Set(opencodeAffinityHeader, session)
 		request.Headers.Set(opencodeSessionIDHeader, session)
-		request.Headers.Set(opencodeUpstreamSessID, session)
+		// v1 档(/zen)官方客户端只发 x-opencode-session 与 x-opencode-session-id, 明确不发
+		// x-session-affinity / X-Session-Id(见 opencode2api setV1Headers: "The v1 client
+		// sends no x-session-affinity or X-Session-Id to this provider")。v2 档与其余
+		// OpencodeCompat 渠道保持三个头同值镜像。
+		if !isOpencodeV1Lane(channel) {
+			request.Headers.Set(opencodeAffinityHeader, session)
+			request.Headers.Set(opencodeUpstreamSessID, session)
+		}
 	}
-	if request.Headers.Get(opencodeProjectHeader) == "" {
-		request.Headers.Set(opencodeProjectHeader, opencodeid.ProjectID())
+	// 项目号按档位渲染, 缺省信号派生。
+	v1 := isOpencodeV1Lane(channel)
+	project := request.Headers.Get(opencodeProjectHeader)
+	if project == "" {
+		project = gjson.GetBytes(request.Body, "metadata.project_id").String()
+	}
+	request.Headers.Set(opencodeProjectHeader, opencodeid.ProjectIDForLane(project, v1))
+	// 父子会话按档位渲染。
+	parent := request.Headers.Get(opencodeParentHeader)
+	if parent == "" {
+		parent = gjson.GetBytes(request.Body, "metadata.parent_session_id").String()
+	}
+	if parent != "" {
+		if v1 {
+			parent = opencodeid.SessionIDFromSignal(parent)
+			request.Headers.Set(opencodeParentSessionHeader, parent)
+		}
+		request.Headers.Set(opencodeParentHeader, parent)
 	}
 }
 

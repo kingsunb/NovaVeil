@@ -163,8 +163,8 @@ var BuiltinFreeChannels = []model.Channel{
 		//   - 额外发送 x-opencode-request(msg_ 递增 id), v2 档不发此头(网关 403);
 		//   - legacy 档只需单个 read 工具且不校验 schema, 比 /inference 的 5 工具
 		//     逐字节校验更鲁棒, 适合作为主通道; /inference 作为 fallback。
-		// OpenCodeTier 判定 https://opencode.ai/zen 为 "zen"(免费), isOpencodeFreeModel
-		// 命中后 shapeOpencodeFreeBody 仍会注入 5 工具, legacy 档不校验 schema 故可接受。
+		// OpenCodeTier 判定 https://opencode.ai/zen 为 "zen"(免费); 命中后 v1 档只保证
+		// 单个 read 工具存在, 客户端自带的其余工具原样保留(legacy 档不校验工具集合)。
 		Name:           "OpenCode Free Old",
 		Type:           model.ChannelProviderOpenAI,
 		BaseURL:        "https://opencode.ai/zen",
