@@ -8,6 +8,8 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,21 +86,33 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 	if err != nil {
 		return nil, err
 	}
-	// 用主请求的真实值回写密度比, 下次探测直接命中缓存。
-	if result.ActualTokens > 0 {
-		tokenDensityCache.Store(tokenDensityKey(channelID, modelName), clampTokenDensity(float64(result.ActualTokens)*ratio/float64(tokens)))
+	// 反馈源优先级: 拒绝体里上游报告的实际规模 > 成功响应的 usage。
+	// 小探针校准的密度在大请求上可能非线性(实测差 1.7 倍), 拒绝体的报告值是
+	// 唯一能反映真实规模反馈的来源, 用它修正比例后重试一次即可收敛。
+	density := ratio
+	if reported, ok := parseRequestedOverflowTokens(result.Detail); ok {
+		density = clampTokenDensity(float64(reported) * ratio / float64(tokens))
+		tokenDensityCache.Store(tokenDensityKey(channelID, modelName), density)
+	} else if result.ActualTokens > 0 {
+		density = clampTokenDensity(float64(result.ActualTokens) * ratio / float64(tokens))
+		tokenDensityCache.Store(tokenDensityKey(channelID, modelName), density)
 	}
-	// 实际值与目标偏差超 1% 时, 用回写后的最新比例重试一次, 收敛到目标附近。
+	// 两种情形重试一次: 接受但偏差超 1%; 拒绝且上游报出了实际规模。
+	shouldRetry := false
 	if result.Accepted && result.ActualTokens > 0 {
 		deviation := math.Abs(float64(result.ActualTokens)-float64(tokens)) / float64(tokens)
-		if deviation > 0.01 {
-			if updated, ok := tokenDensityCache.Load(tokenDensityKey(channelID, modelName)); ok {
-				latest := clampTokenDensity(updated.(float64))
-				if retry, retryErr := probeOnce(ctx, channel, modelName, tokens, latest); retryErr == nil && retry.ActualTokens > 0 {
-					tokenDensityCache.Store(tokenDensityKey(channelID, modelName), clampTokenDensity(float64(retry.ActualTokens)*latest/float64(tokens)))
-					result = retry
-				}
+		shouldRetry = deviation > 0.01
+	} else if !result.Accepted {
+		_, shouldRetry = parseRequestedOverflowTokens(result.Detail)
+	}
+	if shouldRetry {
+		if retry, retryErr := probeOnce(ctx, channel, modelName, tokens, density); retryErr == nil {
+			if retry.ActualTokens > 0 {
+				tokenDensityCache.Store(tokenDensityKey(channelID, modelName), clampTokenDensity(float64(retry.ActualTokens)*density/float64(tokens)))
+			} else if reported, ok := parseRequestedOverflowTokens(retry.Detail); ok {
+				tokenDensityCache.Store(tokenDensityKey(channelID, modelName), clampTokenDensity(float64(reported)*density/float64(tokens)))
 			}
+			result = retry
 		}
 	}
 	return result, nil
@@ -108,6 +122,23 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 // 密度比的存储(tokenDensityCache)与夹取(clampTokenDensity)在 context_fit.go,
 // 与路由过滤共用同一份, 保证「测试判定」与「路由过滤」同尺。
 const probeCalibrationTokens = 4000
+
+// overflowRequestedRe 从拒绝体提取「你实际发了多少 token」的报告值。
+var overflowRequestedRe = regexp.MustCompile(`requested (?:about )?([\d,]+) tokens`)
+
+// parseRequestedOverflowTokens 解析上游口径的请求规模, 拿不到返回 false。
+// 例: OpenRouter 拒绝体「you requested about 1817292 tokens」→ 1817292。
+func parseRequestedOverflowTokens(detail string) (int64, bool) {
+	match := overflowRequestedRe.FindStringSubmatch(detail)
+	if match == nil {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(strings.ReplaceAll(match[1], ",", ""), 10, 64)
+	if err != nil || value <= 0 {
+		return 0, false
+	}
+	return value, true
+}
 
 // probeOnce 发送一次指定规模的探测请求并按状态码判定容量。
 func probeOnce(ctx context.Context, channel model.Channel, modelName string, tokens int, ratio float64) (*ContextProbeResult, error) {
