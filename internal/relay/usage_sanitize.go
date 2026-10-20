@@ -20,30 +20,38 @@ const suspiciousZeroEstimateSlack = 8192
 
 // sanitizeUsage 对上游上报的可疑用量做保守修复, 返回修复后的用量与是否打标。
 // 规则(按序短路):
-//   - usage == nil 或 PromptTokens > 0: 无需修复, 原样返回 false;
+//   - usage 为 nil 且请求体平凡: 无可估算内容, 原样返回 nil;
+//   - usage 非 nil 且 PromptTokens > 0: 无需修复, 原样返回 false;
 //   - 缓存豁免: prompt 明细携带任意缓存类 token(cached/write_cached 及分时 TTL 字段)大于 0 时,
 //     input 报 0 可能是全部命中缓存的真实口径, 不修复;
 //   - 平凡请求豁免: 请求体不足 suspiciousZeroMinBodyBytes 字节, 或解析不出带非空文本的 messages
 //     (如空 ping 探活), 属正常现象, 不修复;
-//   - 非平凡且 input == 0: 以请求体字节数近似估算输入 token(est = max(1, len/3)),
-//     并以请求体字节数派生的上界夹击防异常放大, 重算 TotalTokens = est + CompletionTokens。
+//   - 其余情况(含 usage 为 nil 的失败请求)一律以请求体字节数近似估算输入 token
+//     (est = max(1, len/3)), 并以请求体字节数派生的上界夹击防异常放大,
+//     重算 TotalTokens = est + CompletionTokens。失败请求上游不回 usage, 但请求量确实
+//     发出去了, 估算是日志里唯一能给出的输入规模。
 //
 // 返回值为深拷贝, 不改动调用方传入的原对象; 不修复时原样透传入参指针。
 // 请求体参数为 string: 热路径上避免了 string→[]byte 的整包拷贝(gjson.Get 直接按字符串扫描)。
 func sanitizeUsage(usage *llm.Usage, requestBody string) (*llm.Usage, bool) {
-	if usage == nil || usage.PromptTokens > 0 {
+	if usage != nil && usage.PromptTokens > 0 {
 		return usage, false
 	}
-	if details := usage.PromptTokensDetails; details != nil &&
-		(details.CachedTokens > 0 || details.WriteCachedTokens > 0 ||
-			details.WriteCached5MinTokens > 0 || details.WriteCached1HourTokens > 0) {
-		return usage, false
+	if usage != nil {
+		if details := usage.PromptTokensDetails; details != nil &&
+			(details.CachedTokens > 0 || details.WriteCachedTokens > 0 ||
+				details.WriteCached5MinTokens > 0 || details.WriteCached1HourTokens > 0) {
+			return usage, false
+		}
 	}
 	if !nonTrivialRequestBody(requestBody) {
 		return usage, false
 	}
 
-	fixed := *usage
+	fixed := llm.Usage{}
+	if usage != nil {
+		fixed = *usage
+	}
 	if fixed.PromptTokensDetails != nil {
 		details := *fixed.PromptTokensDetails
 		fixed.PromptTokensDetails = &details

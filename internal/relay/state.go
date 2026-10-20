@@ -628,8 +628,8 @@ func (r *RequestState) finish(body, responseBody string, status Status, class Er
 	op.CaptureConversation(record)
 
 	// 用量分桶落库: sanitize 修正后的用量 UPSERT 累加到 (小时 × 目标模型) 桶,
-	// 失败/取消终态同样计入(上游已真实消耗), 单行同步写不阻塞其他请求的转发;
-	// 落库错误仅告警, 不影响定稿路径。
+	// 仅计入上游真实上报的用量; 估算值(UsageEstimated)只用于日志展示, 不进分桶,
+	// 否则失败请求会把仪表盘用量与成本统计虚高。落库错误仅告警, 不影响定稿路径。
 	// 提取 reasoning/cache token 与 cost 从 llm.Usage 的明细字段, duration 从请求耗时。
 	if usage != nil {
 		var reasoning, cached int64
@@ -644,7 +644,9 @@ func (r *RequestState) finish(body, responseBody string, status Status, class Er
 			cost = *usage.Cost
 		}
 		durationMs := time.Since(r.StartedAt).Milliseconds()
-		op.RecordUsageBucket(r.TargetModel, usage.PromptTokens, usage.CompletionTokens, reasoning, cached, cost, durationMs)
+		if !estimated {
+			op.RecordUsageBucket(r.TargetModel, usage.PromptTokens, usage.CompletionTokens, reasoning, cached, cost, durationMs)
+		}
 	}
 
 	mu.Lock()

@@ -31,7 +31,7 @@ func TestSanitizeUsageRules(t *testing.T) {
 		wantEstimate int64                    // 修复时期望的输入估算值。
 		wantDetail   *llm.PromptTokensDetails // 修复后应保留的输入明细, nil 表示不校验。
 	}{
-		{"nil 用量透传", nil, nonTrivialSanitizeBody, false, 0, nil},
+		{"nil 用量按请求体估算", nil, nonTrivialSanitizeBody, true, int64(len(nonTrivialSanitizeBody)) / 3, nil},
 		{"正常正值不修复", &llm.Usage{PromptTokens: 12, CompletionTokens: 34, TotalTokens: 46}, nonTrivialSanitizeBody, false, 0, nil},
 		{"缓存读命中豁免", &llm.Usage{PromptTokensDetails: &llm.PromptTokensDetails{CachedTokens: 100}}, nonTrivialSanitizeBody, false, 0, nil},
 		{"缓存写命中豁免", &llm.Usage{PromptTokensDetails: &llm.PromptTokensDetails{WriteCachedTokens: 100}}, nonTrivialSanitizeBody, false, 0, nil},

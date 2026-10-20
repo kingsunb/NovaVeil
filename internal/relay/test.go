@@ -149,8 +149,10 @@ func finishTestRequest(request *RequestState, responseBody string, usage *llm.Us
 	request.Sending = false
 	request.cancel = nil
 	request.responseBody = truncatePreview(responseBody)
-	if usage != nil {
-		request.Usage = *usage
+	// 失败/无 usage 的测试请求也按请求体估算输入量, 避免日志里恒为 0/0。
+	if sanitized, estimated := sanitizeUsage(usage, request.body); sanitized != nil {
+		request.Usage = *sanitized
+		request.UsageEstimated = estimated
 	}
 	if request.Status == StatusFailed {
 		appendFailureLocked(FailureSummary{
