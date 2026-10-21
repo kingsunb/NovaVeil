@@ -38,7 +38,7 @@ func createOpencodeIntegrationChannel(t *testing.T, name string, baseURL, modelN
 	return channel
 }
 
-func TestDeterministicRequestRejectionStopsAcrossMembers(t *testing.T) {
+func TestDeterministicRequestRejectionContinuesAcrossMembers(t *testing.T) {
 	cases := []struct {
 		name   string
 		status int
@@ -76,6 +76,13 @@ func TestDeterministicRequestRejectionStopsAcrossMembers(t *testing.T) {
 			defer first.Close()
 			second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				secondHits.Add(1)
+				if testCase.stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					writeUpstreamSSE(t, w, "", `{"id":"chatcmpl-second","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"second-member"}}]}`)
+					writeUpstreamSSE(t, w, "", `{"id":"chatcmpl-second","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+					writeUpstreamSSE(t, w, "", "[DONE]")
+					return
+				}
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write(chatCompletionBody("chatcmpl-should-not-run", "second-member", 1, 1))
 			}))
@@ -85,40 +92,44 @@ func TestDeterministicRequestRejectionStopsAcrossMembers(t *testing.T) {
 			secondModel := integrationUniqueName("it-det-fastfail-second")
 			firstChannel := createOpencodeIntegrationChannel(t, "it-det-fastfail-first-ch", first.URL, firstModel)
 			secondChannel := createIntegrationChannel(t, "it-det-fastfail-second-ch", model.ChannelProviderOpenAI, second.URL, secondModel)
-			config := refSkipConfig()
-			config.MemberMaxAttempts = 1
-			group := createIntegrationGroup(t, "it-det-fastfail-group", config,
+			group := createIntegrationGroup(t, "it-det-fastfail-group", refSkipConfig(),
 				integrationLeafItem(t, firstChannel, firstModel),
 				integrationLeafItem(t, secondChannel, secondModel))
 			firstItemID := itemIDByModelName(t, group, firstModel)
+			secondItemID := itemIDByModelName(t, group, secondModel)
 
 			engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
 			body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":%t}`, group.Name, testCase.stream)
 			begin := time.Now()
+			expectedID := nextRequestID()
 			recorder := postRelayJSON(t, engine, path, body, "", nil)
 			elapsed := time.Since(begin)
 
-			if recorder.Code != http.StatusBadRequest {
-				t.Fatalf("请求级拒绝应以统一 400 收尾, 实际 %d: %s", recorder.Code, recorder.Body.String())
-			}
-			if !strings.Contains(recorder.Body.String(), "暂无可用渠道") {
-				t.Fatalf("下游应收到统一文案, 实际: %s", recorder.Body.String())
-			}
-			if strings.Contains(recorder.Body.String(), "context_length_exceeded") {
-				t.Fatalf("上游正文不得透传: %s", recorder.Body.String())
+			if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "second-member") {
+				t.Fatalf("确定性拒绝应切换到下一成员并成功, 实际 %d: %s", recorder.Code, recorder.Body.String())
 			}
 			if got := firstHits.Load(); got != 1 {
 				t.Fatalf("首个成员应只调用一次, 实际 %d", got)
 			}
-			if got := secondHits.Load(); got != 0 {
-				t.Fatalf("不得跨成员重试, 第二个成员实际调用 %d 次", got)
+			if got := secondHits.Load(); got != 1 {
+				t.Fatalf("第二个成员应承载一次, 实际调用 %d 次", got)
 			}
 			if elapsed >= 6*time.Second {
-				t.Fatalf("应快速终止, 实际耗时 %v", elapsed)
+				t.Fatalf("应快速切换成员, 实际耗时 %v", elapsed)
 			}
 			snapshot := routeSnapshot(t, group.ID)
 			if _, cooling := snapshot.Cooldowns[firstItemID]; cooling {
-				t.Fatalf("请求级拒绝不得冷却成员, 实际冷却截止 %d", snapshot.Cooldowns[firstItemID])
+				t.Fatalf("首个成员未达失败阈值, 不应冷却, 实际冷却截止 %d", snapshot.Cooldowns[firstItemID])
+			}
+			state := requestStateOf(t, expectedID)
+			if state.Status != StatusSuccess || len(state.Attempts) != 2 {
+				t.Fatalf("应记录一次失败后成功, 实际 %s/%+v", state.Status, state.Attempts)
+			}
+			if state.Attempts[0].MemberID != firstItemID || state.Attempts[0].Outcome != AttemptFailed || state.Attempts[0].ErrClass != ErrClassUpstream4xx {
+				t.Fatalf("首轮应为首个成员的 4xx 失败, 实际 %+v", state.Attempts[0])
+			}
+			if state.Attempts[1].MemberID != secondItemID || state.Attempts[1].Outcome != AttemptSuccess {
+				t.Fatalf("次轮应为第二个成员成功, 实际 %+v", state.Attempts[1])
 			}
 		})
 	}
@@ -166,48 +177,91 @@ func TestOrdinary400SanitizesAndRetriesBeforeSuccess(t *testing.T) {
 	}
 }
 
-func TestSanitizableDeterministic400RetriesOnceBeforeStopping(t *testing.T) {
+func TestSingleOpencodeDeterministic400SanitizesOnceThenStops(t *testing.T) {
 	setupFailoverTest(t)
 
-	var firstHits, secondHits atomic.Int64
-	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		firstHits.Add(1)
+	var hits atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"error":{"message":"prompt is too long","type":"invalid_request_error"}}`))
 	}))
+	defer upstream.Close()
+
+	modelName := integrationUniqueName("it-det-sanitize")
+	channel := createOpencodeIntegrationChannel(t, "it-det-sanitize-ch", upstream.URL, modelName)
+	group := createIntegrationGroup(t, "it-det-sanitize-group", refSkipConfig(),
+		integrationLeafItem(t, channel, modelName))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"developer","content":"sys"},{"role":"user","content":"hi"}],"stream":false}`, group.Name)
+	begin := time.Now()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+	elapsed := time.Since(begin)
+
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "暂无可用渠道") {
+		t.Fatalf("单成员清洗后仍确定性拒绝应以统一 400 收尾, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("单成员应只清洗重试一次后失败, 实际调用 %d 次", got)
+	}
+	if elapsed >= 6*time.Second {
+		t.Fatalf("单成员确定性 400 应立即失败, 实际耗时 %v", elapsed)
+	}
+}
+
+func TestDeterministic400ExhaustsAllMembersOnce(t *testing.T) {
+	setupFailoverTest(t)
+
+	var firstHits, secondHits atomic.Int64
+	badUpstream := func(counter *atomic.Int64) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			counter.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"maximum context length exceeded","type":"invalid_request_error","code":"context_length_exceeded"}}`))
+		}))
+	}
+	first := badUpstream(&firstHits)
 	defer first.Close()
-	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		secondHits.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(chatCompletionBody("chatcmpl-not-used", "second-member", 1, 1))
-	}))
+	second := badUpstream(&secondHits)
 	defer second.Close()
 
-	firstModel := integrationUniqueName("it-det-sanitize-first")
-	secondModel := integrationUniqueName("it-det-sanitize-second")
-	firstChannel := createOpencodeIntegrationChannel(t, "it-det-sanitize-first-ch", first.URL, firstModel)
-	secondChannel := createIntegrationChannel(t, "it-det-sanitize-second-ch", model.ChannelProviderOpenAI, second.URL, secondModel)
-	group := createIntegrationGroup(t, "it-det-sanitize-group", refSkipConfig(),
+	firstModel := integrationUniqueName("it-det-all-first")
+	secondModel := integrationUniqueName("it-det-all-second")
+	firstChannel := createOpencodeIntegrationChannel(t, "it-det-all-first-ch", first.URL, firstModel)
+	secondChannel := createOpencodeIntegrationChannel(t, "it-det-all-second-ch", second.URL, secondModel)
+	group := createIntegrationGroup(t, "it-det-all-group", refSkipConfig(),
 		integrationLeafItem(t, firstChannel, firstModel),
 		integrationLeafItem(t, secondChannel, secondModel))
 
 	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
-	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"developer","content":"sys"},{"role":"user","content":"hi"}],"stream":false}`, group.Name)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, group.Name)
+	expectedID := nextRequestID()
 	recorder := postRelayJSON(t, engine, path, body, "", nil)
 
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "暂无可用渠道") {
-		t.Fatalf("清洗后仍确定性拒绝应以统一 400 收尾, 实际 %d: %s", recorder.Code, recorder.Body.String())
+		t.Fatalf("全组确定性 400 应以统一 400 终止, 实际 %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if got := firstHits.Load(); got != 2 {
-		t.Fatalf("可清洗请求应先清洗重试一次, 首个成员实际调用 %d 次", got)
+	if got := firstHits.Load(); got != 1 {
+		t.Fatalf("首个成员应只尝试一次, 实际 %d", got)
 	}
-	if got := secondHits.Load(); got != 0 {
-		t.Fatalf("清洗后仍拒绝不得跨成员重试, 第二个成员实际调用 %d 次", got)
+	if got := secondHits.Load(); got != 1 {
+		t.Fatalf("第二个成员应只尝试一次, 实际 %d", got)
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusFailed || len(state.Attempts) != 2 {
+		t.Fatalf("应记录两个成员各一次失败, 实际 %s/%+v", state.Status, state.Attempts)
+	}
+	for i, attempt := range state.Attempts {
+		if attempt.Outcome != AttemptFailed || attempt.ErrClass != ErrClassUpstream4xx {
+			t.Fatalf("第 %d 轮应为 4xx 失败, 实际 %+v", i+1, attempt)
+		}
 	}
 }
 
-func TestConvertedDeterministic400StopsAcrossMembers(t *testing.T) {
+func TestConvertedDeterministic400FailsOverToNextMember(t *testing.T) {
 	setupFailoverTest(t)
 
 	var firstHits, secondHits atomic.Int64
@@ -237,19 +291,19 @@ func TestConvertedDeterministic400StopsAcrossMembers(t *testing.T) {
 	body := fmt.Sprintf(`{"model":%q,"max_tokens":64,"messages":[{"role":"user","content":"hi"}],"stream":false}`, group.Name)
 	recorder := postRelayJSON(t, engine, path, body, "", nil)
 
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "暂无可用渠道") {
-		t.Fatalf("转换路径请求级拒绝应以统一 400 收尾, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "second-member") {
+		t.Fatalf("转换路径确定性拒绝应切换到下一成员并成功, 实际 %d: %s", recorder.Code, recorder.Body.String())
 	}
 	if got := firstHits.Load(); got != 1 {
 		t.Fatalf("转换路径首个成员应只调用一次, 实际 %d", got)
 	}
-	if got := secondHits.Load(); got != 0 {
-		t.Fatalf("转换路径不得跨成员重试, 第二个成员实际调用 %d 次", got)
+	if got := secondHits.Load(); got != 1 {
+		t.Fatalf("转换路径第二个成员应承载一次, 实际调用 %d 次", got)
 	}
 }
 
-// 普通渠道命中同一标记时不得整请求终止, 应恢复成员级故障转移。
-func TestDeterministicRequestRejectionScopedToOpencode(t *testing.T) {
+// 普通渠道命中确定性标记时同样逐成员排除, 不得整请求终止。
+func TestDeterministicRequestRejectionFailsOverForOrdinaryChannels(t *testing.T) {
 	cases := []struct {
 		name                string
 		status              int
@@ -260,7 +314,7 @@ func TestDeterministicRequestRejectionScopedToOpencode(t *testing.T) {
 			name:                "400 invalid request",
 			status:              http.StatusBadRequest,
 			body:                `{"error":{"message":"invalid parameter","type":"invalid_request_error"}}`,
-			wantFirstMemberHits: 2,
+			wantFirstMemberHits: 1,
 		},
 		{
 			name:                "422 prompt too long",

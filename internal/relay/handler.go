@@ -626,23 +626,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 						}
 					}
 				}
-				// 请求级拒绝仅 OpenCode 兼容渠道整请求终止。
-				if channel.OpencodeCompat && isDeterministicRequestRejection(err) {
-					if code, ok := UpstreamStatusCode(err); ok && code == http.StatusBadRequest && !sanitizeRetried[item.ID] {
-						sanitizeRetried[item.ID] = true
-						if sanitizeRequestBody(raw) {
-							request.releaseRoundLifecycle()
-							releaseRefChainHops(hops)
-							continue
-						}
-					}
-					request.releaseRoundLifecycle()
-					releaseRefChainHops(hops)
-					request.markFailed(err, "", nil)
-					recordErrorLog(request)
-					rejectRequest(c, inbound, errNoAvailableChannels)
-					return
-				}
 				// 上游在任何内容到达前提前关闭流(提前 EOF): 多为瞬时抖动, 首次发生时对同成员
 				// 给予一次免记账的立即重试——旁路 failures 计数, 不记路由失败也不计渠道故障;
 				// 第二次仍提前 EOF 才落入下方正常失败处理。成员每请求仅享受一次免费重试。
@@ -675,17 +658,19 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					exclude = item.ID
 					continue
 				}
-				// 上游 400: 可能因请求体包含上游不兼容的非标准字段(如 stop 字符串、developer 角色)。
-				// 每个成员每请求享受一次清洗重试, 清洗后仍失败则正常走失败路径。
+				// 上游 400 先尝试清洗请求体;
+				// 确定性标记且无变化时直接排除该成员。
 				if code, ok := UpstreamStatusCode(err); ok && code == http.StatusBadRequest && !sanitizeRetried[item.ID] {
 					sanitizeRetried[item.ID] = true
-					sanitizeRequestBody(raw)
-					request.releaseRoundLifecycle()
-					// 整链无结论释放(含叶子): 清洗重试不走失败记账, 叶子若是探测恢复候选,
-					// 其 ProbeItemID/HalfOpen 占用若不释放, pickGroupItem 会因候选占用永久返回空,
-					// 整组请求钉死到重启。与提前 EOF 免费重试路径的释放语义保持一致。
-					releaseRefChainHops(hops)
-					continue
+					// 无可清洗字段时不重放。
+					if sanitizeRequestBody(raw) || !isDeterministicRequestRejection(err) {
+						request.releaseRoundLifecycle()
+						// 整链无结论释放(含叶子): 清洗重试不走失败记账, 叶子若是探测恢复候选,
+						// 其 ProbeItemID/HalfOpen 占用若不释放, pickGroupItem 会因候选占用永久返回空,
+						// 整组请求钉死到重启。与提前 EOF 免费重试路径的释放语义保持一致。
+						releaseRefChainHops(hops)
+						continue
+					}
 				}
 				request.releaseRoundLifecycle()
 				// 其余确定性请求错误(400/404/422, 以及无密钥渠道的 401/403): 重试同一成员或等待冷却都不可能改变结果。
@@ -1405,7 +1390,7 @@ func rejectRequest(c *gin.Context, inbound transformer.Inbound, err error) {
 	c.Abort()
 }
 
-// 请求级拒绝的正文标记。
+// 确定性拒绝的正文标记。
 var deterministicClientRejectionMarkers = []string{
 	"invalid_request_error",
 	"invalid_request",
@@ -1415,7 +1400,7 @@ var deterministicClientRejectionMarkers = []string{
 	"prompt is too long",
 }
 
-// isDeterministicClientResponse 判定状态码与正文是否请求级拒绝。
+// isDeterministicClientResponse 判定状态码与正文是否确定性拒绝。
 func isDeterministicClientResponse(status int, body []byte) bool {
 	if status != http.StatusBadRequest && status != http.StatusUnprocessableEntity {
 		return false
@@ -1429,7 +1414,7 @@ func isDeterministicClientResponse(status int, body []byte) bool {
 	return false
 }
 
-// isDeterministicRequestRejection 从错误提取正文并判定请求级拒绝。
+// isDeterministicRequestRejection 从错误提取正文并判定确定性拒绝。
 func isDeterministicRequestRejection(err error) bool {
 	if err == nil {
 		return false
