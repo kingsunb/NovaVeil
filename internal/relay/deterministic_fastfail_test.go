@@ -200,8 +200,8 @@ func TestSingleOpencodeDeterministic400SanitizesOnceThenStops(t *testing.T) {
 	recorder := postRelayJSON(t, engine, path, body, "", nil)
 	elapsed := time.Since(begin)
 
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "暂无可用渠道") {
-		t.Fatalf("单成员清洗后仍确定性拒绝应以统一 400 收尾, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), errContextWindowExceeded.Error()) {
+		t.Fatalf("单成员清洗后仍上下文超限应以明确 400 收尾, 实际 %d: %s", recorder.Code, recorder.Body.String())
 	}
 	if got := hits.Load(); got != 2 {
 		t.Fatalf("单成员应只清洗重试一次后失败, 实际调用 %d 次", got)
@@ -241,8 +241,8 @@ func TestDeterministic400ExhaustsAllMembersOnce(t *testing.T) {
 	expectedID := nextRequestID()
 	recorder := postRelayJSON(t, engine, path, body, "", nil)
 
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "暂无可用渠道") {
-		t.Fatalf("全组确定性 400 应以统一 400 终止, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), errContextWindowExceeded.Error()) {
+		t.Fatalf("全组上下文超限应以明确 400 终止, 实际 %d: %s", recorder.Code, recorder.Body.String())
 	}
 	if got := firstHits.Load(); got != 1 {
 		t.Fatalf("首个成员应只尝试一次, 实际 %d", got)

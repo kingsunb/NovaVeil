@@ -178,6 +178,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		exclude := 0                                   // 本请求已放弃的成员 ID, 重扫时跳过以免再次选中。
 		refSkips := 0                                  // 本请求内结构性跳过的引用计数, 超过成员总数说明全部引用均不可用。
 		nonRetryable := make(map[int]bool)             // 出现过确定性 4xx(400/404/422)的成员集合, 全部成员都出现时终止请求。
+		contextOverflowSeen := false                   // 本请求是否出现过上下文超限。
 		contextSkipped := make(map[int]bool)           // 上下文窗口装不下本请求而跳过的成员集合。
 		maxCandidateWindow := 0                        // 被跳过成员中最大的窗口值, 供拒绝消息给出量化提示。
 		busyRejected := make(map[int]bool)             // 并发槽位满被本地准入拒绝的成员集合: 每成员满载一次即换下一优先级, 全部满载时终止请求。
@@ -658,6 +659,12 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					exclude = item.ID
 					continue
 				}
+				// 出现过上下文超限时优先提示可行动原因。
+				if code, ok := UpstreamStatusCode(err); ok &&
+					(code == http.StatusBadRequest || code == http.StatusNotFound || code == http.StatusUnprocessableEntity) &&
+					isContextOverflowRejection(err) {
+					contextOverflowSeen = true
+				}
 				// 上游 400 先尝试清洗请求体;
 				// 确定性标记且无变化时直接排除该成员。
 				if code, ok := UpstreamStatusCode(err); ok && code == http.StatusBadRequest && !sanitizeRetried[item.ID] {
@@ -690,7 +697,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					if len(nonRetryable) >= routableCandidateCount(hops[0].group) {
 						request.markFailed(err, "", nil)
 						recordErrorLog(request)
-						rejectRequest(c, inbound, errNoAvailableChannels)
+						if contextOverflowSeen {
+							rejectRequest(c, inbound, errContextWindowExceeded)
+						} else {
+							rejectRequest(c, inbound, errNoAvailableChannels)
+						}
 						return
 					}
 					exclude = item.ID
@@ -1256,6 +1267,9 @@ func connectionHeaderTokens(src http.Header) map[string]bool {
 // 全部成员都不可用而终止的请求, 客户端只看到该文案; 详细原因仅保留在内部状态与日志。
 var errNoAvailableChannels = errors.New("暂无可用渠道")
 
+// errContextWindowExceeded 表示全组上下文超限。
+var errContextWindowExceeded = errors.New("请求上下文超出模型上限，请减少输入或提高模型窗口")
+
 // errAllRequestsStopped 在管理端「一键停止所有请求」置位期间作为入口与在途的统一终止原因;
 // 使用与 errNoAvailableChannels 相同的 rejectRequest 路径返回 503, 避免对客户端协议层的额外协议变更。
 var errAllRequestsStopped = errors.New("服务器过载，请稍候")
@@ -1428,6 +1442,18 @@ func isDeterministicRequestRejection(err error) bool {
 		return isDeterministicClientResponse(status, failure.Body)
 	}
 	return isDeterministicClientResponse(status, []byte(err.Error()))
+}
+
+// isContextOverflowRejection 判断拒绝是否上下文超限。
+func isContextOverflowRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	var failure *httpclient.Error
+	if errors.As(err, &failure) && len(failure.Body) > 0 {
+		return looksLikeContextOverflow(string(failure.Body))
+	}
+	return looksLikeContextOverflow(err.Error())
 }
 
 // sanitizeRequestBody 就地修正请求体中已知的上游不兼容字段并报告是否修改:

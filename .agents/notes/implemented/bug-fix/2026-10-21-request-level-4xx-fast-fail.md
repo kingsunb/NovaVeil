@@ -12,7 +12,7 @@ opencode2api 最终版在请求级识别确定性拒绝: 只要上游返回 400/
 
 - 判定状态码只接受 400 与 422; 正文标记以 opencode2api `0bb23c7` 的 `isDeterministicClientResponse` 为准: `invalid_request_error`、`invalid_request`、`context_length_exceeded`、`maximum context length`、`string_above_max_length`、`prompt is too long`。413 未包含, 因为上游最终代码没有把它纳入该判定。
 - `internal/relay/handler.go` 的错误优先从 `*httpclient.Error.Body` 取上游正文, 没有结构化正文时回退到错误文本; 判定不区分透传与协议转换路径。该标记口径保留下来, 用于识别“清洗也无济于事”的确定性 400。
-- 整请求终止已删除: 确定性 400/422 现在与其他确定性请求错误一样, 只排除当前成员并继续尝试下一候选; 全部可达候选失败后才返回统一 400 `暂无可用渠道`。范围与理由见 [确定性 4xx 改为逐成员排除](2026-10-22-fastfail-per-member-scope.md)。
+- 整请求终止已删除: 确定性 400/422 现在与其他确定性请求错误一样, 只排除当前成员并继续尝试下一候选; 全部可达候选失败后才终止, 默认返回统一 400 `暂无可用渠道`, 其中出现过上下文超限时返回固定 400 提示。范围与理由见 [确定性 4xx 改为逐成员排除](2026-10-22-fastfail-per-member-scope.md), 终止文案见 [全组上下文超限时返回明确错误提示](2026-10-22-context-overflow-message.md)。
 - 400 且请求体确有可清洗字段时, 每个成员仍执行一次 `sanitizeRequestBody` 并重试; 请求体没有变化时不重放。该成员随后进入确定性排除集合, 本次请求不再重试它。
 - 确定性拒绝沿用既有成员失败路径: `recordRouteFailureIfReal` 按 `MemberMaxAttempts` 累积, 达阈值进入冷却; 清会话粘合并设置 `exclude`。终止条件仍是 `len(nonRetryable) >= routableCandidateCount`。
 - 401、403、429 不进入该判定。多 Key 渠道的认证拒绝与限流拒绝仍轮换 Key; 无密钥渠道的 401/403 仍按成员级确定性失败处理。

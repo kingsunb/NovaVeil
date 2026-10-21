@@ -13,7 +13,7 @@ Status: implemented
 - 删除 `OpencodeCompat && isDeterministicRequestRejection(err)` 的整请求终止分支。OpenCode 兼容渠道与其他渠道统一走既有 `nonRetryable`、`exclude`、`clearSessionStickyByItem` 与 `continue` 路径，不复制第二份排除逻辑。
 - 400 仍保留每成员一次 `sanitizeRequestBody` 机会：确有字段被改写时重试同一成员一次；确定性正文标记但请求体没有变化时不重放，直接进入成员级排除。普通 400 没有命中确定性标记时继续保留原有清洗重试。
 - `isDeterministicRequestRejection` 的状态码与正文标记口径不变，仍是 400/422 与既有六个标记；它只负责判断 400 是否存在“清洗也无济于事”的确定性拒绝，不再拥有终止整个请求的权力。
-- 某成员一旦进入确定性 4xx 排除集合，本次请求不再重试该成员。终止条件保持不变：`len(nonRetryable) >= routableCandidateCount(hops[0].group)` 时以 `errNoAvailableChannels` 返回统一 400。单成员分组仍在该成员失败后立即终止。
+- 某成员一旦进入确定性 4xx 排除集合，本次请求不再重试该成员。终止条件保持不变：`len(nonRetryable) >= routableCandidateCount(hops[0].group)` 时终止；默认以 `errNoAvailableChannels` 返回统一 400，本次请求出现过上下文超限时改用固定提示，见 [全组上下文超限时返回明确错误提示](2026-10-22-context-overflow-message.md)。单成员分组仍在该成员失败后立即终止。
 - 成员失败记账、冷却/半开、会话粘合清理、多 Key、403 代理账号换号与 `MemberMaxAttempts` 语义均不改变。OpenCode 成员现在和普通成员一样按真实失败累计路由状态。
 
 原先的请求级终止与渠道范围收紧分别见 [确定性 4xx 标记与请求级终止演进](2026-10-21-request-level-4xx-fast-fail.md) 与 [4xx 快速失败的渠道范围演进](2026-10-21-fastfail-scope-opencode-only.md)；两篇中的整请求终止结论由本笔记取代，标记识别与普通渠道故障转移理由继续有效。
