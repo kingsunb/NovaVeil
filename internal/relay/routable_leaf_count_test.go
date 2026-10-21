@@ -87,7 +87,7 @@ func TestRoutableLeafCountManualRefExpandsFailoverTarget(t *testing.T) {
 	sub := testFailoverGroup(3, backoffConfig(10, 2, 30), 31, 32)
 	manual := model.Group{ID: 2, Name: "manual", Mode: model.GroupModeManual, ActiveItemID: 41}
 	manual.Items = []model.GroupItem{refTestRefItem(41, sub.Name), refTestLeafItem(42, 2002, "idle")}
-	refStubGroups(t, map[string]model.Group{sub.Name: sub})
+	refStubGroups(t, map[string]model.Group{"manual": manual, sub.Name: sub})
 
 	if got := routableCandidateCount(manual); got != 2 {
 		t.Fatalf("手动激活成员引用故障转移分组应展开 2 个叶子, 实际 %d", got)
