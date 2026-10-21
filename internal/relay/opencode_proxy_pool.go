@@ -22,6 +22,8 @@ const (
 	ocProxyCooldown = 12 * time.Hour
 	// ocProxyMaxAccounts 限制每渠道内存与库内账号数。
 	ocProxyMaxAccounts = 200
+	// 每成员每请求最多换号三次。
+	ocProxyMaxRetries = 3
 )
 
 // ocProxyAccount 是一个代理账号的进程内状态。

@@ -186,6 +186,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		relayConfig := model.DefaultGroupRelayConfig() // 最近一次成功读取的分组 Relay 配置, 分组暂不可得时以默认值兜底。
 		earlyEofRetried := make(map[int]bool)          // 已享受过提前 EOF 免费重试的成员 ID: 每个成员每请求仅免记账重试一次。
 		sanitizeRetried := make(map[int]bool)          // 已享受过 400 清洗重试的成员 ID: 每个成员每请求仅一次。
+		opencodeAccountRetries := make(map[int]int)    // 各成员本请求已换号次数。
+		opencodeAccountPinned := make(map[int]string)  // 换号耗尽后固定使用的账号。
 		allCooldownClears := 0                         // 全冷却自动清除并重试的累计次数, 用于线性退避间隔计算。
 		var failedIdx int                              // 引用链解析失败跳下标(仅当轮有效), 与 hops 一起提升以便用普通赋值接收。
 
@@ -396,7 +398,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// OpenCode 免费档按出口 IP 轮换代理账号。
 			proxyAccount := ""
 			if dispatchErr == nil && proxyNeedsOpencodeAccount(channel) {
-				candidate := pickOpencodeProxyAccount(ctx, channel.ID)
+				candidate, pinned := opencodeAccountPinned[item.ID]
+				if !pinned {
+					candidate = pickOpencodeProxyAccount(ctx, channel.ID)
+				}
 				if resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate); resolveErr == nil {
 					addr := resolved.String()
 					effective.ChannelProxy = &addr
@@ -602,6 +607,19 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					request.releaseRoundLifecycle()
 					releaseRefChainHops(hops)
 					continue
+				}
+				// 403 只惩罚账号, 不惩罚成员; 换号仍走同一成员。
+				if proxyAccount != "" {
+					if code, ok := UpstreamStatusCode(err); ok && code == http.StatusForbidden {
+						if opencodeAccountRetries[item.ID] >= ocProxyMaxRetries {
+							opencodeAccountPinned[item.ID] = proxyAccount
+						} else {
+							opencodeAccountRetries[item.ID]++
+							request.releaseRoundLifecycle()
+							releaseRefChainHops(hops)
+							continue
+						}
+					}
 				}
 				// 请求级拒绝不跨成员重试。
 				if isDeterministicRequestRejection(err) {
