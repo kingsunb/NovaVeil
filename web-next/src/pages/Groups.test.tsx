@@ -1056,3 +1056,105 @@ describe("GroupEditor 成员名次输入", () => {
     });
   });
 });
+
+describe("分组上下文窗口展示", () => {
+  // gpt-4o 人工定义 128K 窗口；gpt-4o-mini 未定义（过滤时始终放行）
+  const channelWithWindow: typeof sampleChannel = {
+    ...sampleChannel,
+    model_limits: { "gpt-4o": { context_window: 128_000 } },
+  };
+  // 列表快照会带上成员的 channel_model（含渠道 id 与模型名）
+  const groupWithModels: typeof sampleGroup = {
+    ...sampleGroup,
+    items: [
+      {
+        id: 1,
+        group_id: 10,
+        channel_model_id: 100,
+        ref_group_name: "",
+        priority: 1,
+        channel_model: { id: 100, channel_id: 1, name: "gpt-4o", source: "auto" },
+      },
+      {
+        id: 2,
+        group_id: 10,
+        channel_model_id: 101,
+        ref_group_name: "",
+        priority: 2,
+        channel_model: {
+          id: 101,
+          channel_id: 1,
+          name: "gpt-4o-mini",
+          source: "auto",
+        },
+      },
+    ],
+  };
+  const groupWithFitOn: typeof sampleGroup = {
+    ...groupWithModels,
+    relay_config: { ...groupWithModels.relay_config, context_fit_enabled: true },
+  };
+
+  function setupFetch(group: unknown) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("/group/list")) return Promise.resolve(jsonOk([group]));
+        if (url.includes("/channel/list"))
+          return Promise.resolve(jsonOk([channelWithWindow]));
+        return Promise.resolve(jsonOk(null));
+      }),
+    );
+  }
+
+  // 开关没有 aria-label，按它所在的行定位，避免依赖开关顺序
+  function contextFitSwitch() {
+    const row = screen.getByText("上下文窗口过滤").parentElement
+      ?.parentElement as HTMLElement;
+    return within(row).getByRole("switch");
+  }
+
+  it("上下文过滤关闭：卡片不显示窗口标注", async () => {
+    setupFetch(groupWithModels);
+    render(<GroupsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("gpt-4o-prod"));
+
+    expect(screen.queryByText("128K 窗口")).not.toBeInTheDocument();
+    expect(screen.queryByText("未定义窗口")).not.toBeInTheDocument();
+  });
+
+  it("上下文过滤开启：显示人工定义窗口，未定义的显式标注", async () => {
+    setupFetch(groupWithFitOn);
+    render(<GroupsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("gpt-4o-prod"));
+
+    await waitFor(() =>
+      expect(screen.getByText("128K 窗口")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("未定义窗口")).toBeInTheDocument();
+  });
+
+  it("编辑页跟开关实时联动：关闭不显示，开启后显示", async () => {
+    const user = userEvent.setup();
+    setupFetch(groupWithModels);
+    render(<GroupsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("gpt-4o-prod"));
+
+    await user.click(screen.getByRole("button", { name: /编辑/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByText("128K 窗口")).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "路由策略" }));
+    expect(contextFitSwitch()).toHaveAttribute("aria-checked", "false");
+    await user.click(contextFitSwitch());
+    await waitFor(() =>
+      expect(contextFitSwitch()).toHaveAttribute("aria-checked", "true"),
+    );
+
+    await user.click(within(dialog).getByRole("button", { name: "成员" }));
+    await waitFor(() =>
+      expect(within(dialog).getByText("128K 窗口")).toBeInTheDocument(),
+    );
+    expect(within(dialog).getByText("未定义窗口")).toBeInTheDocument();
+  });
+});

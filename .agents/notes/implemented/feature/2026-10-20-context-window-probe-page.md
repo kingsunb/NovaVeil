@@ -1,4 +1,4 @@
-# Agent Note: 上下文容量探测页（二分探测窗口并回填）
+# Agent Note: 上下文容量探测页（按档位探测并回填）
 
 Status: implemented
 
@@ -12,22 +12,23 @@ Status: implemented
 
 ### 单点探测接口（`internal/relay/context_probe.go`）
 
-`ProbeContextWindow(ctx, channelID, model, tokens)` 按指定规模构造一条请求并发出去，只回答「接受还是拒绝」：
+`ProbeContextWindow(ctx, channelID, model, tokens)` 按指定标称规模构造一条请求并发出去，只回答「接受还是拒绝」。窗口定义入口与密度校准在 2026-10-21 更新，决定与取舍见 [上下文窗口手工定义与统一实测密度](2026-10-21-context-window-manual-limits-and-uniform-density.md)。
 
-- 填充文本用随机常见英文单词, 基准口径「4 字符约 1 token」。实测多数上游 usage 与该口径一致, **一律基准构造、不发校准探针**; 唯一例外是 opencode.ai/inference(OpenCode 免费档, 白名单 `tokenDensityEnabledBaseURLs`): 它报的 prompt_tokens 虚高约一倍且同端点不同请求还会波动(978K vs 538K), 不校准则探测必拒, 因此仅该端点走自适应校准——4K 小探针测密度比, 按「端点:模型」缓存, 正式请求按比例反推字符量。
-- **密度可能非线性, 拒绝反馈是第二把尺**: 实测 minimax 在 OpenRouter 上小探针密度 6.9 字符/token, 1M 大请求却变成 4 字符/token(上游报 1.8M), 小探针校准失效。因此主请求被拒时从拒绝体提取上游报告的真实规模(`requested (about) N tokens` 正则), 用它修正比例并自动重试一次; 成功响应的 usage 与拒绝体的报告值都会回写缓存, 同模型下一次探测直接命中。
-- usage 回显与校准共用同一解析(非流式顶层 usage / 流式扫 SSE data 事件 / 都没有时 sanitizeUsage 兜底)。校准探针自身失败会让本次探测直接报错, 不缓存比例。
-- 出站构造复用 `newTestRequest` + `testRequestTarget`，并在命中 OpenCode 免费档时套用 `applyOpencodeFreeLaneHeaders` 与 `shapeOpencodeFreeBody`，与真实转发同形。不套这层的话免费档会被指纹校验 403，探测会把 403 误读成「容量不足」，二分直接判死。
+- 填充文本用随机常见英文单词, 基准口径「4 字符约 1 token」; 所有渠道同一规则, 不按上游类型设白名单。首测按「标称-冗余」构造(1M 档 980,000, 其余档位留 1,000), 已有实测密度时先换算构造规模。
+- **实测密度按「上游端点:模型」缓存, 路由与探测共用**: 实测值取响应 usage, 被拒时取拒绝体 `requested (about) N tokens`; 与标称偏差超过 10%(1M 档 100K)时, 按本次实测密度把目标改到容忍下限(1M 档 900K)自动重测一次并回写密度; 拿不到实测值或重测失败时保留首测结论。
+- usage 回显与实测解析共用同一套逻辑(非流式顶层 usage / 流式扫 SSE data 事件 / 都没有时 sanitizeUsage 兜底)。
+- 出站构造复用 `newTestRequest` + `testRequestTarget`，并在命中 OpenCode 免费档时套用 `applyOpencodeFreeLaneHeaders` 与 `shapeOpencodeFreeBody`，与真实转发同形。不套这层的话免费档会被指纹校验 403，探测会把 403 误读成「容量不足」，直接判死。
 - 判定以状态码为骨架，但不只看状态码：2xx 接受；400 / 413 / 422 还要看响应体是否指向上下文超限（`contextOverflowHints` 关键词匹配，含中英文措辞），指向才判「拒绝」，否则按「失败」带原因返回——参数错误、模型不认 `max_tokens` 之类的问题不能被误当成容量上限；401 / 403 / 429 / 5xx 与其余 4xx 一律按失败返回并附状态与响应片段。
 
-`max_tokens` 固定为 1，只测输入容量，不把输出预算算进去。单次规模封顶 1M（`contextProbeMaxTokens`）。
+`max_tokens` 固定为 1，只测输入容量，不把输出预算算进去。单次标称规模封顶 1,000,000（`contextProbeMaxTokens`，十进制 1M）。
 
 探测同样接出口 IP 池：命中 `proxyNeedsOpencodeAccount` 时用 `pickOpencodeProxyAccount` 选号覆盖 `effective.ChannelProxy`，结束后按结果回填（2xx 记成功、403 记冷却）。不接池的话探测会用确定性别名，永远撞同一个被标记的 IP，表现为「第一次就 403 且不换号」。
 
 ### 接口与回填
 
-- `POST /api/v1/model-eval/probe-context`：`{channel_id, model, tokens}` → `{tokens, accepted, status, detail}`。
-- `POST /api/v1/model-eval/apply-context`：把探测结果写进 `channels.model_limits[model].context_window`。这一步写的是手动覆盖字段，同步不会覆盖它，而 `effectiveContextWindow` 又优先取它——探测结果因此直接进入路由判定与徽章展示。
+- `POST /api/v1/model-eval/probe-context`：`{channel_id, model, tokens}` → `{tokens, accepted, status, detail, actual_tokens}`。
+- `POST /api/v1/model-eval/apply-context`：把探测结果或手工输入写进 `channels.model_limits[model].context_window`；`context_window` 传 0 清除该模型的人工窗口。写的是手动覆盖字段，同步不会覆盖它，而 `effectiveContextWindow` 只采信它。
+- 探测页每行可直接填写窗口并保存/清除，勾选多个模型后可批量定义或批量清除；与编辑器手填、探测「应用」写同一字段。
 
 ### 前端（`/context-probe`）
 
@@ -35,8 +36,9 @@ Status: implemented
 
 - 顶部一个搜索框同时过滤渠道与模型名，窄列表里定位目标更快
 - 选定渠道后列出该渠道模型，复选框多选，支持「全选当前列表」（按关键字过滤后的集合）
-- 目标规模八档可多选：64K / 128K / 256K / 400K / 500K / 888K / 980K / 1M
-- 点探测后按「模型 × 规模」的笛卡尔积串行执行，避免并发压同一上游
+- 目标规模五档可多选：64K / 128K / 256K / 500K / 1M（十进制 64,000 / 128,000 / 256,000 / 500,000 / 1,000,000）
+- 每行同时提供窗口输入与保存/清除，可直接按「渠道 × 模型」定义人工窗口；勾选多个模型可批量定义/批量清除
+- 点探测后按「模型 × 规模」的笛卡尔积三路并发执行，避免并发压同一上游
 - 结果逐行展示：模型、规模、接受 / 拒绝 / 失败、耗时、说明；说明列对拒绝显示 `HTTP 状态 · 响应片段`，对失败以红字显示完整原因，超长时悬停看全文；只有「接受」的行可「应用」写回窗口
 - 底部「探测历史」表按时间倒序展示最近 100 条（渠道、模型、规模、结果、耗时）
 
@@ -53,18 +55,18 @@ Status: implemented
 
 - **自动二分逼近真实边界** — 一次点击即可得到精确值；否掉是因为单次操作会打出十几次大请求，成本与耗时不可控，且用户真正需要的是「我这档够不够」的判断，指定档位单点探测更贴合，要更细的边界多测几档即可。
 - **复用模型评估队列** — 不必新建页面；否掉是因为评估任务的数据模型是 prompt/content/outcome，探测没有这三样，塞进去要么加一堆可空字段，要么共用表但语义完全不同。
-- **用上游返回的 usage 反推真实 token** — 最准；否掉是探测的判定发生在请求之前（要么发要么不发），usage 只有被接受时才有，无法用于「拒绝」的那一半二分。
+- **用上游返回的 usage 直接判定容量** — 最准；否掉是容量判定只能看状态码，usage 只有被接受时才有，拒绝的一半拿不到。usage 现在只用于校准密度，不用于容量判定。
 - **探测后自动回填** — 少一次点击；否掉是探测精度受填充文本与真实对话分布差异影响，自动写入会把误差固化成判定依据。
 
 ## 后果
 
 - **收益**：目录没有数据的模型也能得到一个可用的窗口值，且这个值与路由判定同口径；探测失败能与「容量不足」区分开，不会把认证问题误记成模型太小。
-- **代价与已知上限**：探测消耗真实额度，1M 级二分对免费渠道是额度压力、对付费渠道是真金白银，页面没有内置成本拦截；填充文本是纯英文词，与实际对话的 token 分布（尤其中文与代码）存在偏差，测得值偏保守或偏乐观约一成；只测输入容量，不覆盖输出预留；对强制流式的免费档，读到状态码后即断开，上游侧可能留下未读完的响应。
+- **代价与已知上限**：探测消耗真实额度，1M 级探测对免费渠道是额度压力、对付费渠道是真金白银，页面没有内置成本拦截；实测密度是进程内缓存，重启后首次探测重新校准；填充文本是纯英文词，与实际对话的 token 分布（尤其中文与代码）存在偏差，测得值偏保守或偏乐观约一成；只测输入容量，不覆盖输出预留；对强制流式的免费档，读到状态码后即断开，上游侧可能留下未读完的响应。
 - 重访信号：出现「探测结果与真实可用长度偏差明显」的反馈，或上游开始提供官方的模型容量查询接口。
 
 ## 验证
 
-- `POST /model-eval/probe-context` 分别传 131072 与一个明显超出模型能力的规模，得到 `accepted: true` 与 `accepted: false`。
+- `POST /model-eval/probe-context` 分别传 128000 与一个明显超出模型能力的规模，得到 `accepted: true` 与 `accepted: false`。
 - 传错误模型名或已停用渠道时返回错误（HTTP 400），而不是 `accepted: false`。
 - 应用后 `channels.model_limits[model].context_window` 有值，且渠道编辑器的 `ctx` 徽章显示该值。
 - `grep -n "contextProbeMaxTokens" internal/relay/` 上限与前端 `PROBE_SIZES` 的最大档一致。

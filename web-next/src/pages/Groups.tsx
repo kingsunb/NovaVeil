@@ -97,6 +97,47 @@ function nextDraftItemUid(prefix = "new") {
   return `${prefix}:${draftItemSeq}`;
 }
 
+/** 上下文窗口短串: 128000 → "128K", 1000000 → "1M", 1500000 → "1.5M"。 */
+function formatContextWindow(tokens: number): string {
+  if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(1))}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`;
+  return String(tokens);
+}
+
+/** 成员的人工定义窗口；0 表示未定义（上下文过滤时始终放行）。 */
+function memberContextWindow(
+  channel: Channel | undefined,
+  modelName: string | undefined,
+): number {
+  if (!channel || !modelName) return 0;
+  const window = channel.model_limits?.[modelName]?.context_window ?? 0;
+  return window > 0 ? window : 0;
+}
+
+/** 上下文过滤开启时才出现的成员窗口标注。 */
+function MemberContextWindow({ tokens }: { tokens: number }) {
+  if (tokens <= 0) {
+    return (
+      <span
+        className="shrink-0 text-[10px] text-ink-subtle"
+        title="未定义窗口：过滤时始终放行，不会因上下文不足被跳过；同步目录值不参与过滤"
+      >
+        未定义窗口
+      </span>
+    );
+  }
+  return (
+    <span
+      className="shrink-0"
+      title="人工定义的上下文窗口；请求估算超出即跳过该成员"
+    >
+      <Pill tone="neutral" dot={false} className="text-[10px]">
+        {formatContextWindow(tokens)} 窗口
+      </Pill>
+    </span>
+  );
+}
+
 export default function GroupsPage() {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
@@ -374,9 +415,12 @@ export default function GroupsPage() {
                   {sortedItems
                     .slice(0, 4)
                     .map((it) => {
+                      const channel = it.channel_model
+                        ? channelById.get(it.channel_model.channel_id)
+                        : undefined;
                       const chName = it.ref_group_name
                         ? null
-                        : channelById.get(it.channel_model?.channel_id ?? 0)?.name ?? "?";
+                        : channel?.name ?? "?";
                       const modelName = it.ref_group_name ?? it.channel_model?.name ?? `#${it.channel_model_id}`;
                       return (
                         <div
@@ -401,6 +445,16 @@ export default function GroupsPage() {
                             )}
                           </span>
                           <div className="flex shrink-0 items-center gap-1">
+                            {channels &&
+                              g.relay_config?.context_fit_enabled &&
+                              !it.ref_group_name && (
+                                <MemberContextWindow
+                                  tokens={memberContextWindow(
+                                    channel,
+                                    it.channel_model?.name,
+                                  )}
+                                />
+                              )}
                             {routeState && (
                               <MemberRuntimeChips
                                 state={routeState}
@@ -1113,6 +1167,16 @@ function GroupEditor({
                           <span className="mono flex-1 truncate text-sm text-ink">
                             {label}
                           </span>
+                          {channels &&
+                            relayConfig.context_fit_enabled &&
+                            !it.ref_group_name && (
+                              <MemberContextWindow
+                                tokens={memberContextWindow(
+                                  channel,
+                                  it.channel_model?.name,
+                                )}
+                              />
+                            )}
                           {it.id !== 0 && routeState && (
                             <MemberRuntimeChips state={routeState} itemId={it.id} />
                           )}
@@ -1478,7 +1542,7 @@ function GroupEditor({
               />
               <Toggle
                 label="上下文窗口过滤"
-                description="按请求估算 token 跳过上下文窗口装不下的成员；窗口未知（0）的成员始终放行，依赖模型同步的窗口数据"
+                description="按请求估算 token 跳过装不下请求的成员；打开后成员行显示各自窗口，未定义（0）的成员始终放行"
                 checked={relayConfig.context_fit_enabled}
                 onChange={(v) => updateRelay("context_fit_enabled", v)}
               />

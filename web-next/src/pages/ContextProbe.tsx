@@ -1,6 +1,7 @@
 /**
  * 上下文容量探测页：像模型评估那样列出全部渠道与模型，勾选后按「模型 × 规模」排队探测。
  * 探测走与真实转发一致的出站构造（含出口 IP 池），并写入请求日志与探测历史。
+ * 同一张列表还支持按「渠道 × 模型」直接定义/清除人工上下文窗口，无需先探测。
  */
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,27 +9,13 @@ import { toast } from "sonner";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { MAX_PROBE_TOKENS, PROBE_SIZES } from "@/lib/context-probe";
 import type { ContextProbeResult } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Pill } from "@/components/ui/pill";
-
-/** 单次探测允许的最大规模，与后端 contextProbeMaxTokens 一致。 */
-const MAX_PROBE_TOKENS = 1_048_576;
-
-/**
- * 固定档位为标称值: 后端构造请求时会自动留冗余(100 万级按 2%, 其余 1K),
- * 「应用」写回的窗口也是这里的标称值(如 1M 档写 1,000,000), 不带冗余。
- */
-const PROBE_SIZES = [
-  { label: "64K", value: 65_536 },
-  { label: "128K", value: 131_072 },
-  { label: "256K", value: 262_144 },
-  { label: "500K", value: 512_000 },
-  { label: "1M", value: 1_000_000 },
-] as const;
 
 /** 队列并发数: 同一上游的免费渠道不宜压太狠, 3 路足够。 */
 const PROBE_CONCURRENCY = 3;
@@ -38,6 +25,10 @@ interface ProbeTarget {
   channelId: number;
   channelName: string;
   model: string;
+  /** 渠道上人工定义的窗口; 0 表示未定义。只有人工值参与路由跳过。 */
+  manualWindow: number;
+  /** 同步目录带来的窗口; 仅展示, 不参与路由跳过。 */
+  syncedWindow: number;
 }
 
 interface ProbeTask {
@@ -51,8 +42,8 @@ interface ProbeTask {
 }
 
 function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+  if (n >= 1_000_000) return `${Number((n / 1_000_000).toFixed(2))}M`;
+  if (n >= 1_000) return `${Number((n / 1_000).toFixed(1))}K`;
   return String(n);
 }
 
@@ -62,10 +53,13 @@ export default function ContextProbePage() {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
-  const [selectedSizes, setSelectedSizes] = useState<number[]>([131_072]);
+  const [selectedSizes, setSelectedSizes] = useState<number[]>([128_000]);
   const [customSize, setCustomSize] = useState("");
   const [running, setRunning] = useState(false);
   const [tasks, setTasks] = useState<ProbeTask[]>([]);
+  const [windowDrafts, setWindowDrafts] = useState<Record<string, string>>({});
+  const [batchWindow, setBatchWindow] = useState("");
+  const [savingWindows, setSavingWindows] = useState(false);
 
   const historyQuery = useQuery({
     queryKey: ["probe-history"],
@@ -75,12 +69,15 @@ export default function ContextProbePage() {
   const targets = useMemo<ProbeTarget[]>(() => {
     const list: ProbeTarget[] = [];
     for (const channel of channelsQuery.data ?? []) {
+      const limits = channel.model_limits ?? {};
       for (const model of channel.models ?? []) {
         list.push({
           key: `${channel.id}:${model.name}`,
           channelId: channel.id,
           channelName: channel.name,
           model: model.name,
+          manualWindow: limits[model.name]?.context_window ?? 0,
+          syncedWindow: model.context_window ?? 0,
         });
       }
     }
@@ -149,6 +146,102 @@ export default function ContextProbePage() {
     }
     setSelectedSizes((prev) => (prev.includes(value) ? prev : [...prev, value]));
     setCustomSize("");
+  }
+
+  function windowDraft(target: ProbeTarget): string {
+    return windowDrafts[target.key] ?? (target.manualWindow > 0 ? String(target.manualWindow) : "");
+  }
+
+  function parseWindowValue(raw: string): number | null {
+    const value = Number(raw.trim());
+    if (!Number.isInteger(value) || value < 0) return null;
+    return value;
+  }
+
+  async function persistWindow(target: ProbeTarget, value: number) {
+    await api.applyModelContext(target.channelId, target.model, value);
+    setWindowDrafts((prev) => {
+      const next = { ...prev };
+      delete next[target.key];
+      return next;
+    });
+  }
+
+  async function saveWindow(target: ProbeTarget) {
+    const raw = windowDraft(target);
+    if (raw.trim() === "" && target.manualWindow === 0) {
+      toast.error("请输入窗口 token 数");
+      return;
+    }
+    const value = raw.trim() === "" ? 0 : parseWindowValue(raw);
+    if (value === null) {
+      toast.error("窗口必须是大于等于 0 的整数 token 数");
+      return;
+    }
+    setSavingWindows(true);
+    try {
+      await persistWindow(target, value);
+      await queryClient.invalidateQueries({ queryKey: ["channels"] });
+      toast.success(
+        value > 0
+          ? `已把 ${target.model} 的窗口定义为 ${formatTokens(value)}`
+          : `已清除 ${target.model} 的人工窗口`,
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setSavingWindows(false);
+    }
+  }
+
+  async function clearWindow(target: ProbeTarget) {
+    setSavingWindows(true);
+    try {
+      await persistWindow(target, 0);
+      await queryClient.invalidateQueries({ queryKey: ["channels"] });
+      toast.success(`已清除 ${target.model} 的人工窗口`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "清除失败");
+    } finally {
+      setSavingWindows(false);
+    }
+  }
+
+  async function applyBatch(value: number) {
+    const picked = targets.filter((target) => selectedKeys.has(target.key));
+    if (picked.length === 0) {
+      toast.error("先勾选模型");
+      return;
+    }
+    setSavingWindows(true);
+    const failed: string[] = [];
+    for (const target of picked) {
+      try {
+        await persistWindow(target, value);
+      } catch {
+        failed.push(`${target.channelName}/${target.model}`);
+      }
+    }
+    await queryClient.invalidateQueries({ queryKey: ["channels"] });
+    setSavingWindows(false);
+    if (failed.length > 0) {
+      toast.error(`${failed.length} 个模型保存失败：${failed.join("、")}`);
+      return;
+    }
+    toast.success(
+      value > 0
+        ? `已为 ${picked.length} 个模型定义窗口`
+        : `已清除 ${picked.length} 个模型的人工窗口`,
+    );
+  }
+
+  function applyBatchDraft() {
+    const value = parseWindowValue(batchWindow);
+    if (value === null || value <= 0) {
+      toast.error("批量窗口必须是大于 0 的整数 token 数");
+      return;
+    }
+    void applyBatch(value);
   }
 
   async function runProbe() {
@@ -238,8 +331,10 @@ export default function ContextProbePage() {
         <CardHeader>
           <CardTitle>上下文探测</CardTitle>
           <CardDescription>
-            勾选任意渠道下的模型与目标规模，按队列逐个探测。规模按 4 字符约 1 token
-            估算，接受的行会回显上游 usage 报告的真实 token 数。探测消耗上游额度，付费渠道按输入 token 计费。
+            勾选任意渠道下的模型与目标规模，按队列逐路探测。请求规模按全渠道统一口径估算
+            （ASCII 4 字符约 1 token、非 ASCII 每字 1 token；1K=1000、1M=1,000,000），
+            实测值与标称偏差超过 10% 时自动按实测密度重测一次。接受的行会回显上游报告的
+            实际 token 数。探测消耗上游额度，付费渠道按输入 token 计费。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -289,7 +384,7 @@ export default function ContextProbePage() {
               {running ? "探测中" : `开始探测（${selectedCount * selectedSizes.length} 组）`}
             </Button>
             <span className="text-xs text-ink-muted">
-              已选 {selectedCount} 个模型 × {selectedSizes.length} 个规模，串行排队执行
+              已选 {selectedCount} 个模型 × {selectedSizes.length} 个规模，三路并发执行
             </span>
           </div>
         </CardContent>
@@ -298,7 +393,7 @@ export default function ContextProbePage() {
       <Card className="min-w-0 overflow-hidden">
         <div className="space-y-3 border-b border-border/50 p-4">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-ink">选择模型</h2>
+            <h2 className="text-sm font-semibold text-ink">选择模型与定义窗口</h2>
             <span className="text-xs tabular-nums text-ink-muted">
               已选 {selectedCount} / {targets.length}
             </span>
@@ -308,6 +403,36 @@ export default function ContextProbePage() {
             onChange={(e) => setSearch(e.target.value)}
             placeholder="搜索渠道或模型"
           />
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              type="number"
+              min={1}
+              value={batchWindow}
+              onChange={(e) => setBatchWindow(e.target.value)}
+              placeholder="批量窗口 token"
+              aria-label="批量窗口 token"
+              className="h-8 w-40 text-xs"
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={savingWindows || selectedCount === 0}
+              onClick={applyBatchDraft}
+            >
+              批量定义（{selectedCount}）
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={savingWindows || selectedCount === 0}
+              onClick={() => void applyBatch(0)}
+            >
+              批量清除
+            </Button>
+            <span className="text-xs text-ink-muted">
+              只认人工定义值；同步目录值仅展示，不参与路由跳过
+            </span>
+          </div>
         </div>
         <div className="max-h-[24rem] divide-y divide-border/40 overflow-auto">
           {groups.length === 0 ? (
@@ -337,6 +462,7 @@ export default function ContextProbePage() {
                         type="checkbox"
                         checked={checked === keys.length && keys.length > 0}
                         onChange={() => toggleKeys(keys)}
+                        aria-label={`选择渠道 ${group.channelName}`}
                       />
                       <span className="truncate">{group.channelName}</span>
                     </label>
@@ -345,16 +471,64 @@ export default function ContextProbePage() {
                     </span>
                   </div>
                   {open ? (
-                    <div className="grid grid-cols-2 gap-1 pb-2 pl-12 pr-4">
+                    <div className="space-y-1 pb-2 pl-12 pr-4">
                       {group.items.map((item) => (
-                        <label key={item.key} className="flex items-center gap-2 text-sm text-ink">
+                        <div key={item.key} className="flex min-w-0 items-center gap-1.5 text-sm text-ink">
                           <input
                             type="checkbox"
                             checked={selectedKeys.has(item.key)}
                             onChange={() => toggleKeys([item.key])}
+                            aria-label={`选择 ${item.model}`}
+                            className="h-3.5 w-3.5 shrink-0 rounded border-border accent-primary"
                           />
-                          <span className="mono truncate">{item.model}</span>
-                        </label>
+                          <span className="mono min-w-0 flex-1 truncate" title={item.model}>
+                            {item.model}
+                          </span>
+                          {item.syncedWindow > 0 ? (
+                            <span
+                              className="shrink-0 text-[10px] tabular-nums text-ink-muted"
+                              title="同步目录值，仅展示，不参与路由跳过"
+                            >
+                              同步 {formatTokens(item.syncedWindow)}
+                            </span>
+                          ) : null}
+                          {item.manualWindow > 0 ? (
+                            <Pill tone="neutral" className="shrink-0 text-[10px]">
+                              已定义 {formatTokens(item.manualWindow)}
+                            </Pill>
+                          ) : null}
+                          <Input
+                            type="number"
+                            min={1}
+                            value={windowDraft(item)}
+                            onChange={(e) =>
+                              setWindowDrafts((prev) => ({ ...prev, [item.key]: e.target.value }))
+                            }
+                            placeholder="窗口 token"
+                            aria-label={`${item.model} 窗口 token`}
+                            className="h-7 w-24 shrink-0 text-xs"
+                          />
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 shrink-0 px-2 text-xs"
+                            disabled={savingWindows}
+                            onClick={() => void saveWindow(item)}
+                          >
+                            保存
+                          </Button>
+                          {item.manualWindow > 0 ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 shrink-0 px-2 text-xs"
+                              disabled={savingWindows}
+                              onClick={() => void clearWindow(item)}
+                            >
+                              清除
+                            </Button>
+                          ) : null}
+                        </div>
                       ))}
                     </div>
                   ) : null}

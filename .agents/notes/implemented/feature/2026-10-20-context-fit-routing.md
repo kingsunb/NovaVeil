@@ -36,15 +36,17 @@ Status: implemented
 
 上游目录并不覆盖所有模型，OpenCode 部分免费模型拿不到窗口数据，而这些模型恰恰最需要被判定。因此 `ChannelModelLimit` 增加 `context_window`：
 
-- 判定与展示都经 `effectiveContextWindow(limits, modelName, metadata)`：手动值大于 0 时优先，否则回落到同步元数据。
+- 判定只采信人工值：`effectiveContextWindow(limits, modelName)` 返回 `model_limits` 里大于 0 的窗口；没有人工值即返回 0（放行）。同步目录值只用于展示，不参与过滤。
 - 手动值存 `channels.model_limits`，同步只重建 `channel_models`（`ChannelUpdate` 只传 `ID` 与 `Models`），所以手动值不会被同步冲掉。
-- 空值或 0 表示「沿用上游」，与「窗口未知」区分开：手动配了就是在判定里生效，不配才退回放行。
+- 空值或 0 表示「未定义人工窗口」：路由不拦，前端徽章回落到同步元数据展示。
 
-前端模型行的 `xxxK ctx` 徽章改为显示生效值（`effectiveContextWindow`），编辑器「按模型配置」区新增「上下文窗口」输入，留空即沿用上游。
+窗口来源：渠道编辑器「按模型配置」手填、探测页每行直接填写/批量定义、探测结果行「应用」。三者写同一字段；探测页入口与密度校准的取舍见 [上下文窗口手工定义与统一实测密度](2026-10-21-context-window-manual-limits-and-uniform-density.md)。
+
+前端模型行的 `xxxK ctx` 徽章显示生效值（人工值优先，否则同步元数据）。
 
 ### 前端（`web-next/src/pages/Groups.tsx`）
 
-分组 Relay 配置区在「回显请求模型名」之后新增「上下文窗口过滤」开关，描述里注明依赖模型同步的窗口数据。
+分组 Relay 配置区在「回显请求模型名」之后新增「上下文窗口过滤」开关，描述里注明窗口需要人工定义（渠道编辑器或探测页），同步目录值不参与过滤。
 
 ## 备选方案
 
@@ -61,9 +63,9 @@ Status: implemented
 
 ## 验证
 
-- `grep -n "contextFitsWindow\|estimateRequestTokens" internal/relay/` 只应有定义与 handler 的一处调用。
+- `grep -n "contextFitsWindow\|estimateModelTokens" internal/relay/handler.go` 只应有上下文过滤与错误文案两处调用。
 - `ContextWindow` 为 0 的成员在开关开启时仍被选中（放行分支）。
 - 全部成员窗口都不足时，客户端收到「没有候选模型的上下文窗口能容纳当前请求（请求约 X token，候选集最大窗口 Y token）」，带量化提示方便调用方主动截断；而非「暂无可用渠道」。
-- 窗口值只信人工验证过的来源: 探测「应用」或编辑器手填写入的 `model_limits.context_window`。同步目录带来的窗口是文档值, 未经实测, **不参与过滤**(未验证不拦, 宁可放行也不基于猜测误拒); 它仍在前端展示, 供管理员决定是否探测验证。`effectiveContextWindow` 因此不再回落元数据, 无覆盖即返回 0(放行)。
-- 估算与探测共用一套尺子: `contextFitsWindow` 走 `estimateModelTokens`, 在基准口径(ASCII 4 字符/token, 非 ASCII 每字 1)之上乘以探测校准出的 tokenizer 密度比(按「上游端点:模型」缓存于 `tokenDensityCache`, 探测写入, 进程内有效)。聚合粒度是端点而非渠道 ID: OpenCode Free/2/3 同为 opencode.ai/inference, 测一个三个全部跟进; Free Old 走 zen 端点, 单独一份。探测说装得下的, 路由判定同尺; 未校准过的模型维持基准口径。拒绝消息里的「请求约 X token」也用同一估算, 保证消息数字与判定依据一致。
+- 窗口值只信人工值的三个入口: 编辑器手填、探测页直接填写/批量定义、探测「应用」。同步目录带来的窗口是文档值, 未经实测, **不参与过滤**(未验证不拦, 宁可放行也不基于猜测误拒); 它仍在前端展示。`effectiveContextWindow` 无人工值即返回 0(放行)。
+- 估算与探测共用一套尺子: `contextFitsWindow` 走 `estimateModelTokens`, 在基准口径(ASCII 4 字符/token, 非 ASCII 每字 1)之上乘以实测密度比(按「上游端点:模型」缓存于 `tokenDensityCache`, 探测实测写入, 进程内有效)。所有渠道同一规则, 不设白名单; 未实测的模型维持基准口径。聚合粒度是端点而非渠道 ID: OpenCode Free/2/3 同为 opencode.ai/inference, 测一个三个全部跟进; Free Old 走 zen 端点, 单独一份。拒绝消息里的「请求约 X token」也用同一估算。
 - 分组配置 JSON 里 `context_fit_enabled` 缺省为 false，旧分组行为不变。

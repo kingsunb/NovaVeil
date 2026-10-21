@@ -78,7 +78,7 @@ export interface ChannelModel {
 export interface ChannelModelLimit {
   max_output?: number;
   thinking_level?: string;
-  /** 手动覆盖的上下文窗口；空或 <=0 表示沿用同步来的元数据。 */
+  /** 手动定义的上下文窗口；0/缺失视为未定义，上下文过滤只认这个值。 */
   context_window?: number;
 }
 
@@ -89,7 +89,7 @@ export interface ContextProbeResult {
   status: number;
   detail: string;
   latency_ms: number;
-  /** 上游 usage 报告的真实输入 token 数，0 表示未取到（如强制流式）。 */
+  /** 上游报告的实际输入 token 数（响应 usage 或拒绝体）；0 表示未取到。 */
   actual_tokens: number;
 }
 

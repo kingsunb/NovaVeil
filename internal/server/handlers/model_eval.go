@@ -83,18 +83,23 @@ func listContextProbeRecords(c *gin.Context) {
 	resp.Success(c, rows)
 }
 
-// contextApplyRequest 把探测结果写回按模型限制。
+// contextApplyRequest 把手动定义或探测结果写回按模型限制。
 type contextApplyRequest struct {
 	ChannelID     int    `json:"channel_id" binding:"required"`
 	Model         string `json:"model" binding:"required"`
-	ContextWindow int    `json:"context_window" binding:"required,min=1"`
+	ContextWindow *int   `json:"context_window" binding:"required"` // 0 表示清除人工窗口。
 }
 
-// applyModelContext 把手动探测出的窗口写入渠道的 model_limits, 同步不会覆盖。
+// applyModelContext 把手动定义或探测出的窗口写入渠道的 model_limits, 同步不会覆盖;
+// context_window 传 0 表示清除该模型的人工窗口。
 func applyModelContext(c *gin.Context) {
 	var request contextApplyRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
+		return
+	}
+	if *request.ContextWindow < 0 {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
 		return
 	}
 	channel, err := op.ChannelGet(request.ChannelID)
@@ -102,14 +107,7 @@ func applyModelContext(c *gin.Context) {
 		resp.Error(c, http.StatusNotFound, err.Error())
 		return
 	}
-	limits := channel.ModelLimits
-	if limits == nil {
-		limits = make(map[string]model.ChannelModelLimit)
-	}
-	limit := limits[request.Model]
-	value := request.ContextWindow
-	limit.ContextWindow = &value
-	limits[request.Model] = limit
+	limits := setModelContextWindow(channel.ModelLimits, request.Model, *request.ContextWindow)
 	if _, err := op.ChannelUpdate(&model.ChannelUpdateRequest{
 		ID:          request.ChannelID,
 		ModelLimits: &limits,
@@ -118,6 +116,27 @@ func applyModelContext(c *gin.Context) {
 		return
 	}
 	resp.Success(c, nil)
+}
+
+// setModelContextWindow 在按模型限制表中写入或清除人工窗口; 无其他配置时删除空条目。
+func setModelContextWindow(limits map[string]model.ChannelModelLimit, modelName string, window int) map[string]model.ChannelModelLimit {
+	next := make(map[string]model.ChannelModelLimit, len(limits)+1)
+	for name, limit := range limits {
+		next[name] = limit
+	}
+	limit := next[modelName]
+	if window > 0 {
+		value := window
+		limit.ContextWindow = &value
+	} else {
+		limit.ContextWindow = nil
+	}
+	if limit.ContextWindow == nil && limit.MaxOutput == nil && limit.ThinkingLevel == "" {
+		delete(next, modelName)
+	} else {
+		next[modelName] = limit
+	}
+	return next
 }
 
 // runModelEval 复用渠道测试的真实出站逻辑，仅模型评估入口保存评估历史。

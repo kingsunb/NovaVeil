@@ -22,13 +22,13 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// contextProbeMaxTokens 是单次探测允许的最大规模。
-const contextProbeMaxTokens = 1 << 20
+// contextProbeMaxTokens 是单次探测允许的最大标称规模(十进制 1M)。
+const contextProbeMaxTokens = 1_000_000
 
 // contextProbeWords 是填充文本的词汇表。
 // 用随机常见英文单词而非随机字母数字串: 后者的 BPE 密度约 2.5-3 字符/token,
 // 按 4 字符/token 生成会让实际 token 数比目标大 40% 左右; 英文单词序列的密度
-// 接近自然文本, 与「4 字符约 1 token」的口径一致。
+// 接近自然文本, 与「4 字符约 1 token」的基准口径一致。
 var contextProbeWords = []string{
 	"signal", "process", "network", "quality", "context", "buffer", "verify",
 	"token", "channel", "request", "response", "upstream", "gateway", "latency",
@@ -46,15 +46,16 @@ type ContextProbeResult struct {
 	Status    int    `json:"status"`
 	Detail    string `json:"detail"`
 	LatencyMS int64  `json:"latency_ms"`
-	// ActualTokens 是上游 usage 报告的输入 token 数; 0 表示上游未返回
-	// (免费档被强制流式时, 前若干字节里拿不到末尾的 usage 事件)。
+	// ActualTokens 是上游报告的实际输入 token 数: 优先取响应 usage, 被拒时取
+	// 拒绝体里的 requested N tokens; 0 表示未取到, 此时不做密度校准与重测。
 	ActualTokens int64 `json:"actual_tokens"`
 }
 
-// ProbeContextWindow 用指定 token 规模的请求探测渠道模型能否接受。
-// 各家 tokenizer 密度差异极大(实测 4~7.5 字符/token), 固定口径必然偏差过半:
-// 这里先发 4000 token 的小探针测出该「渠道+模型」的真实密度比并缓存,
-// 之后按比例构造正式请求; 结果偏差超 1% 时用回写后的比例重试一次。
+// ProbeContextWindow 用指定标称 token 规模的请求探测渠道模型能否接受。
+// 填充文本按全渠道统一的「4 字符约 1 token」基准构造, 再乘上该模型已实测的密度比;
+// 同一套规则适用于所有渠道, 不按上游类型区分白名单。
+// 实测值与标称值偏差超过 10%(1M 档即 100K)时, 用本次实测密度按容忍下限(900K)
+// 自动重测一次并缓存密度, 保证探测结论与请求估算共用同一把尺。
 // 出站构造与业务转发同形(渠道配置、免费档改写、代理与 Bun 传输), 只按状态码判定容量,
 // 不复用会校验回答内容的透传路径: 探测请求故意只留 1 个输出 token, 回答不可用属预期。
 func ProbeContextWindow(ctx context.Context, channelID int, modelName string, tokens int) (*ContextProbeResult, error) {
@@ -67,76 +68,45 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 	// 留出冗余再探测: 贴上限容易因 chat 模板开销或上游计数差异踩线。
 	// 标称值原样返回给调用方(result.Tokens), 「应用」写回的窗口即标称而非扣除后的值。
 	nominal := tokens
-	tokens = probeTargetTokens(tokens)
+	target := probeTargetTokens(nominal)
 	channel, err := op.ChannelGet(channelID)
 	if err != nil {
 		return nil, fmt.Errorf("channel not found: %w", err)
 	}
-	ratio := 1.0
-	// 只有 usage 口径虚高的上游(inference 端点的 OpenCode 免费档)需要校准补偿;
-	// 其余上游 usage 与基准口径一致, 一律基准构造, 也不发校准探针。
-	calibrates := tokenDensityApplies(channel.BaseURL)
-	if calibrates {
-		if cached, ok := tokenDensityCache.Load(tokenDensityKey(channel.BaseURL, modelName)); ok {
-			ratio = clampTokenDensity(cached.(float64))
-		} else {
-			// 校准探针规模很小, 成本可忽略; 失败时不缓存, 下次探测重新校准。
-			calib, calibErr := probeOnce(ctx, channel, modelName, probeCalibrationTokens, 1.0)
-			if calibErr != nil {
-				return nil, fmt.Errorf("校准探针失败: %w", calibErr)
-			}
-			if calib.Accepted && calib.ActualTokens > 0 {
-				ratio = clampTokenDensity(float64(calib.ActualTokens) / float64(probeCalibrationTokens))
-				tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), ratio)
-			}
-		}
-	}
-	result, err := probeOnce(ctx, channel, modelName, tokens, ratio)
+	constructed := probeConstructedTokens(target, modelTokenDensity(channel.BaseURL, modelName))
+	result, err := probeOnce(ctx, channel, modelName, constructed)
 	if err != nil {
 		return nil, err
 	}
 	result.Tokens = nominal
-	// 校准渠道的反馈源优先级: 拒绝体里上游报告的实际规模 > 成功响应的 usage。
-	// 小探针校准的密度在大请求上可能非线性(实测差 1.7 倍), 拒绝体的报告值是
-	// 唯一能反映真实规模反馈的来源, 用它修正比例后重试一次即可收敛。
-	density := ratio
-	if calibrates {
-		if reported, ok := parseRequestedOverflowTokens(result.Detail); ok {
-			density = clampTokenDensity(float64(reported) * ratio / float64(tokens))
-			tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), density)
-		} else if result.ActualTokens > 0 {
-			density = clampTokenDensity(float64(result.ActualTokens) * ratio / float64(tokens))
-			tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), density)
-		}
-	}
-	// 两种情形重试一次: 接受但偏差超 1%; 拒绝且上游报出了实际规模。
-	// 非校准渠道比例恒为 1, 重试只是原样重发, 没有意义。
-	shouldRetry := false
-	if calibrates {
-		if result.Accepted && result.ActualTokens > 0 {
-			deviation := math.Abs(float64(result.ActualTokens)-float64(tokens)) / float64(tokens)
-			shouldRetry = deviation > 0.01
-		} else if !result.Accepted {
-			_, shouldRetry = parseRequestedOverflowTokens(result.Detail)
-		}
-	}
-	if shouldRetry {
-		if retry, retryErr := probeOnce(ctx, channel, modelName, tokens, density); retryErr == nil {
-			if retry.ActualTokens > 0 {
-				tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), clampTokenDensity(float64(retry.ActualTokens)*density/float64(tokens)))
-			} else if reported, ok := parseRequestedOverflowTokens(retry.Detail); ok {
-				tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), clampTokenDensity(float64(reported)*density/float64(tokens)))
-			}
-			result = retry
-		}
+	if result.ActualTokens > 0 &&
+		math.Abs(float64(result.ActualTokens)-float64(nominal)) > float64(probeTolerance(nominal)) {
+		result = probeRecalibrate(ctx, channel, modelName, nominal, constructed, result)
 	}
 	return result, nil
 }
 
-// probeTargetTokens 计算扣除冗余后的实际构造规模:
-// 100 万级按 2% 留(1,000,000 → 980,000), 其余留 1K。
+// probeRecalibrate 用首次探测实测的密度比按容忍下限重测一次并缓存密度。
+// 重测失败时保留首次结论, 不把一次校准失败升级成探测失败。
+func probeRecalibrate(ctx context.Context, channel model.Channel, modelName string, nominal, constructed int, first *ContextProbeResult) *ContextProbeResult {
+	measured := clampTokenDensity(float64(first.ActualTokens) / float64(constructed))
+	tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), measured)
+	retryConstructed := probeConstructedTokens(probeRetryTarget(nominal), measured)
+	retry, err := probeOnce(ctx, channel, modelName, retryConstructed)
+	if err != nil {
+		return first
+	}
+	retry.Tokens = nominal
+	if retry.ActualTokens > 0 {
+		tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), clampTokenDensity(float64(retry.ActualTokens)/float64(retryConstructed)))
+	}
+	return retry
+}
+
+// probeTargetTokens 计算扣除冗余后的首测基准规模:
+// 1M 档按 2% 留(1,000,000 → 980,000), 其余档位留 1,000 token。
 func probeTargetTokens(tokens int) int {
-	margin := 1024
+	margin := 1000
 	if tokens >= 1_000_000 {
 		margin = tokens / 50
 	}
@@ -147,10 +117,31 @@ func probeTargetTokens(tokens int) int {
 	return target
 }
 
-// probeCalibrationTokens 是密度校准探针的目标规模, 足够小以控制成本。
-// 密度比的存储(tokenDensityCache)与夹取(clampTokenDensity)在 context_fit.go,
-// 与路由过滤共用同一份, 保证「测试判定」与「路由过滤」同尺。
-const probeCalibrationTokens = 4000
+// probeTolerance 返回实测值与标称值允许的偏差: 标称的 10%(1M 档即 100K)。
+func probeTolerance(nominal int) int {
+	return max(1, nominal/10)
+}
+
+// probeRetryTarget 返回超差重测的目标规模: 容忍下限(标称-容差, 1M 档即 900K)。
+func probeRetryTarget(nominal int) int {
+	target := nominal - probeTolerance(nominal)
+	if target < 1 {
+		return 1
+	}
+	return target
+}
+
+// probeConstructedTokens 把基准口径的目标规模换算成当前实测密度下的构造规模。
+func probeConstructedTokens(target int, ratio float64) int {
+	if ratio <= 0 {
+		return target
+	}
+	constructed := int(float64(target) / ratio)
+	if constructed < 1 {
+		return 1
+	}
+	return constructed
+}
 
 // overflowRequestedRe 从拒绝体提取「你实际发了多少 token」的报告值。
 var overflowRequestedRe = regexp.MustCompile(`requested (?:about )?([\d,]+) tokens`)
@@ -169,8 +160,8 @@ func parseRequestedOverflowTokens(detail string) (int64, bool) {
 	return value, true
 }
 
-// probeOnce 发送一次指定规模的探测请求并按状态码判定容量。
-func probeOnce(ctx context.Context, channel model.Channel, modelName string, tokens int, ratio float64) (*ContextProbeResult, error) {
+// probeOnce 发送一次指定构造规模的探测请求并按状态码判定容量。
+func probeOnce(ctx context.Context, channel model.Channel, modelName string, tokens int) (*ContextProbeResult, error) {
 	candidates := channelKeyTestCandidates(channel)
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("渠道未配置任何密钥")
@@ -190,7 +181,7 @@ func probeOnce(ctx context.Context, channel model.Channel, modelName string, tok
 		}
 	}
 	format, _, target := testRequestTarget(effective, modelName, "")
-	raw, err := newTestRequest(format, modelName, buildContextProbeText(tokens, ratio), 1)
+	raw, err := newTestRequest(format, modelName, buildContextProbeText(tokens), 1)
 	if err != nil {
 		return nil, fmt.Errorf("构造探测请求失败: %w", err)
 	}
@@ -235,6 +226,8 @@ func probeOnce(ctx context.Context, channel model.Channel, modelName string, tok
 	}
 	if actual {
 		result.ActualTokens = usage.PromptTokens
+	} else if reported, ok := parseRequestedOverflowTokens(result.Detail); ok {
+		result.ActualTokens = reported
 	}
 	var probeErr error
 	switch {
@@ -302,11 +295,10 @@ func truncateSnippet(value string) string {
 	return value[:cut]
 }
 
-// buildContextProbeText 按「4 字符约 1 token」的基准口径生成填充文本,
-// 并按校准出的密度比 ratio 反推字符量: ratio = actual/claimed, 比值越大说明
-// 该模型 tokenizer 越省, 需要的字符数按比例增加。
-func buildContextProbeText(tokens int, ratio float64) string {
-	target := int(float64(tokens) * 4 / ratio)
+// buildContextProbeText 按「4 字符约 1 token」的基准口径生成指定规模的填充文本。
+// 密度修正由调用方在传入规模前完成, 本函数只保证基准口径的字符量。
+func buildContextProbeText(tokens int) string {
+	target := tokens * 4
 	var builder strings.Builder
 	builder.Grow(target + 16)
 	for builder.Len() < target {

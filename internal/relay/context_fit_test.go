@@ -1,0 +1,71 @@
+package relay
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestEstimateRequestTokens(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "空请求", body: "", want: 0},
+		{name: "ASCII 恰好 4 字符", body: "abcd", want: 1},
+		{name: "ASCII 不足 4 字符向下取整", body: "abc", want: 0},
+		{name: "ASCII 6 字符向下取整", body: "abcdef", want: 1},
+		{name: "非 ASCII 每字 1 token", body: "中文", want: 2},
+		{name: "混合宽度相加", body: "ab中文", want: 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := estimateRequestTokens([]byte(tc.body)); got != tc.want {
+				t.Fatalf("estimateRequestTokens(%q) = %d, want %d", tc.body, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEstimateModelTokensUsesSharedDensity(t *testing.T) {
+	const baseURL = "https://upstream.example/"
+	const modelName = "shared-density-model"
+	key := tokenDensityKey(baseURL, modelName)
+	tokenDensityCache.Delete(key)
+	t.Cleanup(func() { tokenDensityCache.Delete(key) })
+
+	body := []byte(strings.Repeat("a", 4000))
+	if got := estimateModelTokens(body, baseURL, modelName); got != 1000 {
+		t.Fatalf("未实测时按基准口径 = %d, want 1000", got)
+	}
+	tokenDensityCache.Store(key, 0.5)
+	if got := estimateModelTokens(body, baseURL, modelName); got != 500 {
+		t.Fatalf("实测密度 0.5 时 = %d, want 500", got)
+	}
+}
+
+func TestContextFitsWindow(t *testing.T) {
+	const baseURL = "https://upstream.example/"
+	const modelName = "window-model"
+	key := tokenDensityKey(baseURL, modelName)
+	tokenDensityCache.Delete(key)
+	t.Cleanup(func() { tokenDensityCache.Delete(key) })
+
+	body := []byte(strings.Repeat("a", 4000))
+	cases := []struct {
+		name   string
+		window int
+		want   bool
+	}{
+		{name: "窗口未知放行", window: 0, want: true},
+		{name: "正边界", window: 1000, want: true},
+		{name: "超出一个 token", window: 999, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := contextFitsWindow(body, tc.window, baseURL, modelName); got != tc.want {
+				t.Fatalf("contextFitsWindow(window=%d) = %v, want %v", tc.window, got, tc.want)
+			}
+		})
+	}
+}

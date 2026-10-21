@@ -1023,7 +1023,7 @@ export const api = {
       body: { channel_id: channelId, model, tokens },
       signal,
     }),
-  /** 把探测出的窗口写入渠道按模型限制。 */
+  /** 把手动定义或探测结果写入渠道按模型限制；contextWindow 传 0 表示清除。 */
   applyModelContext: (channelId: number, model: string, contextWindow: number) =>
     http<null>("/model-eval/apply-context", {
       method: "POST",
