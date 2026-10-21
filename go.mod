@@ -3,7 +3,7 @@ module github.com/kingsunb/NovaVeil
 go 1.26.7
 
 require (
-	github.com/andybalholm/brotli v1.1.1
+	github.com/andybalholm/brotli v1.2.6
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/charmbracelet/log v1.0.0
 	github.com/dlclark/regexp2 v1.12.0
@@ -14,7 +14,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.20.3
-	github.com/looplj/axonhub/llm v0.0.0-20261018172154-8d3c3865dc64
+	github.com/looplj/axonhub/llm v0.0.0-20261021081413-cbdf9a6d4a3d
 	github.com/refraction-networking/utls v1.8.2
 	github.com/samber/lo v1.53.0
 	github.com/spf13/cobra v1.10.2
