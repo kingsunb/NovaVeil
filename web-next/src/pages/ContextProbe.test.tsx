@@ -449,7 +449,7 @@ describe("<ContextProbePage /> 同模型串行调度", () => {
     await screen.findByText("OpenCode Free");
     await user.click(screen.getByLabelText("展开渠道"));
     await user.click(screen.getByLabelText("选择 model-b"));
-    await user.click(screen.getByRole("button", { name: "64K" }));
+    await user.click(screen.getByText("64K"));
     await user.click(screen.getByRole("button", { name: "开始探测（2 组）" }));
 
     await waitFor(() => expect(probeBodies).toHaveLength(1));
