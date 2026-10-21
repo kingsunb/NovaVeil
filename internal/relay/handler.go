@@ -603,6 +603,23 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					releaseRefChainHops(hops)
 					continue
 				}
+				// 请求级拒绝不跨成员重试。
+				if isDeterministicRequestRejection(err) {
+					if code, ok := UpstreamStatusCode(err); ok && code == http.StatusBadRequest && !sanitizeRetried[item.ID] {
+						sanitizeRetried[item.ID] = true
+						if sanitizeRequestBody(raw) {
+							request.releaseRoundLifecycle()
+							releaseRefChainHops(hops)
+							continue
+						}
+					}
+					request.releaseRoundLifecycle()
+					releaseRefChainHops(hops)
+					request.markFailed(err, "", nil)
+					recordErrorLog(request)
+					rejectRequest(c, inbound, errNoAvailableChannels)
+					return
+				}
 				// 上游在任何内容到达前提前关闭流(提前 EOF): 多为瞬时抖动, 首次发生时对同成员
 				// 给予一次免记账的立即重试——旁路 failures 计数, 不记路由失败也不计渠道故障;
 				// 第二次仍提前 EOF 才落入下方正常失败处理。成员每请求仅享受一次免费重试。
@@ -648,7 +665,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					continue
 				}
 				request.releaseRoundLifecycle()
-				// 确定性请求错误(400/404/422, 以及无密钥渠道的 401/403): 重试同一成员或等待冷却都不可能改变结果。
+				// 其余确定性请求错误(400/404/422, 以及无密钥渠道的 401/403): 重试同一成员或等待冷却都不可能改变结果。
 				// 该成员照常计入失败并武装冷却, 立即换下一优先级; 当全部启用成员都各失败
 				// 一次后终止请求, 把明确的错误交还下游——避免无意义的冷却-探测循环烧掉
 				// 轮次与时长预算(实测 Codex developer 角色被上游拒绝后空转 30 轮的案例)。
@@ -1365,15 +1382,57 @@ func rejectRequest(c *gin.Context, inbound transformer.Inbound, err error) {
 	c.Abort()
 }
 
-// sanitizeRequestBody 就地修正请求体中已知的上游不兼容字段:
+// 请求级拒绝的正文标记。
+var deterministicClientRejectionMarkers = []string{
+	"invalid_request_error",
+	"invalid_request",
+	"context_length_exceeded",
+	"maximum context length",
+	"string_above_max_length",
+	"prompt is too long",
+}
+
+// isDeterministicClientResponse 判定状态码与正文是否请求级拒绝。
+func isDeterministicClientResponse(status int, body []byte) bool {
+	if status != http.StatusBadRequest && status != http.StatusUnprocessableEntity {
+		return false
+	}
+	text := strings.ToLower(string(body))
+	for _, marker := range deterministicClientRejectionMarkers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDeterministicRequestRejection 从错误提取正文并判定请求级拒绝。
+func isDeterministicRequestRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	status, ok := UpstreamStatusCode(err)
+	if !ok {
+		return false
+	}
+	var failure *httpclient.Error
+	if errors.As(err, &failure) && len(failure.Body) > 0 {
+		return isDeterministicClientResponse(status, failure.Body)
+	}
+	return isDeterministicClientResponse(status, []byte(err.Error()))
+}
+
+// sanitizeRequestBody 就地修正请求体中已知的上游不兼容字段并报告是否修改:
 // 单条 stop_sequences 字符串→数组、developer 角色→首条 system/其余 user。
 // 只修改会触发 400 的字段, 不改动正常请求。
-func sanitizeRequestBody(raw *httpclient.Request) {
+func sanitizeRequestBody(raw *httpclient.Request) bool {
+	changed := false
 	// stop: 字符串→单元素数组
 	stop := gjson.GetBytes(raw.Body, "stop")
 	if stop.Type == gjson.String {
 		if updated, sErr := sjson.SetRawBytes(raw.Body, "stop", []byte("["+stop.Raw+"]")); sErr == nil {
 			raw.Body = updated
+			changed = true
 		}
 	}
 	// temperature: 钳制到 [0,1] 范围
@@ -1381,12 +1440,13 @@ func sanitizeRequestBody(raw *httpclient.Request) {
 	if temp.Exists() && temp.Float() > 1.0 {
 		if updated, sErr := sjson.SetBytes(raw.Body, "temperature", 1.0); sErr == nil {
 			raw.Body = updated
+			changed = true
 		}
 	}
 	// developer 角色: 首条→system, 其余→user
 	msgs := gjson.GetBytes(raw.Body, "messages")
 	if !msgs.IsArray() {
-		return
+		return changed
 	}
 	isFirst := true
 	for i, m := range msgs.Array() {
@@ -1400,8 +1460,10 @@ func sanitizeRequestBody(raw *httpclient.Request) {
 		}
 		if updated, sErr := sjson.SetBytes(raw.Body, fmt.Sprintf("messages.%d.role", i), role); sErr == nil {
 			raw.Body = updated
+			changed = true
 		}
 	}
+	return changed
 }
 
 // looksLikeAnthropicMessages 报告请求体是否为 Anthropic Messages API 格式。
