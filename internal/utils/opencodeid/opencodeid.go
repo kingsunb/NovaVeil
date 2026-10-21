@@ -156,15 +156,14 @@ func base62Fixed(data []byte, width int) string {
 	return string(out)
 }
 
-// ProjectIDForLane 按档位渲染裸 40-hex 项目号。
-func ProjectIDForLane(signal string, v1 bool) string {
+// ProjectIDForLane 渲染裸 40-hex 项目号; 两档都原样保留 global 与 git 提交号。
+func ProjectIDForLane(signal string, _ bool) string {
 	if signal == "" {
 		signal = defaultProjectSignal
 	}
-	if v1 && (signal == "global" || gitCommitPattern.MatchString(signal)) {
+	if signal == "global" || gitCommitPattern.MatchString(signal) {
 		return signal
 	}
 	sum := sha256.Sum256([]byte("opencode-project\x00" + signal))
 	return hex.EncodeToString(sum[:20])
 }
-

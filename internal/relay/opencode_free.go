@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -58,11 +60,26 @@ func loadOpencodeTools() {
 	})
 }
 
-// knownOpencodeTool 返回工具名的真实定义; 不在核心工具集中返回 false。
+// knownOpencodeTool 返回工具名的真实定义; 未收录返回 false。
 func knownOpencodeTool(name string) (opencodeToolDef, bool) {
 	loadOpencodeTools()
 	def, ok := opencodeTools[name]
 	return def, ok
+}
+
+// opencodeToolMatches 判定工具定义完全一致。
+func opencodeToolMatches(def opencodeToolDef, tool gjson.Result) bool {
+	if tool.Get("function.description").String() != def.Description {
+		return false
+	}
+	if def.Parameters == nil {
+		return true
+	}
+	var parameters map[string]any
+	if err := json.Unmarshal([]byte(tool.Get("function.parameters").Raw), &parameters); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(parameters, def.Parameters)
 }
 
 // isOpencodeFreeModel 判定该渠道上的模型是否落在 OpenCode Zen 免费档:
@@ -149,7 +166,7 @@ func opencodeFreeLaneAccept(channel model.Channel) string {
 //     (msg_ 升序 id);
 //   - v2 档(/inference): User-Agent 由渠道 CustomHeader 静态设置(opencode/latest/2.0.32/cli),
 //     Accept 用 application/json, text/event-stream, 且不发送 x-opencode-request
-//     (v2 网关对此头 403)。
+//     (v2 网关对此头 403); Anthropic 出站补 beta=true。
 //
 // 仅对免费档改写头, 改写发生在 applyChannelConfig 之后, 覆盖渠道静态同名头。
 // x-opencode-project 的裸 40-hex 由 injectOpencodeCorrelationHeaders 注入, 此处不重复。
@@ -163,7 +180,9 @@ func applyOpencodeFreeLaneHeaders(channel model.Channel, request *httpclient.Req
 	}
 	request.Headers.Set("Accept", accept)
 	if !isOpencodeV1Lane(channel) {
-		// v2 档其余头由渠道静态 CustomHeader 配置, 这里只补 Accept。
+		if opencodeModelProtocol(channel, modelName) == model.UpstreamProtocolAnthropic {
+			applyAnthropicBetaQuery(request)
+		}
 		return
 	}
 	ver := opencodeV1ProviderUtils[opencodeModelProtocol(channel, modelName)]
@@ -173,6 +192,24 @@ func applyOpencodeFreeLaneHeaders(channel model.Channel, request *httpclient.Req
 	request.Headers.Set("User-Agent", "opencode/"+opencodeV1ClientVersion+
 		" ai-sdk/provider-utils/"+ver+" runtime/bun/"+opencodeV1BunVersion)
 	request.Headers.Set("x-opencode-request", opencodeid.GenerateMessageID())
+}
+
+// v2 Anthropic 补 beta, 保留原 query。
+func applyAnthropicBetaQuery(request *httpclient.Request) {
+	if request.Query == nil {
+		request.Query = make(url.Values)
+	}
+	request.Query.Set("beta", "true")
+	parsed, err := url.Parse(request.URL)
+	if err != nil {
+		return
+	}
+	query := parsed.Query()
+	if query.Has("beta") {
+		query.Del("beta")
+		parsed.RawQuery = query.Encode()
+		request.URL = parsed.String()
+	}
 }
 
 // bodyModelName 从请求体提取 model 字段; 空串表示无法识别(不改写)。
@@ -271,11 +308,11 @@ func ensureOpencodeFreeTools(body []byte) ([]byte, bool) {
 			continue
 		}
 		present[name] = true
-		// 同名核心工具: 仅在 description 与真实定义不一致时替换。上游逐字节比对
+		// 同名已知工具: description 或 parameters 不一致时替换。上游逐字节比对
 		// description/parameters, 客户端自带的定义几乎不可能恰好匹配。已一致的
 		// 不替换, 保持幂等。
 		if def, known := knownOpencodeTool(name); known {
-			if t.Get("function.description").String() != def.Description {
+			if !opencodeToolMatches(def, t) {
 				items = append(items, opencodeFreeChatTool(name))
 				changed = true
 				continue

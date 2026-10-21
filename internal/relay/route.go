@@ -103,6 +103,41 @@ func routableLeafCountFrom(g model.Group, visited map[int]bool) int {
 	return n
 }
 
+// 按模式返回实际候选数。
+func routableCandidateCount(group model.Group) int {
+	if group.Mode != model.GroupModeManual {
+		return routableLeafCount(group)
+	}
+	item := itemOf(group, group.ActiveItemID)
+	if item.ID == 0 {
+		return 0
+	}
+	return routableItemLeafCount(item, map[int]bool{group.ID: true})
+}
+
+// 统计手动当前成员实际可达的叶子数。
+func routableItemLeafCount(item model.GroupItem, visited map[int]bool) int {
+	if !item.IsGroupRef() {
+		if channelDisabledForRouting(item) {
+			return 0
+		}
+		return 1
+	}
+	ref, err := groupLookupFunc(item.RefGroupName)
+	if err != nil || visited[ref.ID] {
+		return 0
+	}
+	if ref.Mode == model.GroupModeManual {
+		visited[ref.ID] = true
+		next := itemOf(ref, ref.ActiveItemID)
+		if next.ID == 0 {
+			return 0
+		}
+		return routableItemLeafCount(next, visited)
+	}
+	return routableLeafCountFrom(ref, visited)
+}
+
 // pickGroupItem 按分组模式选择本轮目标成员, 没有可用成员时返回零值; group.Items 已按 Priority 升序排列。
 // exclude 为本请求已放弃的成员 ID, 重扫时跳过。被禁用渠道的成员在手动/亲和/常规扫描与紧急兜底
 // 各入口一律跳过, 派发层另有兜底检查覆盖粘合等残余旁路; 缺少密钥不在此判断, 由调用方作为一轮失败上报。
@@ -122,7 +157,7 @@ func pickGroupItem(group model.Group, exclude int, clientFormat ...llm.APIFormat
 func pickGroupItemWithContext(ctx context.Context, group model.Group, exclude int, clientFormat ...llm.APIFormat) model.GroupItem {
 	if group.Mode == model.GroupModeManual {
 		for _, item := range group.Items {
-			if item.ID == group.ActiveItemID {
+			if item.ID == group.ActiveItemID && item.ID != exclude {
 				// 指定成员的渠道被禁用时按无目标处理: 请求进入等待, 重新启用或人工换渠道后继续。
 				if channelDisabledForRouting(item) {
 					return model.GroupItem{}
@@ -667,7 +702,7 @@ func pickRefChainHop(group model.Group, sessionKey string, exclude int, clientFo
 func pickRefChainHopWithContext(ctx context.Context, group model.Group, sessionKey string, exclude int, clientFormat ...llm.APIFormat) model.GroupItem {
 	item := model.GroupItem{}
 	if sessionStickyEnabled(group, sessionKey) {
-		item = pickSessionSticky(group, sessionKey)
+		item = pickSessionStickyExcluding(group, sessionKey, exclude)
 	}
 	if item.ID == 0 {
 		item = pickGroupItem(group, exclude, clientFormat...)

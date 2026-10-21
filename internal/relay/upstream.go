@@ -95,7 +95,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	// 的默认 text/event-stream; 其余渠道留空, 行为与改动前完全一致。
 	opencodeAccept := ""
 	if isOpencodeFreeModel(channel, bodyModelName(request.Body)) {
-		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)只补 Accept。
+		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)补 Accept, Anthropic 另补 beta。
 		applyOpencodeFreeLaneHeaders(channel, request, bodyModelName(request.Body))
 		opencodeAccept = opencodeFreeLaneAccept(channel)
 		if isChatFormat(format) {
@@ -289,7 +289,7 @@ func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *
 	// 拒绝。Chat 归一与渠道参数已应用、model 名已最终化, 此时把出站 Chat 正文规范成
 	// Agent 形态(stream + 核心工具)。客户端非流式的折叠由 sendConverted 依据 !streaming 判定。
 	if isOpencodeFreeModel(m.channel, bodyModelName(request.Body)) {
-		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)不动。
+		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)补 Accept, Anthropic 另补 beta。
 		applyOpencodeFreeLaneHeaders(m.channel, request, bodyModelName(request.Body))
 		if m.format == llm.APIFormatOpenAIChatCompletion {
 			request.Body, _ = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(m.channel))

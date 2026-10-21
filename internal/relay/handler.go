@@ -238,7 +238,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			item := model.GroupItem{}
 			if sessionStickyEnabled(group, scopeKey) {
 				// 粘合有效时本轮直接使用粘合成员, 失效则按优先级正常选路。
-				item = pickSessionSticky(group, scopeKey)
+				item = pickSessionStickyExcluding(group, scopeKey, exclude)
 			}
 			if item.ID == 0 {
 				// 手动模式取人工指定的成员, 故障转移模式按优先级选择未禁用且不在冷却中的成员;
@@ -449,9 +449,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				if contextWindow > maxCandidateWindow {
 					maxCandidateWindow = contextWindow
 				}
-				// 与失败分支同口径归还引用链探测占用: 跳过不是失败, 但占用不还会让整组钉死。
-				releaseRefChainHops(hops[:len(hops)-1])
-				if len(contextSkipped) >= routableLeafCount(hops[0].group) {
+				// 跳过不是失败, 整链占用须归还。
+				releaseRefChainHops(hops)
+				if len(contextSkipped) >= routableCandidateCount(hops[0].group) {
 					// 报出请求规模与候选集最大窗口, 调用方可据此截断请求或换模型。
 					detail := fmt.Errorf(
 						"%s（请求约 %d token，候选集最大窗口 %d token）",
@@ -643,7 +643,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					// group.Items 会混入引用成员(解析进别的分组)、禁用渠道成员、冷却成员,
 					// 它们都不会进入 busyRejected, 若直接取 len(group.Items) 要么虚高(永远凑不满, 空转烧轮次),
 					// 要么因叶子分组不含顶层其余成员而过早 503(引用场景丢弃尚未尝试的健康成员)。
-					if len(busyRejected) >= routableLeafCount(hops[0].group) {
+					if len(busyRejected) >= routableCandidateCount(hops[0].group) {
 						request.markFailed(errAllChannelsBusy, "", nil)
 						recordErrorLog(request)
 						rejectRequest(c, inbound, errAllChannelsBusy)
@@ -679,7 +679,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					recordRouteFailureIfReal(group, item.ID, failureCounts, err)
 					clearSessionStickyByItem(group.ID, item.ID)
 					nonRetryable[item.ID] = true
-					if len(nonRetryable) >= routableLeafCount(hops[0].group) {
+					if len(nonRetryable) >= routableCandidateCount(hops[0].group) {
 						request.markFailed(err, "", nil)
 						recordErrorLog(request)
 						rejectRequest(c, inbound, errNoAvailableChannels)

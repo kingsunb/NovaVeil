@@ -1058,10 +1058,10 @@ describe("GroupEditor 成员名次输入", () => {
 });
 
 describe("分组上下文窗口展示", () => {
-  // gpt-4o 人工定义 128K 窗口；gpt-4o-mini 未定义（过滤时始终放行）
+  // gpt-4o 人工定义 131072 窗口；gpt-4o-mini 未定义（过滤时始终放行）
   const channelWithWindow: typeof sampleChannel = {
     ...sampleChannel,
-    model_limits: { "gpt-4o": { context_window: 128_000 } },
+    model_limits: { "gpt-4o": { context_window: 131_072 } },
   };
   // 列表快照会带上成员的 channel_model（含渠道 id 与模型名）
   const groupWithModels: typeof sampleGroup = {
@@ -1119,7 +1119,7 @@ describe("分组上下文窗口展示", () => {
     render(<GroupsPage />, { wrapper: Wrapper });
     await waitFor(() => screen.getByText("gpt-4o-prod"));
 
-    expect(screen.queryByText("128K 窗口")).not.toBeInTheDocument();
+    expect(screen.queryByText("131.072K 窗口")).not.toBeInTheDocument();
     expect(screen.queryByText("未定义窗口")).not.toBeInTheDocument();
   });
 
@@ -1129,8 +1129,13 @@ describe("分组上下文窗口展示", () => {
     await waitFor(() => screen.getByText("gpt-4o-prod"));
 
     await waitFor(() =>
-      expect(screen.getByText("128K 窗口")).toBeInTheDocument(),
+      expect(screen.getByText("131.072K 窗口")).toBeInTheDocument(),
     );
+    expect(
+      screen.getByTitle(
+        "人工定义的上下文窗口：131,072 token；请求估算超出即跳过该成员",
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText("未定义窗口")).toBeInTheDocument();
   });
 
@@ -1142,7 +1147,7 @@ describe("分组上下文窗口展示", () => {
 
     await user.click(screen.getByRole("button", { name: /编辑/ }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).queryByText("128K 窗口")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("131.072K 窗口")).not.toBeInTheDocument();
 
     await user.click(within(dialog).getByRole("button", { name: "路由策略" }));
     expect(contextFitSwitch()).toHaveAttribute("aria-checked", "false");
@@ -1153,8 +1158,59 @@ describe("分组上下文窗口展示", () => {
 
     await user.click(within(dialog).getByRole("button", { name: "成员" }));
     await waitFor(() =>
-      expect(within(dialog).getByText("128K 窗口")).toBeInTheDocument(),
+      expect(within(dialog).getByText("131.072K 窗口")).toBeInTheDocument(),
     );
     expect(within(dialog).getByText("未定义窗口")).toBeInTheDocument();
+  });
+});
+
+describe("GroupEditor 路由开关持久化", () => {
+  it("后台定时探测开关保存后重新打开仍保留", async () => {
+    const user = userEvent.setup();
+    let groups = [sampleGroup];
+    const savedConfigs: GroupRelayConfig[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url.includes("/group/list")) return Promise.resolve(jsonOk(groups));
+        if (url.includes("/channel/list")) return Promise.resolve(jsonOk([sampleChannel]));
+        if (url.includes("/group/update")) {
+          const body = JSON.parse(String(init?.body)) as { relay_config: GroupRelayConfig };
+          savedConfigs.push(body.relay_config);
+          const saved = { ...sampleGroup, relay_config: body.relay_config };
+          groups = [saved];
+          return Promise.resolve(jsonOk(saved));
+        }
+        return Promise.resolve(jsonOk(null));
+      }),
+    );
+
+    render(<GroupsPage />, { wrapper: Wrapper });
+    await screen.findByText(sampleGroup.name);
+    await user.click(screen.getByRole("button", { name: /编辑/ }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "路由策略" }));
+
+    const backgroundSwitch = () => {
+      const row = screen.getByText("后台定时探测").parentElement?.parentElement as HTMLElement;
+      return within(row).getByRole("switch");
+    };
+    expect(backgroundSwitch()).toHaveAttribute("aria-checked", "false");
+    await user.click(backgroundSwitch());
+    await waitFor(() =>
+      expect(backgroundSwitch()).toHaveAttribute("aria-checked", "true"),
+    );
+
+    await user.click(within(dialog).getByRole("button", { name: /^保存$/ }));
+    await waitFor(() => {
+      expect(savedConfigs).toHaveLength(1);
+      expect(savedConfigs[0].background_probe_enabled).toBe(true);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /编辑/ }));
+    const reopened = await screen.findByRole("dialog");
+    await user.click(within(reopened).getByRole("button", { name: "路由策略" }));
+    expect(backgroundSwitch()).toHaveAttribute("aria-checked", "true");
   });
 });

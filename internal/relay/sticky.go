@@ -64,14 +64,19 @@ func sessionStickyEnabled(group model.Group, sessionKey string) bool {
 // pickSessionSticky 返回会话粘合指向的成员: 未过期、成员仍在分组且不在冷却中才有效,
 // 无效时清除该记录并返回零值, 由调用方走正常选路重扫。
 func pickSessionSticky(group model.Group, sessionKey string) model.GroupItem {
+	return pickSessionStickyExcluding(group, sessionKey, 0)
+}
+
+// 读取粘合, 已排除成员则清除。
+func pickSessionStickyExcluding(group model.Group, sessionKey string, exclude int) model.GroupItem {
 	routeMu.Lock()
 	defer routeMu.Unlock()
 
-	return pickSessionStickyLocked(group, sessionKey)
+	return pickSessionStickyLocked(group, sessionKey, exclude)
 }
 
 // pickSessionStickyLocked 校验并返回会话粘合成员; 调用方必须持有锁。
-func pickSessionStickyLocked(group model.Group, sessionKey string) model.GroupItem {
+func pickSessionStickyLocked(group model.Group, sessionKey string, exclude int) model.GroupItem {
 	sessions := sessionStickies[group.ID]
 	entry, ok := sessions[sessionKey]
 	if !ok {
@@ -80,7 +85,7 @@ func pickSessionStickyLocked(group model.Group, sessionKey string) model.GroupIt
 
 	now := time.Now().UnixMilli()
 	item := itemOf(group, entry.ItemID)
-	valid := entry.ExpireAtUnixMilli > now && item.ID != 0
+	valid := entry.ExpireAtUnixMilli > now && item.ID != 0 && item.ID != exclude
 	if valid {
 		// 目标成员正在冷却说明它刚进入 OPEN, 粘合随之失效。
 		if route := routes[group.ID]; route != nil {

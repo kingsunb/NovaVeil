@@ -16,6 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Pill } from "@/components/ui/pill";
+import { zhCN } from "@/locales/zh-CN";
 
 /** 队列并发数: 同一上游的免费渠道不宜压太狠, 3 路足够。 */
 const PROBE_CONCURRENCY = 3;
@@ -158,9 +159,10 @@ export default function ContextProbePage() {
     return value;
   }
 
-  async function persistWindow(target: ProbeTarget, value: number) {
+  async function persistWindow(target: ProbeTarget, value: number, submittedDraft: string) {
     await api.applyModelContext(target.channelId, target.model, value);
     setWindowDrafts((prev) => {
+      if (prev[target.key] !== submittedDraft) return prev;
       const next = { ...prev };
       delete next[target.key];
       return next;
@@ -169,39 +171,36 @@ export default function ContextProbePage() {
 
   async function saveWindow(target: ProbeTarget) {
     const raw = windowDraft(target);
-    if (raw.trim() === "" && target.manualWindow === 0) {
-      toast.error("请输入窗口 token 数");
+    if (raw.trim() === "") {
+      toast.error(zhCN.contextProbe.emptyWindow);
       return;
     }
-    const value = raw.trim() === "" ? 0 : parseWindowValue(raw);
-    if (value === null) {
-      toast.error("窗口必须是大于等于 0 的整数 token 数");
+    const value = parseWindowValue(raw);
+    if (value === null || value <= 0) {
+      toast.error(zhCN.contextProbe.invalidWindow);
       return;
     }
     setSavingWindows(true);
     try {
-      await persistWindow(target, value);
+      await persistWindow(target, value, raw);
       await queryClient.invalidateQueries({ queryKey: ["channels"] });
-      toast.success(
-        value > 0
-          ? `已把 ${target.model} 的窗口定义为 ${formatTokens(value)}`
-          : `已清除 ${target.model} 的人工窗口`,
-      );
+      toast.success(`${zhCN.contextProbe.windowSaved}：${target.model} ${formatTokens(value)}`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "保存失败");
+      toast.error(error instanceof Error ? error.message : zhCN.contextProbe.saveFailed);
     } finally {
       setSavingWindows(false);
     }
   }
 
   async function clearWindow(target: ProbeTarget) {
+    const submittedDraft = windowDraft(target);
     setSavingWindows(true);
     try {
-      await persistWindow(target, 0);
+      await persistWindow(target, 0, submittedDraft);
       await queryClient.invalidateQueries({ queryKey: ["channels"] });
-      toast.success(`已清除 ${target.model} 的人工窗口`);
+      toast.success(`${zhCN.contextProbe.windowCleared}：${target.model}`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "清除失败");
+      toast.error(error instanceof Error ? error.message : zhCN.contextProbe.clearFailed);
     } finally {
       setSavingWindows(false);
     }
@@ -217,7 +216,7 @@ export default function ContextProbePage() {
     const failed: string[] = [];
     for (const target of picked) {
       try {
-        await persistWindow(target, value);
+        await persistWindow(target, value, windowDraft(target));
       } catch {
         failed.push(`${target.channelName}/${target.model}`);
       }
@@ -512,8 +511,9 @@ export default function ContextProbePage() {
                             size="sm"
                             variant="ghost"
                             className="h-7 shrink-0 px-2 text-xs"
-                            disabled={savingWindows}
+                            disabled={savingWindows || windowDraft(item).trim() === ""}
                             onClick={() => void saveWindow(item)}
+                            aria-label={`保存 ${item.model} 窗口`}
                           >
                             保存
                           </Button>
@@ -524,6 +524,7 @@ export default function ContextProbePage() {
                               className="h-7 shrink-0 px-2 text-xs"
                               disabled={savingWindows}
                               onClick={() => void clearWindow(item)}
+                              aria-label={`清除 ${item.model} 窗口`}
                             >
                               清除
                             </Button>

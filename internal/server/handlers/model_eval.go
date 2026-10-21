@@ -124,17 +124,28 @@ func setModelContextWindow(limits map[string]model.ChannelModelLimit, modelName 
 	for name, limit := range limits {
 		next[name] = limit
 	}
-	limit := next[modelName]
-	if window > 0 {
-		value := window
-		limit.ContextWindow = &value
-	} else {
-		limit.ContextWindow = nil
+	keys := make([]string, 0, 1)
+	for name := range next {
+		if strings.EqualFold(name, modelName) {
+			keys = append(keys, name)
+		}
 	}
-	if limit.ContextWindow == nil && limit.MaxOutput == nil && limit.ThinkingLevel == "" {
-		delete(next, modelName)
-	} else {
-		next[modelName] = limit
+	if len(keys) == 0 {
+		keys = append(keys, modelName)
+	}
+	for _, key := range keys {
+		limit := next[key]
+		if window > 0 {
+			value := window
+			limit.ContextWindow = &value
+		} else {
+			limit.ContextWindow = nil
+		}
+		if limit.ContextWindow == nil && limit.MaxOutput == nil && limit.ThinkingLevel == "" {
+			delete(next, key)
+		} else {
+			next[key] = limit
+		}
 	}
 	return next
 }

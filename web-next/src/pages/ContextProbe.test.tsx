@@ -106,4 +106,89 @@ describe("<ContextProbePage /> 窗口定义", () => {
       ]),
     );
   });
+
+  it("保存期间继续编辑时保留新草稿", async () => {
+    const applyBodies: Array<Record<string, unknown>> = [];
+    let resolveApply: ((response: Response) => void) | undefined;
+    const pendingApply = new Promise<Response>((resolve) => {
+      resolveApply = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/model-eval/apply-context")) {
+          applyBodies.push(JSON.parse(String(init?.body ?? "{}")));
+          return pendingApply;
+        }
+        if (url.includes("/channel/list")) return jsonResponse([channel]);
+        if (url.includes("/model-eval/probe-history")) return jsonResponse([]);
+        return jsonResponse(null);
+      }),
+    );
+
+    render(
+      <Wrapper>
+        <ContextProbePage />
+      </Wrapper>,
+    );
+
+    const user = userEvent.setup();
+    await screen.findByText("OpenCode Free");
+    await user.click(screen.getByLabelText("展开渠道"));
+    const input = await screen.findByLabelText("model-b 窗口 token");
+    expect(input).toHaveValue(128000);
+
+    await user.click(screen.getByLabelText("保存 model-b 窗口"));
+    await waitFor(() => expect(applyBodies).toHaveLength(1));
+
+    await user.clear(input);
+    await user.type(input, "256000");
+    resolveApply?.(new Response(JSON.stringify({ code: 200, message: "success", data: null }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+
+    await waitFor(() => expect(input).toHaveValue(256000));
+  });
+
+  it("空输入不提交，清除只走清除按钮", async () => {
+    const applyBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/model-eval/apply-context")) {
+          applyBodies.push(JSON.parse(String(init?.body ?? "{}")));
+          return jsonResponse(null);
+        }
+        if (url.includes("/channel/list")) return jsonResponse([channel]);
+        if (url.includes("/model-eval/probe-history")) return jsonResponse([]);
+        return jsonResponse(null);
+      }),
+    );
+
+    render(
+      <Wrapper>
+        <ContextProbePage />
+      </Wrapper>,
+    );
+
+    const user = userEvent.setup();
+    await screen.findByText("OpenCode Free");
+    await user.click(screen.getByLabelText("展开渠道"));
+    const input = await screen.findByLabelText("model-b 窗口 token");
+    await user.clear(input);
+
+    expect(screen.getByLabelText("保存 model-b 窗口")).toBeDisabled();
+    expect(applyBodies).toHaveLength(0);
+
+    await user.click(screen.getByLabelText("清除 model-b 窗口"));
+    await waitFor(() => expect(applyBodies).toHaveLength(1));
+    expect(applyBodies[0]).toEqual({
+      channel_id: 7,
+      model: "model-b",
+      context_window: 0,
+    });
+  });
 });

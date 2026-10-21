@@ -97,10 +97,10 @@ function nextDraftItemUid(prefix = "new") {
   return `${prefix}:${draftItemSeq}`;
 }
 
-/** 上下文窗口短串: 128000 → "128K", 1000000 → "1M", 1500000 → "1.5M"。 */
+/** 上下文窗口短串: 131072 → "131.072K", 1000000 → "1M"。 */
 function formatContextWindow(tokens: number): string {
-  if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(1))}M`;
-  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`;
+  if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(3))}M`;
+  if (tokens >= 1_000) return `${Number((tokens / 1_000).toFixed(3))}K`;
   return String(tokens);
 }
 
@@ -129,7 +129,7 @@ function MemberContextWindow({ tokens }: { tokens: number }) {
   return (
     <span
       className="shrink-0"
-      title="人工定义的上下文窗口；请求估算超出即跳过该成员"
+      title={`人工定义的上下文窗口：${tokens.toLocaleString("en-US")} token；请求估算超出即跳过该成员`}
     >
       <Pill tone="neutral" dot={false} className="text-[10px]">
         {formatContextWindow(tokens)} 窗口

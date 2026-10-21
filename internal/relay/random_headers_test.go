@@ -15,6 +15,7 @@ import (
 
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
+	"github.com/kingsunb/NovaVeil/internal/utils/opencodeid"
 	"github.com/looplj/axonhub/llm/httpclient"
 )
 
@@ -613,6 +614,126 @@ func TestInjectOpencodeCorrelationHeaders(t *testing.T) {
 	for _, h := range []string{opencodeAffinityHeader, opencodeSessionIDHeader, opencodeUpstreamSessID, opencodeProjectHeader} {
 		if req4.Headers.Get(h) != "" {
 			t.Fatalf("非 OpencodeCompat 渠道不应注入 %s, 实际 %q", h, req4.Headers.Get(h))
+		}
+	}
+}
+
+func TestInjectOpencodeCorrelationHeadersV2Child(t *testing.T) {
+	channel := model.Channel{ID: 1001, OpencodeCompat: true, BaseURL: "https://opencode.ai/inference"}
+	req := newRandomHeaderRequest()
+	req.Headers.Set(opencodeSessionHeader, validSesA)
+	req.Headers.Set(opencodeSessionIDHeader, validSesB)
+	req.Headers.Set(opencodeProjectHeader, "global")
+
+	injectOpencodeCorrelationHeaders(channel, req)
+
+	if got := req.Headers.Get(opencodeSessionHeader); got != validSesA {
+		t.Fatalf("x-opencode-session = %q, 期望 root %q", got, validSesA)
+	}
+	if got := req.Headers.Get(opencodeSessionIDHeader); got != validSesB {
+		t.Fatalf("x-opencode-session-id = %q, 期望 child %q", got, validSesB)
+	}
+	if got := req.Headers.Get(opencodeAffinityHeader); got != validSesA {
+		t.Fatalf("x-session-affinity = %q, 期望 root %q", got, validSesA)
+	}
+	if got := req.Headers.Get(opencodeUpstreamSessID); got != validSesA {
+		t.Fatalf("X-Session-Id = %q, 期望 root %q", got, validSesA)
+	}
+	if got := req.Headers.Get(opencodeProjectHeader); got != "global" {
+		t.Fatalf("x-opencode-project = %q, 期望 global", got)
+	}
+
+	fallback := newRandomHeaderRequest()
+	fallback.Headers.Set(opencodeSessionHeader, validSesA)
+	injectOpencodeCorrelationHeaders(channel, fallback)
+	if got := fallback.Headers.Get(opencodeSessionIDHeader); got != validSesA {
+		t.Fatalf("无 child 时 x-opencode-session-id = %q, 期望 root %q", got, validSesA)
+	}
+}
+
+func TestInjectOpencodeCorrelationHeadersV2Parent(t *testing.T) {
+	channel := model.Channel{ID: 1002, OpencodeCompat: true, BaseURL: "https://opencode.ai/inference"}
+	parent := opencodeid.SessionIDFromSignal("parent-signal")
+
+	for attempt := 0; attempt < 2; attempt++ {
+		req := newRandomHeaderRequest()
+		req.Headers.Set(opencodeSessionHeader, validSesA)
+		req.Headers.Set(opencodeSessionIDHeader, validSesB)
+		req.Headers.Set(opencodeParentHeader, "parent-signal")
+		injectOpencodeCorrelationHeaders(channel, req)
+
+		if got := req.Headers.Get(opencodeParentHeader); got != parent {
+			t.Fatalf("x-parent-session-id = %q, 期望 %q", got, parent)
+		}
+		if got := req.Headers.Get(opencodeParentSessionHeader); got != parent {
+			t.Fatalf("x-opencode-parent-session-id = %q, 期望 %q", got, parent)
+		}
+		if got := req.Headers.Get(opencodeSessionHeader); got != parent {
+			t.Fatalf("x-opencode-session = %q, 期望父会话 %q", got, parent)
+		}
+		if got := req.Headers.Get(opencodeAffinityHeader); got != parent {
+			t.Fatalf("x-session-affinity = %q, 期望父会话 %q", got, parent)
+		}
+		if got := req.Headers.Get(opencodeUpstreamSessID); got != parent {
+			t.Fatalf("X-Session-Id = %q, 期望父会话 %q", got, parent)
+		}
+		if got := req.Headers.Get(opencodeSessionIDHeader); got != validSesB {
+			t.Fatalf("x-opencode-session-id = %q, 期望 child %q", got, validSesB)
+		}
+	}
+
+	fallback := newRandomHeaderRequest()
+	fallback.Headers.Set(opencodeSessionHeader, validSesA)
+	fallback.Headers.Set(opencodeParentHeader, "parent-signal")
+	injectOpencodeCorrelationHeaders(channel, fallback)
+	if got := fallback.Headers.Get(opencodeSessionHeader); got != parent {
+		t.Fatalf("无 child 时 x-opencode-session = %q, 期望父会话 %q", got, parent)
+	}
+	if got := fallback.Headers.Get(opencodeSessionIDHeader); got != validSesA {
+		t.Fatalf("无 child 时 x-opencode-session-id = %q, 期望原会话 %q", got, validSesA)
+	}
+}
+
+func TestInjectOpencodeCorrelationHeadersV1Unchanged(t *testing.T) {
+	channel := model.Channel{ID: 1003, OpencodeCompat: true, BaseURL: "https://opencode.ai/zen"}
+	parent := opencodeid.SessionIDFromSignal("parent-signal")
+	req := newRandomHeaderRequest()
+	req.Headers.Set(opencodeSessionHeader, validSesA)
+	req.Headers.Set(opencodeSessionIDHeader, validSesB)
+	req.Headers.Set(opencodeParentHeader, "parent-signal")
+
+	injectOpencodeCorrelationHeaders(channel, req)
+
+	if got := req.Headers.Get(opencodeSessionHeader); got != validSesA {
+		t.Fatalf("v1 x-opencode-session = %q, 期望 %q", got, validSesA)
+	}
+	if got := req.Headers.Get(opencodeSessionIDHeader); got != validSesA {
+		t.Fatalf("v1 x-opencode-session-id = %q, 期望 root %q", got, validSesA)
+	}
+	for _, h := range []string{opencodeAffinityHeader, opencodeUpstreamSessID} {
+		if got := req.Headers.Get(h); got != "" {
+			t.Fatalf("v1 不应注入 %s, 实际 %q", h, got)
+		}
+	}
+	if got := req.Headers.Get(opencodeParentHeader); got != parent {
+		t.Fatalf("v1 x-parent-session-id = %q, 期望 %q", got, parent)
+	}
+	if got := req.Headers.Get(opencodeParentSessionHeader); got != parent {
+		t.Fatalf("v1 x-opencode-parent-session-id = %q, 期望 %q", got, parent)
+	}
+}
+
+func TestInjectOpencodeCorrelationHeadersProjectBothLanes(t *testing.T) {
+	commit := "0123456789abcdef0123456789abcdef01234567"
+	for _, baseURL := range []string{"https://opencode.ai/inference", "https://opencode.ai/zen"} {
+		for _, project := range []string{"global", commit} {
+			channel := model.Channel{ID: 1004, OpencodeCompat: true, BaseURL: baseURL}
+			req := newRandomHeaderRequest()
+			req.Headers.Set(opencodeProjectHeader, project)
+			injectOpencodeCorrelationHeaders(channel, req)
+			if got := req.Headers.Get(opencodeProjectHeader); got != project {
+				t.Fatalf("%s 项目号 = %q, 期望原样 %q", baseURL, got, project)
+			}
 		}
 	}
 }

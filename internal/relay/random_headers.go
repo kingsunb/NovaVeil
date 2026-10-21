@@ -242,10 +242,9 @@ func applyResolvedOpencodeSession(channel model.Channel, session string, request
 // injectOpencodeCorrelationHeaders 在 OpencodeCompat 渠道上补充 opencode 关联头。
 // 调用方应在 x-opencode-session 最终写入之后调用(applyChannelConfig 里紧跟
 // applyResolvedOpencodeSession), 这样关联头镜像的是最终会话号而非占位值。
-// x-opencode-project 只在头未存在时写入, 不覆盖客户端或全局随机头规则已经给的值。
-// 非 OpencodeCompat 渠道不注入(与 x-opencode-session 同口径)。
-// 头集合对齐 opencode v2 官方客户端 model-request.ts:282-292: x-session-affinity、
-// x-opencode-session-id、X-Session-Id 三者镜像会话号, x-opencode-project 发裸 40-hex。
+// v1 档只镜像 x-opencode-session-id 且不发 affinity/X-Session-Id; v2 档保留客户端
+// child session, root 会话用于 x-opencode-session/affinity/X-Session-Id。
+// 非空父会话规范化为官方会话号并写双 parent 头; v2 同时把 root 切到父会话。
 // 官方不发送 x-opencode-request, 此处也不再注入。
 func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient.Request) {
 	if !channel.OpencodeCompat || request == nil {
@@ -254,36 +253,46 @@ func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient
 	if request.Headers == nil {
 		request.Headers = make(http.Header)
 	}
-	if session := request.Headers.Get(opencodeSessionHeader); session != "" {
-		request.Headers.Set(opencodeSessionIDHeader, session)
-		// v1 档(/zen)官方客户端只发 x-opencode-session 与 x-opencode-session-id, 明确不发
-		// x-session-affinity / X-Session-Id(见 opencode2api setV1Headers: "The v1 client
-		// sends no x-session-affinity or X-Session-Id to this provider")。v2 档与其余
-		// OpencodeCompat 渠道保持三个头同值镜像。
-		if !isOpencodeV1Lane(channel) {
-			request.Headers.Set(opencodeAffinityHeader, session)
-			request.Headers.Set(opencodeUpstreamSessID, session)
-		}
-	}
-	// 项目号按档位渲染, 缺省信号派生。
 	v1 := isOpencodeV1Lane(channel)
-	project := request.Headers.Get(opencodeProjectHeader)
-	if project == "" {
-		project = gjson.GetBytes(request.Body, "metadata.project_id").String()
-	}
-	request.Headers.Set(opencodeProjectHeader, opencodeid.ProjectIDForLane(project, v1))
-	// 父子会话按档位渲染。
+	session := request.Headers.Get(opencodeSessionHeader)
+	childSession := request.Headers.Get(opencodeSessionIDHeader)
+	childFallback := session
+
 	parent := request.Headers.Get(opencodeParentHeader)
 	if parent == "" {
 		parent = gjson.GetBytes(request.Body, "metadata.parent_session_id").String()
 	}
 	if parent != "" {
-		if v1 {
-			parent = opencodeid.SessionIDFromSignal(parent)
-			request.Headers.Set(opencodeParentSessionHeader, parent)
-		}
+		parent = opencodeid.SessionIDFromSignal(parent)
 		request.Headers.Set(opencodeParentHeader, parent)
+		request.Headers.Set(opencodeParentSessionHeader, parent)
+		if !v1 {
+			session = parent
+		}
 	}
+
+	if session != "" {
+		if v1 {
+			request.Headers.Set(opencodeSessionIDHeader, session)
+		} else {
+			if childSession == "" {
+				childSession = childFallback
+			}
+			if childSession == "" {
+				childSession = session
+			}
+			request.Headers.Set(opencodeSessionHeader, session)
+			request.Headers.Set(opencodeSessionIDHeader, childSession)
+			request.Headers.Set(opencodeAffinityHeader, session)
+			request.Headers.Set(opencodeUpstreamSessID, session)
+		}
+	}
+
+	project := request.Headers.Get(opencodeProjectHeader)
+	if project == "" {
+		project = gjson.GetBytes(request.Body, "metadata.project_id").String()
+	}
+	request.Headers.Set(opencodeProjectHeader, opencodeid.ProjectIDForLane(project, v1))
 }
 
 // resolveRequestRandomValue 在请求级一次性解析本请求所有随机头应使用的稳定会话 ID:
