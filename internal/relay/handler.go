@@ -572,12 +572,17 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				if outcome == AttemptFailed {
 					brief = err.Error()
 				}
-				// 多 Key 认证/限额拒绝轮换: 上游明确拒绝当前凭据(401/403)或标记其限速配额(429)
+				// 多 Key 认证/限额拒绝轮换: 上游明确拒绝当前凭据(401)或标记其限速配额(429)
 				// 且该渠道配置了多把 Key 时, 仅把本轮使用的 Key 标记冷却(时长取分组
 				// MemberCooldownSeconds), 不计渠道失败、不等待, 立即重选同一成员的下一把 Key。
 				// 429 的用量限额对单把 Key 是持续性不可用, 不轮换会反复重试同一把耗尽的 Key。
+				// 代理账号的 403 只冷却账号并进入下方换号分支, 不冷却 Key。
 				// 旧式单 Key 与仅剩一把的渠道不走此路径, 照常进入下方失败计数与冷却处理。
-				if outcome == AttemptFailed && len(channel.Keys) > 1 && (isAuthRejectionError(err) || isKeyRateLimitError(err)) {
+				keyAuthRejection := isAuthRejectionError(err)
+				if code, ok := UpstreamStatusCode(err); ok && code == http.StatusForbidden && proxyAccount != "" {
+					keyAuthRejection = false
+				}
+				if outcome == AttemptFailed && len(channel.Keys) > 1 && (keyAuthRejection || isKeyRateLimitError(err)) {
 					markChannelKeyCooldown(channel.ID, selectedKey.ID, group.RelayConfig.MemberCooldownSeconds)
 					request.finishRound(AttemptFailed, classifyUpstreamStatus(err), brief)
 					request.releaseRoundLifecycle()
