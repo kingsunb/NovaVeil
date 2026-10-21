@@ -9,8 +9,10 @@ Status: implemented
 ## 决定
 
 - `web-next` 升级 `@tanstack/react-query` 5.104.5、`@tanstack/react-virtual` 3.14.21、`postcss` 8.5.31、`vite` 8.3.5，保留现有 `^` 范围写法。
+- `vite@8.3.5` 发布未满 24 小时，已加入 `web-next/pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude`；不降级 `vite`，也不放宽全局供应链策略。
 - Go 只升级 `github.com/andybalholm/brotli` v1.2.6 与 `github.com/looplj/axonhub/llm` 伪版本 `v0.0.0-20261021081413-cbdf9a6d4a3d`。后者是仓库实际声明的模块路径，任务文本中的 `github.com/axonhub/llm` 不对应现有依赖。
-- `go.mod` 的 `go 1.26.7` 与 `toolchain` 指令不变；所有 Go 验证使用 `GOTOOLCHAIN=go1.27.3`，不依赖服务器默认的 Go 1.27.1。
+- `go.mod` 的 `go 1.26.7` 与 `toolchain` 指令不变；所有 Go 验证使用 `GOTOOLCHAIN=go1.26.7`，不依赖服务器默认的 Go 1.27.1。
+- CI 工具链口径为 pnpm 11.21.0、Go 1.26.7、Node 22.19.0；验证必须使用与 CI 相同的版本。
 - 不手工升级 71 个间接 Go 依赖，也不升级 TypeScript 7、`@types/node` 26、ESLint 10、typescript-eslint 8.72、knip 6.42、lucide-react 1.61、happy-dom 21 及两个 dev 漏洞传递链。它们分别受 peer 约束、运行时版本、迁移成本或上游修复状态阻塞。
 - 批次 1 与批次 2 分开提交，使前端锁文件与 Go 模块变更可以独立回滚。
 
@@ -24,10 +26,11 @@ Status: implemented
 ## 后果
 
 - **收益**：两个直接 Go 依赖保持精确锁定，前端 4 个补丁进入锁文件；`go.mod` 无连带间接依赖变化，前后端验证均通过。
-- **代价与边界**：服务器默认 Go 仍为 1.27.1，后续执行必须显式使用 `GOTOOLCHAIN=go1.27.3`；dev 依赖漏洞与上述暂缓项仍然存在。上游放宽 peer、Node 运行时升级或发布迁移说明后，应重新评估对应项。
+- **代价与边界**：服务器默认 Go 与 CI 不一致，后续执行必须显式使用 `GOTOOLCHAIN=go1.26.7`；`vite@8.3.5` 的供应链例外需在发布满 24 小时后移除。dev 依赖漏洞与上述暂缓项仍然存在。上游放宽 peer、Node 运行时升级或发布迁移说明后，应重新评估对应项。
 
 ## 验证
 
-- `pnpm -C web-next typecheck && pnpm -C web-next lint && pnpm -C web-next test`：通过，54 个测试文件、583 个用例通过。
-- `GOTOOLCHAIN=go1.27.3 go build ./... && GOTOOLCHAIN=go1.27.3 go vet ./... && GOTOOLCHAIN=go1.27.3 go test ./...`：通过。
+- `npx -y pnpm@11.21.0 -C web-next install --frozen-lockfile`：通过，锁文件满足供应链策略。
+- `npx -y pnpm@11.21.0 -C web-next build && npx -y pnpm@11.21.0 -C web-next typecheck && npx -y pnpm@11.21.0 -C web-next lint && npx -y pnpm@11.21.0 -C web-next test`：通过。
+- `GOTOOLCHAIN=go1.26.7 go build ./... && GOTOOLCHAIN=go1.26.7 go vet ./...` 与指定包测试通过。
 - `git diff -- go.mod`：仅两个直接依赖版本变化，无 `// indirect` 行变化。
