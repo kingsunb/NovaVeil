@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/kingsunb/NovaVeil/internal/builtin"
 	"github.com/kingsunb/NovaVeil/internal/model"
 )
 
@@ -119,6 +121,44 @@ func TestFetchOpenAIModelsAcceptsPopulated(t *testing.T) {
 	}
 	if got, want := len(models), 2; got != want {
 		t.Fatalf("expected %d models, got %d (%v)", want, got, models)
+	}
+}
+
+// 验证内置 Groq 同步请求路径。
+func TestBuiltinGroqModelSyncPath(t *testing.T) {
+	var groq model.Channel
+	for _, def := range builtin.BuiltinFreeChannels {
+		if def.Name == "G4F Space Groq Free" {
+			groq = def
+			break
+		}
+	}
+	if groq.BaseURL == "" {
+		t.Fatal("G4F Space Groq Free not found")
+	}
+	parsed, err := url.Parse(groq.BaseURL)
+	if err != nil {
+		t.Fatalf("parse builtin base url: %v", err)
+	}
+
+	gotPath := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath <- r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"llama-3.3-70b-versatile"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	groq.BaseURL = srv.URL + parsed.Path
+
+	models, err := fetchOpenAIModels(&http.Client{}, context.Background(), groq)
+	if err != nil {
+		t.Fatalf("fetchOpenAIModels: %v", err)
+	}
+	if got := <-gotPath; got != "/api/groq/openai/v1/models" {
+		t.Fatalf("request path = %q, want /api/groq/openai/v1/models", got)
+	}
+	if len(models) != 1 || models[0] != "llama-3.3-70b-versatile" {
+		t.Fatalf("models = %v", models)
 	}
 }
 

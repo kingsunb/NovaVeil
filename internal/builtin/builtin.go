@@ -329,9 +329,10 @@ var BuiltinFreeChannels = []model.Channel{
 		},
 	},
 	{
+		// Groq 需/openai 前缀。
 		Name:    "G4F Space Groq Free",
 		Type:    model.ChannelProviderOpenAI,
-		BaseURL: "https://g4f.space/api/groq",
+		BaseURL: "https://g4f.space/api/groq/openai",
 		Models: []model.ChannelModel{
 			{Name: "llama-3.3-70b-versatile"},
 			{Name: "llama-3.1-8b-instant"},
