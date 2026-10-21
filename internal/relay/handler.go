@@ -621,8 +621,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 						}
 					}
 				}
-				// 请求级拒绝不跨成员重试。
-				if isDeterministicRequestRejection(err) {
+				// 请求级拒绝仅 OpenCode 兼容渠道整请求终止。
+				if channel.OpencodeCompat && isDeterministicRequestRejection(err) {
 					if code, ok := UpstreamStatusCode(err); ok && code == http.StatusBadRequest && !sanitizeRetried[item.ID] {
 						sanitizeRetried[item.ID] = true
 						if sanitizeRequestBody(raw) {

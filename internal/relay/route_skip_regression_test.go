@@ -250,3 +250,112 @@ func TestManualContextSkipTerminatesAtActiveCandidate(t *testing.T) {
 		t.Fatalf("手动模式只应检查当前成员且不调用上游, 实际 active=%d backup=%d", activeHits.Load(), backupHits.Load())
 	}
 }
+
+func TestContextSkipNestedManualRefTerminatesFirstRound(t *testing.T) {
+	setupFailoverTest(t)
+	var activeHits, backupHits atomic.Int64
+	activeUpstream := chatUpstream(t, &activeHits, "should-not-serve")
+	backupUpstream := chatUpstream(t, &backupHits, "should-not-serve-either")
+	activeChannel := createIntegrationChannel(t, "it-nested-manual-active", model.ChannelProviderOpenAI, activeUpstream.URL, "it-nested-manual-active-model")
+	setIntegrationContextWindow(t, activeChannel.ID, "it-nested-manual-active-model", 1)
+	backupChannel := createIntegrationChannel(t, "it-nested-manual-backup", model.ChannelProviderOpenAI, backupUpstream.URL, "it-nested-manual-backup-model")
+	setIntegrationContextWindow(t, backupChannel.ID, "it-nested-manual-backup-model", 1_000_000)
+
+	manual := createIntegrationGroup(t, "it-nested-manual-g", contextFitRouteConfig(),
+		integrationLeafItem(t, activeChannel, "it-nested-manual-active-model"),
+		integrationLeafItem(t, backupChannel, "it-nested-manual-backup-model"))
+	mode := model.GroupModeManual
+	if _, err := op.GroupUpdate(&model.GroupUpdateRequest{ID: manual.ID, Mode: &mode}, context.Background()); err != nil {
+		t.Fatalf("切换手动模式失败: %v", err)
+	}
+	activeID := itemIDByModelName(t, manual, "it-nested-manual-active-model")
+	if _, err := op.GroupActiveItemUpdate(manual.ID, &model.GroupActiveItemUpdateRequest{ItemID: &activeID}, context.Background()); err != nil {
+		t.Fatalf("设置当前成员失败: %v", err)
+	}
+	top := createIntegrationGroup(t, "it-nested-manual-top", contextFitRouteConfig(), integrationRefItem(manual.Name))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	recorder := postRelayJSON(t, engine, path, longContextBody(top.Name), "", nil)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("嵌套手动引用应首轮从真实候选数终止, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, errContextWindowTooSmall.Error()) {
+		t.Fatalf("应返回上下文窗口不足, 实际: %s", body)
+	}
+	if strings.Contains(body, errNoAvailableChannels.Error()) {
+		t.Fatalf("不应空转到轮次上限的通用错误: %s", body)
+	}
+	if activeHits.Load() != 0 || backupHits.Load() != 0 {
+		t.Fatalf("窗口不足时不应调用上游, 实际 active=%d backup=%d", activeHits.Load(), backupHits.Load())
+	}
+}
+
+func TestContextSkipRefChainReleasesLeafHold(t *testing.T) {
+	t.Run("恢复候选", func(t *testing.T) {
+		setupFailoverTest(t)
+		var leafHits atomic.Int64
+		leafUpstream := chatUpstream(t, &leafHits, "should-not-serve")
+		leafChannel := createIntegrationChannel(t, "it-ref-skip-leaf", model.ChannelProviderOpenAI, leafUpstream.URL, "it-ref-skip-leaf-model")
+		setIntegrationContextWindow(t, leafChannel.ID, "it-ref-skip-leaf-model", 1)
+		leafGroup := createIntegrationGroup(t, "it-ref-skip-leaf-g", contextFitRouteConfig(),
+			integrationLeafItem(t, leafChannel, "it-ref-skip-leaf-model"))
+		top := createIntegrationGroup(t, "it-ref-skip-top", contextFitRouteConfig(), integrationRefItem(leafGroup.Name))
+		leafItemID := itemIDByModelName(t, leafGroup, "it-ref-skip-leaf-model")
+
+		probeChannelFunc = func(context.Context, model.Channel, string) error { return nil }
+		seedRoute(t, leafGroup, leafItemID)
+
+		engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+		recorder := postRelayJSON(t, engine, path, longContextBody(top.Name), "", nil)
+		if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), errContextWindowTooSmall.Error()) {
+			t.Fatalf("引用链叶子窗口不足应终止, 实际 %d: %s", recorder.Code, recorder.Body.String())
+		}
+
+		snapshot := routeSnapshot(t, leafGroup.ID)
+		if snapshot.ProbeItemID != 0 {
+			t.Fatalf("叶子组候选占用未归还: ProbeItemID=%d", snapshot.ProbeItemID)
+		}
+		if len(snapshot.HalfOpens) != 0 {
+			t.Fatalf("叶子组半开占用未归还: %v", snapshot.HalfOpens)
+		}
+		if leafHits.Load() != 0 {
+			t.Fatalf("窗口不足时不应调用上游, 实际 %d", leafHits.Load())
+		}
+	})
+
+	t.Run("紧急额度", func(t *testing.T) {
+		setupFailoverTest(t)
+		var leafHits atomic.Int64
+		leafUpstream := chatUpstream(t, &leafHits, "should-not-serve")
+		leafChannel := createIntegrationChannel(t, "it-ref-emergency-leaf", model.ChannelProviderOpenAI, leafUpstream.URL, "it-ref-emergency-leaf-model")
+		setIntegrationContextWindow(t, leafChannel.ID, "it-ref-emergency-leaf-model", 1)
+		leafGroup := createIntegrationGroup(t, "it-ref-emergency-leaf-g", contextFitRouteConfig(),
+			integrationLeafItem(t, leafChannel, "it-ref-emergency-leaf-model"))
+		top := createIntegrationGroup(t, "it-ref-emergency-top", contextFitRouteConfig(), integrationRefItem(leafGroup.Name))
+		refItemID := itemIDByModelName(t, top, leafGroup.Name)
+
+		config := contextFitRouteConfig()
+		config.EmergencyItemID = refItemID
+		if _, err := op.GroupUpdate(&model.GroupUpdateRequest{ID: top.ID, RelayConfig: &config}, context.Background()); err != nil {
+			t.Fatalf("配置紧急成员失败: %v", err)
+		}
+		refreshed, err := op.GroupGetByName(top.Name)
+		if err != nil {
+			t.Fatalf("读取分组失败: %v", err)
+		}
+		seedAllCooling(t, refreshed)
+
+		engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+		recorder := postRelayJSON(t, engine, path, longContextBody(refreshed.Name), "", nil)
+		if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), errContextWindowTooSmall.Error()) {
+			t.Fatalf("紧急引用链叶子窗口不足应终止, 实际 %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if _, active := emergencyActiveOf(t, refreshed.ID); active != 0 {
+			t.Fatalf("顶层紧急额度未归还: %d", active)
+		}
+		if leafHits.Load() != 0 {
+			t.Fatalf("窗口不足时不应调用上游, 实际 %d", leafHits.Load())
+		}
+	})
+}

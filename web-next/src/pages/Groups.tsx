@@ -21,6 +21,8 @@ import {
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
+import { formatExactTokens, formatWindowTokens } from "@/lib/context-probe";
+import { zhCN } from "@/locales/zh-CN";
 import type { GroupRouteState } from "@/lib/types";
 import {
   formatCountdown,
@@ -97,13 +99,6 @@ function nextDraftItemUid(prefix = "new") {
   return `${prefix}:${draftItemSeq}`;
 }
 
-/** 上下文窗口短串: 131072 → "131.072K", 1000000 → "1M"。 */
-function formatContextWindow(tokens: number): string {
-  if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(3))}M`;
-  if (tokens >= 1_000) return `${Number((tokens / 1_000).toFixed(3))}K`;
-  return String(tokens);
-}
-
 /** 成员的人工定义窗口；0 表示未定义（上下文过滤时始终放行）。 */
 function memberContextWindow(
   channel: Channel | undefined,
@@ -120,19 +115,19 @@ function MemberContextWindow({ tokens }: { tokens: number }) {
     return (
       <span
         className="shrink-0 text-[10px] text-ink-subtle"
-        title="未定义窗口：过滤时始终放行，不会因上下文不足被跳过；同步目录值不参与过滤"
+        title={zhCN.groups.undefinedWindowTitle}
       >
-        未定义窗口
+        {zhCN.groups.undefinedWindow}
       </span>
     );
   }
   return (
     <span
       className="shrink-0"
-      title={`人工定义的上下文窗口：${tokens.toLocaleString("en-US")} token；请求估算超出即跳过该成员`}
+      title={zhCN.groups.definedWindowTitle(formatExactTokens(tokens))}
     >
       <Pill tone="neutral" dot={false} className="text-[10px]">
-        {formatContextWindow(tokens)} 窗口
+        {formatWindowTokens(tokens)} {zhCN.groups.windowSuffix}
       </Pill>
     </span>
   );
@@ -1863,7 +1858,7 @@ function Toggle({
         <p className="text-sm font-medium text-ink">{label}</p>
         <p className="text-xs text-ink-muted">{description}</p>
       </div>
-      <Switch checked={checked} onCheckedChange={onChange} />
+      <Switch aria-label={label} checked={checked} onCheckedChange={onChange} />
     </div>
   );
 }

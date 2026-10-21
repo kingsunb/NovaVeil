@@ -92,6 +92,17 @@ func routableLeafCountFrom(g model.Group, visited map[int]bool) int {
 			if err != nil {
 				continue // 目标分组不可得: 该引用不可达, 不落到任何叶子。
 			}
+			if visited[ref.ID] {
+				continue
+			}
+			if ref.Mode == model.GroupModeManual {
+				// 手动分组只尝试激活成员。
+				visited[ref.ID] = true
+				if next := itemOf(ref, ref.ActiveItemID); next.ID != 0 {
+					n += routableItemLeafCount(next, visited)
+				}
+				continue
+			}
 			n += routableLeafCountFrom(ref, visited)
 			continue
 		}

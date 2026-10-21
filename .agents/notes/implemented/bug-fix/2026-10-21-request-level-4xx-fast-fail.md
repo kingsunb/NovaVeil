@@ -11,7 +11,7 @@ opencode2api 最终版在请求级识别确定性拒绝: 只要上游返回 400/
 ## 决定
 
 - 判定状态码只接受 400 与 422; 正文标记以 opencode2api `0bb23c7` 的 `isDeterministicClientResponse` 为准: `invalid_request_error`、`invalid_request`、`context_length_exceeded`、`maximum context length`、`string_above_max_length`、`prompt is too long`。413 未包含, 因为上游最终代码没有把它纳入该判定。
-- `internal/relay/handler.go` 在普通 400 清洗分支之前增加请求级判定。错误优先从 `*httpclient.Error.Body` 取上游正文, 没有结构化正文时回退到错误文本; 判定不区分渠道类型, 透传与协议转换路径共用。
+- `internal/relay/handler.go` 在普通 400 清洗分支之前增加请求级判定。错误优先从 `*httpclient.Error.Body` 取上游正文, 没有结构化正文时回退到错误文本; 判定不区分透传与协议转换路径, 但只在 OpenCode 兼容渠道(`OpencodeCompat`)生效, 渠道范围收紧的决定与理由见 [4xx 请求级快速失败限定 OpenCode 兼容渠道](2026-10-21-fastfail-scope-opencode-only.md)。
 - 400 且请求体存在可清洗字段时, 仍先执行一次 `sanitizeRequestBody` 并重试; 请求体没有变化时直接快速失败, 避免无意义重放。若清洗后的重试仍命中标记, 或首个 400/422 已无法清洗, 立即终止。
 - 终止路径沿用既有错误契约: `markFailed` + 错误日志 + `rejectRequest(..., errNoAvailableChannels)`。客户端收到统一 400 `暂无可用渠道`, 不透传上游原始状态与正文; 这是产品契约决策, 不由渠道决定。
 - 请求级拒绝不毒化成员健康度: 不调用 `recordRouteFailureIfReal`, 不进入冷却, 不清会话粘合, 只通过 `releaseRefChainHops` 归还探测候选与紧急并发占用。opencode2api 最终版对 Key 路径调用 `MarkSuccess`, 对匿名路径调用 `NoteNeutral`; NovaVeil 统一采用中性语义, 保留既有路由健康状态不动, 这是与上游 Key 路径的差异。
@@ -28,7 +28,7 @@ opencode2api 最终版在请求级识别确定性拒绝: 只要上游返回 400/
 
 ## 后果
 
-- 收益: 上下文超限或请求结构错误不再按成员/Key/引用链数量放大上游尝试; 客户端稳定收到确定性 400, 不再被后续 401 等无关错误覆盖。
+- 收益: 上下文超限或请求结构错误不再按成员/Key/引用链数量放大上游尝试; 客户端稳定收到确定性 400, 不再被后续 401 等无关错误覆盖。范围仅限 OpenCode 兼容渠道, 其他渠道按成员级故障转移, 见 [4xx 请求级快速失败限定 OpenCode 兼容渠道](2026-10-21-fastfail-scope-opencode-only.md)。
 - 代价与已知上限: 判定依赖上游正文标记, 上游若换文案会退回普通成员级失败路径, 不会误判为快速失败; `invalid_request_error` 等通用标记仍可能命中无法修复的参数错误, 但请求级语义要求此时终止。上游 Key 路径会清除 Key 健康惩罚, NovaVeil 采用中性记账, 只保证不再新增失败与冷却。
 
 ## 验证

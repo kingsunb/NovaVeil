@@ -13,3 +13,15 @@ export const PROBE_SIZES = [
   { label: "500K", value: 500_000 },
   { label: "1M", value: 1_000_000 },
 ] as const;
+
+/** 窗口数值短串: 十进制, 最多三位小数; 131072 → "131.072K", 1_000_000 → "1M"。 */
+export function formatWindowTokens(n: number): string {
+  if (n >= 1_000_000) return `${Number((n / 1_000_000).toFixed(3))}M`;
+  if (n >= 1_000) return `${Number((n / 1_000).toFixed(3))}K`;
+  return String(n);
+}
+
+/** 精确 token 文案(千分位): 131072 → "131,072 token"。 */
+export function formatExactTokens(n: number): string {
+  return `${n.toLocaleString("en-US")} token`;
+}

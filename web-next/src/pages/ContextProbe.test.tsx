@@ -5,7 +5,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 
 import ContextProbePage from "./ContextProbe";
-import { MAX_PROBE_TOKENS, PROBE_SIZES } from "@/lib/context-probe";
+import {
+  MAX_PROBE_TOKENS,
+  PROBE_SIZES,
+  formatExactTokens,
+  formatWindowTokens,
+} from "@/lib/context-probe";
 import { sampleChannel } from "@/test/fixtures/channels";
 import type { Channel } from "@/lib/types";
 
@@ -27,13 +32,15 @@ beforeEach(() => {
   );
 });
 
+function okResponse(data: unknown): Response {
+  return new Response(JSON.stringify({ code: 200, message: "success", data }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function jsonResponse(data: unknown) {
-  return Promise.resolve(
-    new Response(JSON.stringify({ code: 200, message: "success", data }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    }),
-  );
+  return Promise.resolve(okResponse(data));
 }
 
 const channel: Channel = {
@@ -54,6 +61,14 @@ describe("ContextProbe 标称档位", () => {
     expect(PROBE_SIZES.map((size) => size.value)).toEqual([
       64_000, 128_000, 256_000, 500_000, 1_000_000,
     ]);
+  });
+
+  it("窗口数值最多三位小数并带精确 token 文案", () => {
+    expect(formatWindowTokens(131_072)).toBe("131.072K");
+    expect(formatWindowTokens(128_000)).toBe("128K");
+    expect(formatWindowTokens(1_000_000)).toBe("1M");
+    expect(formatWindowTokens(999)).toBe("999");
+    expect(formatExactTokens(131_072)).toBe("131,072 token");
   });
 });
 
@@ -180,7 +195,12 @@ describe("<ContextProbePage /> 窗口定义", () => {
     const input = await screen.findByLabelText("model-b 窗口 token");
     await user.clear(input);
 
-    expect(screen.getByLabelText("保存 model-b 窗口")).toBeDisabled();
+    const saveButton = screen.getByLabelText("保存 model-b 窗口");
+    expect(saveButton).toBeDisabled();
+    expect(saveButton).toHaveAttribute(
+      "title",
+      "输入为空；如需清除已定义窗口请点「清除」",
+    );
     expect(applyBodies).toHaveLength(0);
 
     await user.click(screen.getByLabelText("清除 model-b 窗口"));
@@ -190,5 +210,318 @@ describe("<ContextProbePage /> 窗口定义", () => {
       model: "model-b",
       context_window: 0,
     });
+  });
+});
+
+describe("<ContextProbePage /> 精度与批量语义", () => {
+  it("窗口数值最多三位小数, 标记带精确 token tooltip", async () => {
+    const precisionChannel: Channel = {
+      ...channel,
+      model_limits: { "model-b": { context_window: 131_072 } },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/channel/list")) return jsonResponse([precisionChannel]);
+        if (url.includes("/model-eval/probe-history")) return jsonResponse([]);
+        return jsonResponse(null);
+      }),
+    );
+
+    render(
+      <Wrapper>
+        <ContextProbePage />
+      </Wrapper>,
+    );
+
+    const user = userEvent.setup();
+    await screen.findByText("OpenCode Free");
+    await user.click(screen.getByLabelText("展开渠道"));
+
+    expect(await screen.findByText("已定义 131.072K")).toBeInTheDocument();
+    expect(screen.getByText("同步 1M")).toBeInTheDocument();
+    expect(
+      screen.getByTitle("人工定义的上下文窗口：131,072 token；路由过滤只认这个值"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTitle("同步目录值：1,000,000 token；仅展示，不参与路由跳过"),
+    ).toBeInTheDocument();
+  });
+
+  it("批量清除只清已定义窗口并跳过未定义项", async () => {
+    const applyBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/model-eval/apply-context")) {
+          applyBodies.push(JSON.parse(String(init?.body ?? "{}")));
+          return jsonResponse(null);
+        }
+        if (url.includes("/channel/list")) return jsonResponse([channel]);
+        if (url.includes("/model-eval/probe-history")) return jsonResponse([]);
+        return jsonResponse(null);
+      }),
+    );
+
+    render(
+      <Wrapper>
+        <ContextProbePage />
+      </Wrapper>,
+    );
+
+    const user = userEvent.setup();
+    await screen.findByText("OpenCode Free");
+    await user.click(screen.getByLabelText("展开渠道"));
+    await user.click(screen.getByLabelText("选择渠道 OpenCode Free"));
+
+    const clearButton = screen.getByRole("button", { name: "批量清除" });
+    await waitFor(() => expect(clearButton).toBeEnabled());
+    await user.click(clearButton);
+
+    await waitFor(() => expect(applyBodies).toHaveLength(1));
+    expect(applyBodies[0]).toEqual({
+      channel_id: 7,
+      model: "model-b",
+      context_window: 0,
+    });
+  });
+
+  it("仅勾选未定义窗口的模型时批量清除不提交请求", async () => {
+    const applyBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/model-eval/apply-context")) {
+          applyBodies.push(JSON.parse(String(init?.body ?? "{}")));
+          return jsonResponse(null);
+        }
+        if (url.includes("/channel/list")) return jsonResponse([channel]);
+        if (url.includes("/model-eval/probe-history")) return jsonResponse([]);
+        return jsonResponse(null);
+      }),
+    );
+
+    render(
+      <Wrapper>
+        <ContextProbePage />
+      </Wrapper>,
+    );
+
+    const user = userEvent.setup();
+    await screen.findByText("OpenCode Free");
+    await user.click(screen.getByLabelText("展开渠道"));
+    await user.click(screen.getByLabelText("选择 model-a"));
+    await user.click(screen.getByRole("button", { name: "批量清除" }));
+
+    expect(applyBodies).toHaveLength(0);
+  });
+
+  it("空选择时批量与探测按钮均不可用", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/channel/list")) return jsonResponse([channel]);
+        if (url.includes("/model-eval/probe-history")) return jsonResponse([]);
+        return jsonResponse(null);
+      }),
+    );
+
+    render(
+      <Wrapper>
+        <ContextProbePage />
+      </Wrapper>,
+    );
+
+    const user = userEvent.setup();
+    await screen.findByText("OpenCode Free");
+    await user.click(screen.getByLabelText("展开渠道"));
+
+    expect(screen.getByRole("button", { name: "批量定义（0）" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "批量清除" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "开始探测（0 组）" })).toBeDisabled();
+  });
+
+  it("批量定义部分失败后按钮恢复且未保存草稿保留", async () => {
+    const applyBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/model-eval/apply-context")) {
+          const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
+          applyBodies.push(body);
+          if (body.model === "model-a") {
+            return Promise.resolve(
+              new Response(JSON.stringify({ code: 500, message: "保存失败", data: null }), {
+                status: 500,
+                headers: { "content-type": "application/json" },
+              }),
+            );
+          }
+          return jsonResponse(null);
+        }
+        if (url.includes("/channel/list")) return jsonResponse([channel]);
+        if (url.includes("/model-eval/probe-history")) return jsonResponse([]);
+        return jsonResponse(null);
+      }),
+    );
+
+    render(
+      <Wrapper>
+        <ContextProbePage />
+      </Wrapper>,
+    );
+
+    const user = userEvent.setup();
+    await screen.findByText("OpenCode Free");
+    await user.click(screen.getByLabelText("展开渠道"));
+
+    const draftInput = await screen.findByLabelText("model-a 窗口 token");
+    await user.type(draftInput, "999999");
+    await user.click(screen.getByLabelText("选择渠道 OpenCode Free"));
+    await user.type(screen.getByLabelText("批量窗口 token"), "128000");
+
+    const batchButton = screen.getByRole("button", { name: "批量定义（2）" });
+    await waitFor(() => expect(batchButton).toBeEnabled());
+    await user.click(batchButton);
+
+    await waitFor(() => expect(applyBodies).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "批量定义（2）" })).toBeEnabled(),
+    );
+    expect(draftInput).toHaveValue(999999);
+    expect(screen.getByRole("button", { name: "批量清除" })).toBeEnabled();
+  });
+});
+
+describe("<ContextProbePage /> 同模型串行调度", () => {
+  it("同一模型的多档探测不并发且按档位升序执行", async () => {
+    const probeBodies: Array<{ channel_id: number; model: string; tokens: number }> = [];
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const releases: Array<() => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/model-eval/probe-context")) {
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            channel_id: number;
+            model: string;
+            tokens: number;
+          };
+          probeBodies.push(body);
+          inFlight += 1;
+          peakInFlight = Math.max(peakInFlight, inFlight);
+          return new Promise<Response>((resolve) => {
+            releases.push(() => {
+              inFlight -= 1;
+              resolve(
+                okResponse({
+                  tokens: body.tokens,
+                  accepted: true,
+                  status: 200,
+                  detail: "ok",
+                  latency_ms: 5,
+                  actual_tokens: body.tokens,
+                }),
+              );
+            });
+          });
+        }
+        if (url.includes("/channel/list")) return jsonResponse([channel]);
+        if (url.includes("/model-eval/probe-history")) return jsonResponse([]);
+        return jsonResponse(null);
+      }),
+    );
+
+    render(
+      <Wrapper>
+        <ContextProbePage />
+      </Wrapper>,
+    );
+
+    const user = userEvent.setup();
+    await screen.findByText("OpenCode Free");
+    await user.click(screen.getByLabelText("展开渠道"));
+    await user.click(screen.getByLabelText("选择 model-b"));
+    await user.click(screen.getByRole("button", { name: "64K" }));
+    await user.click(screen.getByRole("button", { name: "开始探测（2 组）" }));
+
+    await waitFor(() => expect(probeBodies).toHaveLength(1));
+    expect(probeBodies[0]).toMatchObject({ channel_id: 7, model: "model-b", tokens: 64_000 });
+    expect(releases).toHaveLength(1);
+    expect(peakInFlight).toBe(1);
+
+    releases.shift()?.();
+    await waitFor(() => expect(probeBodies).toHaveLength(2));
+    expect(probeBodies[1]).toMatchObject({ model: "model-b", tokens: 128_000 });
+    expect(peakInFlight).toBe(1);
+
+    releases.shift()?.();
+    await waitFor(() => expect(screen.getAllByText("接受")).toHaveLength(2));
+    expect(peakInFlight).toBe(1);
+  });
+
+  it("不同模型仍可并行探测", async () => {
+    const probeBodies: Array<{ model: string }> = [];
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const releases: Array<() => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/model-eval/probe-context")) {
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            model: string;
+            tokens: number;
+          };
+          probeBodies.push(body);
+          inFlight += 1;
+          peakInFlight = Math.max(peakInFlight, inFlight);
+          return new Promise<Response>((resolve) => {
+            releases.push(() => {
+              inFlight -= 1;
+              resolve(
+                okResponse({
+                  tokens: body.tokens,
+                  accepted: true,
+                  status: 200,
+                  detail: "ok",
+                  latency_ms: 5,
+                  actual_tokens: body.tokens,
+                }),
+              );
+            });
+          });
+        }
+        if (url.includes("/channel/list")) return jsonResponse([channel]);
+        if (url.includes("/model-eval/probe-history")) return jsonResponse([]);
+        return jsonResponse(null);
+      }),
+    );
+
+    render(
+      <Wrapper>
+        <ContextProbePage />
+      </Wrapper>,
+    );
+
+    const user = userEvent.setup();
+    await screen.findByText("OpenCode Free");
+    await user.click(screen.getByLabelText("展开渠道"));
+    await user.click(screen.getByLabelText("选择渠道 OpenCode Free"));
+    await user.click(screen.getByRole("button", { name: "开始探测（2 组）" }));
+
+    await waitFor(() => expect(probeBodies).toHaveLength(2));
+    expect(peakInFlight).toBe(2);
+
+    while (releases.length > 0) releases.shift()?.();
+    await waitFor(() => expect(screen.getAllByText("接受")).toHaveLength(2));
   });
 });

@@ -17,6 +17,7 @@ Status: implemented
 
 - 路由过滤仍只采信 `channels.model_limits[模型名].context_window`（人工覆盖）；同步目录写入的 `channel_models.context_window` 仅展示，不参与跳过。窗口未知（0）的成员始终放行，分组仍需打开 `context_fit_enabled`。
 - `/api/v1/model-eval/apply-context` 增加清除语义：`context_window` 传 0 删除该模型的人工窗口；只清窗口、不影响同条目的 `max_output` / `thinking_level`。
+- 窗口保存用进程内串行保护「读整表 → 改一个键 → 整表写回」, 避免两个页面并发保存不同模型互相覆盖。
 - 探测页每行提供窗口输入与保存/清除；勾选多个模型后可批量定义或批量清除。探测结果行的「应用」写同一字段，写回值仍是标称规模（1M 档写 1,000,000）。
 
 ### 分组页只在过滤开启时展示窗口
@@ -30,8 +31,9 @@ Status: implemented
 - 基准口径不变：ASCII 4 字符/token，非 ASCII 每字 1 token。
 - 删除 OpenCode 白名单，所有渠道同一规则：探测实测出密度比（上游实际 token ÷ 基准估算）后写入进程内缓存，键为「上游端点:模型」；路由过滤与后续探测构造共用这份密度，未实测的模型按基准口径。
 - 探测首测按「标称 − 冗余」构造：1M 档留 2%（1,000,000 → 980,000），其余档位留 1,000 token；已有缓存密度时先换算构造规模。
-- 实测值与标称值偏差超过 10%（1M 档即 100,000）时，用本次实测密度把目标改到容忍下限（标称 − 容差，1M 档 900,000）自动重测一次，并把重测密度回写缓存；重测失败保留首测结论，不把校准失败升级成探测失败。
-- 实测值优先取响应 `usage`，被拒时取拒绝体里的 `requested N tokens`；两者都拿不到就不重测。
+- 每次探测拿到实测值就立即回写密度缓存；与标称值偏差超过 10%（1M 档即 100,000）时，用本次实测密度把目标改到容忍下限（标称 − 容差，1M 档 900,000）自动重测一次，并用重测密度覆盖缓存；重测失败保留首测结论，不把校准失败升级成探测失败。
+- 实测值优先取响应 `usage`，被拒时取拒绝体里的 `requested N tokens` 或 Anthropic `prompt is too long: N tokens`（大小写不敏感，在完整响应体上解析，截断只用于展示）；两者都拿不到就不写缓存、不重测。
+- 探测出站请求强制收敛输出预算（`max_tokens` / `max_output_tokens` = 1，并去掉 `reasoning_effort` / `reasoning` / `thinking`），避免渠道 `model_limits` 的 `max_output` 与 `thinking_level` 把探测变成大额输出。
 
 ### 十进制 token 单位
 
@@ -42,20 +44,21 @@ Status: implemented
 
 - **全部删掉密度校准，只留固定 4 字符/token** — 最强论据是跨渠道绝对同口径、结果完全可复现；否掉是各上游 tokenizer 差异真实存在（实测 4~7.5 字符/token），固定口径探测 1M 时上游可能只算 500K，容量结论失真，用户也明确要求「按实际探测的来」。
 - **保留 OpenCode 白名单** — 改动最小；否掉是同一套规则不应按上游类型分叉，其他渠道同样可能出现实测偏差过半。
-- **超差无限重试直到接近标称** — 结论最贴近标称；否掉是额度与耗时不可控，10% 容差已经定义了可接受区间，只重试一次即可。
+- **超差无限重试直到接近标称** — 结论最贴近标称；否掉是额度与耗时不可控，10% 容差已经定义了可接受区间，只重测一次即可。
 - **同步目录值直接参与路由跳过** — OpenCode Free 同步完立即生效，零配置；否掉是目录值未经实测，可能误拒健康成员，用户选择只信人工值。
-- **密度只服务探测，路由永远固定口径** — 路由绝对一致；否掉是探测与路由不同尺，探测说装得下、路由却可能按另一把尺误拦，重演本次要修的问题。
+- **密度只服务探测，路由永远固定口径** — 路由绝对一致；否掉是探测与路由不同尺，探测说装得下的、路由却可能按另一把尺误拦，重演本次要修的问题。
+- **只在超差重测时写密度缓存** — 少一次写缓存；否掉是正常档位探测后路由仍按基准口径估算，与「探测与路由同尺」的口径不符。
 
 ## 后果
 
 - **收益**：探测与路由同尺，且所有渠道遵循同一套实测规则；1M 语义明确为 1,000,000；一批模型可直接批量定义窗口，不必逐个探测；密度缓存命中后后续探测更接近目标规模。
-- **代价与已知上限**：密度是进程内缓存，重启后首次探测重新测量；探测填充文本是英文词，与真实请求（中文、代码）的 token 分布仍有偏差；10% 容差是运营口径，边界模型可能多放过或提前拒绝约一成；只测输入容量，不覆盖输出预留；人工窗口逐模型维护，模型多时仍有配置成本。
+- **代价与已知上限**：密度是进程内缓存，重启后首次探测重新测量；密度取单次实测值，极小构造规模下模板固定开销会放大倍率；探测填充文本是英文词，与真实请求（中文、代码）的 token 分布仍有偏差；10% 容差是运营口径，边界模型可能多放过或提前拒绝约一成；只测输入容量，不覆盖输出预留；人工窗口逐模型维护，模型多时仍有配置成本。
 - **重访信号**：出现大量「探测结论与真实可用长度偏差明显」或「路由按实测密度误拦」的反馈时，考虑持久化密度、或改为按模型自动同步窗口后再让目录值参与过滤。
 
 ## 验证
 
 - `grep -n "tokenDensityEnabledBaseURLs\|tokenDensityApplies" internal/` 无结果。
-- `go test ./internal/relay/ -run 'ContextFit|ContextProbe|ProbeTarget|ProbeTolerance|ProbeRetry|ProbeConstructedTokens|BuildContextProbeText|EstimateModelTokens|EstimateRequestTokens'`
-- `go test ./internal/server/handlers/ -run TestSetModelContextWindow`
+- `go test ./internal/relay/ -run 'ContextFit|ContextProbe|ProbeTarget|ProbeTolerance|ProbeRetry|ProbeConstructedTokens|BuildContextProbeText|EstimateModelTokens|EstimateRequestTokens|TestProbeContextWindowDensityAndRetry|TestClampProbeOutputBudget|TestParseRequestedOverflowTokens'`
+- `go test ./internal/server/handlers/ -run 'TestSetModelContextWindow|TestRedactChannelCredentials|TestApplyModelContextConcurrentSaves'`
 - `cd web-next && pnpm test src/pages/ContextProbe.test.tsx src/pages/Groups.test.tsx`
 - 手工：探测 1M 档后返回的 `actual_tokens` 应落在标称 ±10% 内；偏差过大时应看到按 900K 目标重测后的实测值。探测页定义/清除窗口后，渠道编辑器对应模型应同步显示或清空；分组「上下文窗口过滤」开关打开后，成员行出现窗口标注（未定义的显示「未定义窗口」），关闭后消失。

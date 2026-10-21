@@ -10,8 +10,9 @@ Status: implemented
 
 - 保存窗口时快照提交草稿；请求成功回调只在当前草稿仍等于该快照时删除，保存期间的新输入原样保留。
 - 空输入永不提交，保存按钮按空输入禁用并提示使用清除按钮；`context_window=0` 只由「清除」按钮发送。
-- 新增文案集中在 `web-next/src/locales/zh-CN.ts` 的 `contextProbe` 段。
-- 上下文窗口显示保留最多三位小数（`131072 → 131.072K`），tooltip 同时给出精确值 `131,072 token`。
+- 新增文案集中在 `web-next/src/locales/zh-CN.ts` 的 `contextProbe` 与 `groups` 段。
+- 探测页与分组页共用 `lib/context-probe.ts` 的 `formatWindowTokens` / `formatExactTokens`；窗口显示保留最多三位小数（`131072 → 131.072K`），tooltip 同时给出精确值 `131,072 token`。
+- 批量定义/清除用 `try/finally` 复位保存态；逐项失败原因进入 toast；批量清除只对已定义人工窗口的模型发请求，跳过未定义项并按实际清除数提示。
 
 ## 备选方案
 
@@ -26,5 +27,5 @@ Status: implemented
 
 ## 验证
 
-- `cd web-next && pnpm test -- ContextProbe Groups`
+- `cd web-next && pnpm test src/pages/ContextProbe.test.tsx src/pages/Groups.test.tsx`（新增用例覆盖保持草稿、空输入禁用、批量失败复位、精确窗口格式）
 - 人工检查：保存请求未返回时把输入从 `128000` 改为 `256000`，响应后输入仍为 `256000`；清空输入后保存按钮禁用；点击清除仍提交 `context_window: 0`。

@@ -11,5 +11,37 @@ export const zhCN = {
     clearFailed: "清除窗口失败",
     windowSaved: "已保存窗口定义",
     windowCleared: "已清除人工窗口",
+    saveDisabledHint: "输入为空；如需清除已定义窗口请点「清除」",
+    definedWindow: "已定义",
+    syncedWindow: "同步",
+    definedWindowTitle: (exact: string) =>
+      `人工定义的上下文窗口：${exact}；路由过滤只认这个值`,
+    syncedWindowTitle: (exact: string) =>
+      `同步目录值：${exact}；仅展示，不参与路由跳过`,
+    concurrencyHint: (models: number, sizes: number) =>
+      `已选 ${models} 个模型 × ${sizes} 个规模；全局三路并发，同一上游端点的同一模型按档位从小到大串行`,
+    batchSelectFirst: "先勾选模型",
+    batchWindowInvalid: "批量窗口必须是大于 0 的整数 token 数",
+    batchPartialFailure: (failed: number, reasons: string) =>
+      `${failed} 个模型保存失败：${reasons}`,
+    batchClearPartialFailure: (failed: number, reasons: string) =>
+      `${failed} 个模型清除失败：${reasons}`,
+    batchDefined: (count: number) => `已为 ${count} 个模型定义窗口`,
+    batchCleared: (count: number, skipped: number) =>
+      skipped > 0
+        ? `已清除 ${count} 个模型的人工窗口，跳过 ${skipped} 个未定义窗口的模型`
+        : `已清除 ${count} 个模型的人工窗口`,
+    batchClearNone: "所选模型均未定义人工窗口，无需清除",
+    appliedWindow: (model: string, tokens: string) =>
+      `已把 ${model} 的上下文窗口写为 ${tokens}`,
+    applyFailed: "写入失败",
+  },
+  groups: {
+    undefinedWindow: "未定义窗口",
+    undefinedWindowTitle:
+      "未定义窗口：过滤时始终放行，不会因上下文不足被跳过；同步目录值不参与过滤",
+    definedWindowTitle: (exact: string) =>
+      `人工定义的上下文窗口：${exact}；请求估算超出即跳过该成员`,
+    windowSuffix: "窗口",
   },
 };

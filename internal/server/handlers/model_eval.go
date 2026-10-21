@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -52,23 +53,39 @@ func probeModelContext(c *gin.Context) {
 		Tokens:    request.Tokens,
 		CreatedAt: time.Now(),
 	}
-	if channel, err := op.ChannelGet(request.ChannelID); err == nil {
+	channel, channelErr := op.ChannelGet(request.ChannelID)
+	if channelErr == nil {
 		record.ChannelName = channel.Name
 	}
 	result, err := relay.ProbeContextWindow(c.Request.Context(), request.ChannelID, request.Model, request.Tokens)
 	if err != nil {
-		record.Detail = err.Error()
+		detail := redactChannelCredentials(channel, err.Error())
+		record.Detail = detail
 		_ = op.SaveContextProbeRecord(record)
-		resp.ErrorExposed(c, http.StatusBadRequest, err.Error())
+		resp.ErrorExposed(c, http.StatusBadRequest, detail)
 		return
 	}
 	record.Accepted = result.Accepted
 	record.Status = result.Status
-	record.Detail = result.Detail
+	record.Detail = redactChannelCredentials(channel, result.Detail)
 	record.LatencyMS = result.LatencyMS
 	record.ActualTokens = result.ActualTokens
 	_ = op.SaveContextProbeRecord(record)
+	result.Detail = record.Detail
 	resp.Success(c, result)
+}
+
+// redactChannelCredentials 抹掉文本中的渠道密钥明文。
+func redactChannelCredentials(channel model.Channel, text string) string {
+	if channel.Key != "" {
+		text = strings.ReplaceAll(text, channel.Key, "[REDACTED]")
+	}
+	for _, key := range channel.Keys {
+		if key.Key != "" {
+			text = strings.ReplaceAll(text, key.Key, "[REDACTED]")
+		}
+	}
+	return text
 }
 
 // listContextProbeRecords 返回探测历史, 供页面回看历次结果。
@@ -90,6 +107,9 @@ type contextApplyRequest struct {
 	ContextWindow *int   `json:"context_window" binding:"required"` // 0 表示清除人工窗口。
 }
 
+// applyContextMu 串行化窗口保存, 防整表覆盖丢更新。
+var applyContextMu sync.Mutex
+
 // applyModelContext 把手动定义或探测出的窗口写入渠道的 model_limits, 同步不会覆盖;
 // context_window 传 0 表示清除该模型的人工窗口。
 func applyModelContext(c *gin.Context) {
@@ -102,6 +122,8 @@ func applyModelContext(c *gin.Context) {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
 		return
 	}
+	applyContextMu.Lock()
+	defer applyContextMu.Unlock()
 	channel, err := op.ChannelGet(request.ChannelID)
 	if err != nil {
 		resp.Error(c, http.StatusNotFound, err.Error())
@@ -202,14 +224,7 @@ func runModelEval(c *gin.Context) {
 			record.Error = testErr.Error()
 		}
 		// 上游错误可能回显请求凭据，先替换已知 Key，再由 op 层统一脱敏。
-		if channel.Key != "" {
-			record.Error = strings.ReplaceAll(record.Error, channel.Key, "[REDACTED]")
-		}
-		for _, key := range channel.Keys {
-			if key.Key != "" {
-				record.Error = strings.ReplaceAll(record.Error, key.Key, "[REDACTED]")
-			}
-		}
+		record.Error = redactChannelCredentials(channel, record.Error)
 	} else {
 		record.Content = result.Content
 		record.Outcome = model.ModelEvalContentOutcome(result.Content)

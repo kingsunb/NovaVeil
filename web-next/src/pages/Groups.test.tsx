@@ -1107,11 +1107,9 @@ describe("分组上下文窗口展示", () => {
     );
   }
 
-  // 开关没有 aria-label，按它所在的行定位，避免依赖开关顺序
+  // 开关统一带 aria-label, 按可访问名定位, 不依赖 DOM 层级
   function contextFitSwitch() {
-    const row = screen.getByText("上下文窗口过滤").parentElement
-      ?.parentElement as HTMLElement;
-    return within(row).getByRole("switch");
+    return screen.getByRole("switch", { name: "上下文窗口过滤" });
   }
 
   it("上下文过滤关闭：卡片不显示窗口标注", async () => {
@@ -1191,10 +1189,8 @@ describe("GroupEditor 路由开关持久化", () => {
     const dialog = await screen.findByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "路由策略" }));
 
-    const backgroundSwitch = () => {
-      const row = screen.getByText("后台定时探测").parentElement?.parentElement as HTMLElement;
-      return within(row).getByRole("switch");
-    };
+    const backgroundSwitch = () =>
+      screen.getByRole("switch", { name: "后台定时探测" });
     expect(backgroundSwitch()).toHaveAttribute("aria-checked", "false");
     await user.click(backgroundSwitch());
     await waitFor(() =>

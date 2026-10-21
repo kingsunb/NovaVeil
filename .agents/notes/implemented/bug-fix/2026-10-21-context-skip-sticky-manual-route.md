@@ -14,6 +14,7 @@ Status: implemented
 - 新增 `pickSessionStickyExcluding`。粘合指向 `exclude` 时按失效处理：删除该条粘合并返回零值，调用方回退常规选路；顶层转发与 `pickRefChainHop` 共用这一入口。
 - 手动模式选路尊重 `exclude`，当前成员被排除时本轮返回空目标。
 - 新增 `routableCandidateCount`：故障转移沿用 `routableLeafCount`；手动模式从当前激活成员出发，直连叶子计为 1，引用成员按目标分组实际可达叶子展开（沿链处理手动分组）。`contextSkipped`、`busyRejected`、`nonRetryable` 三类终止判定统一使用该分母。
+- `routableLeafCount` 沿引用链展开时同样识别手动分组: 目标分组为手动模式时只计其 `ActiveItemID` 成员, 故障转移分组引用手动分组时不再把未激活成员计入分母。
 
 相关既有边界见 [上下文窗口过滤](../feature/2026-10-20-context-fit-routing.md)、[满载终止分母](2026-09-26-channel-busy-terminal-denominator.md) 与 [提交后失败归还探测占用](2026-09-25-post-commit-failure-releases-probe-hold.md)。
 

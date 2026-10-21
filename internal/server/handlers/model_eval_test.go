@@ -1,9 +1,17 @@
 package handlers
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/op"
 )
 
 func TestSetModelContextWindow(t *testing.T) {
@@ -130,5 +138,54 @@ func TestSetModelContextWindowReusesExistingCaseKey(t *testing.T) {
 	}
 	if _, ok := updated["prj_abc123"]; !ok {
 		t.Fatal("无关模型键不得被删除")
+	}
+}
+
+func TestRedactChannelCredentials(t *testing.T) {
+	channel := model.Channel{
+		Key:  "sk-direct",
+		Keys: []model.ChannelKey{{Key: "sk-pool"}, {Key: ""}},
+	}
+	got := redactChannelCredentials(channel, "upstream echo sk-direct sk-pool")
+	if strings.Contains(got, "sk-direct") || strings.Contains(got, "sk-pool") {
+		t.Fatalf("密钥未脱敏: %s", got)
+	}
+	if count := strings.Count(got, "[REDACTED]"); count != 2 {
+		t.Fatalf("脱敏次数 = %d, want 2: %s", count, got)
+	}
+	if got := redactChannelCredentials(model.Channel{}, "无凭据"); got != "无凭据" {
+		t.Fatalf("无凭据时不应改动: %s", got)
+	}
+}
+
+func TestApplyModelContextConcurrentSaves(t *testing.T) {
+	ctx := context.Background()
+	channel := newTestChannel(t, ctx, "ctx-concurrent", "m-a", "m-b")
+	t.Cleanup(func() { _ = op.ChannelDel(channel.ID, ctx) })
+
+	post := func(modelName string, window int) *gin.Context {
+		body := fmt.Sprintf(`{"channel_id":%d,"model":%q,"context_window":%d}`, channel.ID, modelName, window)
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/model-eval/apply-context", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		return c
+	}
+
+	var wait sync.WaitGroup
+	wait.Add(2)
+	go func() { defer wait.Done(); applyModelContext(post("m-a", 128_000)) }()
+	go func() { defer wait.Done(); applyModelContext(post("m-b", 64_000)) }()
+	wait.Wait()
+
+	updated, err := op.ChannelGet(channel.ID)
+	if err != nil {
+		t.Fatalf("读取渠道失败: %v", err)
+	}
+	for _, name := range []string{"m-a", "m-b"} {
+		limit, ok := updated.ModelLimits[name]
+		if !ok || limit.ContextWindow == nil {
+			t.Fatalf("并发保存丢失 %s 的窗口: %+v", name, updated.ModelLimits)
+		}
 	}
 }

@@ -9,7 +9,12 @@ import { toast } from "sonner";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { api } from "@/lib/api";
-import { MAX_PROBE_TOKENS, PROBE_SIZES } from "@/lib/context-probe";
+import {
+  MAX_PROBE_TOKENS,
+  PROBE_SIZES,
+  formatExactTokens,
+  formatWindowTokens,
+} from "@/lib/context-probe";
 import type { ContextProbeResult } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,6 +30,8 @@ interface ProbeTarget {
   key: string;
   channelId: number;
   channelName: string;
+  /** 上游端点; 与后端密度缓存键「端点:模型」共用, 同键任务串行。 */
+  endpoint: string;
   model: string;
   /** 渠道上人工定义的窗口; 0 表示未定义。只有人工值参与路由跳过。 */
   manualWindow: number;
@@ -36,16 +43,11 @@ interface ProbeTask {
   key: string;
   channelId: number;
   channelName: string;
+  endpoint: string;
   model: string;
   tokens: number;
   state: "pending" | "running" | "done";
   result?: ContextProbeResult;
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${Number((n / 1_000_000).toFixed(2))}M`;
-  if (n >= 1_000) return `${Number((n / 1_000).toFixed(1))}K`;
-  return String(n);
 }
 
 export default function ContextProbePage() {
@@ -76,6 +78,7 @@ export default function ContextProbePage() {
           key: `${channel.id}:${model.name}`,
           channelId: channel.id,
           channelName: channel.name,
+          endpoint: (channel.base_url || `channel:${channel.id}`).replace(/\/+$/, ""),
           model: model.name,
           manualWindow: limits[model.name]?.context_window ?? 0,
           syncedWindow: model.context_window ?? 0,
@@ -142,7 +145,7 @@ export default function ContextProbePage() {
       return;
     }
     if (value > MAX_PROBE_TOKENS) {
-      toast.error(`不能超过 ${formatTokens(MAX_PROBE_TOKENS)}（${MAX_PROBE_TOKENS}）`);
+      toast.error(`不能超过 ${formatWindowTokens(MAX_PROBE_TOKENS)}（${MAX_PROBE_TOKENS}）`);
       return;
     }
     setSelectedSizes((prev) => (prev.includes(value) ? prev : [...prev, value]));
@@ -184,7 +187,9 @@ export default function ContextProbePage() {
     try {
       await persistWindow(target, value, raw);
       await queryClient.invalidateQueries({ queryKey: ["channels"] });
-      toast.success(`${zhCN.contextProbe.windowSaved}：${target.model} ${formatTokens(value)}`);
+      toast.success(
+        `${zhCN.contextProbe.windowSaved}：${target.model} ${formatWindowTokens(value)}`,
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : zhCN.contextProbe.saveFailed);
     } finally {
@@ -209,35 +214,59 @@ export default function ContextProbePage() {
   async function applyBatch(value: number) {
     const picked = targets.filter((target) => selectedKeys.has(target.key));
     if (picked.length === 0) {
-      toast.error("先勾选模型");
+      toast.error(zhCN.contextProbe.batchSelectFirst);
+      return;
+    }
+    // 清除只处理已定义人工窗口的模型, 不对未定义项谎报"已清除"。
+    const writeTargets =
+      value > 0 ? picked : picked.filter((target) => target.manualWindow > 0);
+    const skipped = picked.length - writeTargets.length;
+    if (writeTargets.length === 0) {
+      toast.info(zhCN.contextProbe.batchClearNone);
       return;
     }
     setSavingWindows(true);
-    const failed: string[] = [];
-    for (const target of picked) {
-      try {
-        await persistWindow(target, value, windowDraft(target));
-      } catch {
-        failed.push(`${target.channelName}/${target.model}`);
+    const failed: Array<{ name: string; reason: string }> = [];
+    try {
+      for (const target of writeTargets) {
+        try {
+          await persistWindow(target, value, windowDraft(target));
+        } catch (error) {
+          failed.push({
+            name: `${target.channelName}/${target.model}`,
+            reason:
+              error instanceof Error
+                ? error.message
+                : value > 0
+                  ? zhCN.contextProbe.saveFailed
+                  : zhCN.contextProbe.clearFailed,
+          });
+        }
       }
+      await queryClient.invalidateQueries({ queryKey: ["channels"] });
+    } finally {
+      setSavingWindows(false);
     }
-    await queryClient.invalidateQueries({ queryKey: ["channels"] });
-    setSavingWindows(false);
     if (failed.length > 0) {
-      toast.error(`${failed.length} 个模型保存失败：${failed.join("、")}`);
+      const details = failed.map((item) => `${item.name}（${item.reason}）`).join("、");
+      toast.error(
+        value > 0
+          ? zhCN.contextProbe.batchPartialFailure(failed.length, details)
+          : zhCN.contextProbe.batchClearPartialFailure(failed.length, details),
+      );
       return;
     }
     toast.success(
       value > 0
-        ? `已为 ${picked.length} 个模型定义窗口`
-        : `已清除 ${picked.length} 个模型的人工窗口`,
+        ? zhCN.contextProbe.batchDefined(writeTargets.length)
+        : zhCN.contextProbe.batchCleared(writeTargets.length, skipped),
     );
   }
 
   function applyBatchDraft() {
     const value = parseWindowValue(batchWindow);
     if (value === null || value <= 0) {
-      toast.error("批量窗口必须是大于 0 的整数 token 数");
+      toast.error(zhCN.contextProbe.batchWindowInvalid);
       return;
     }
     void applyBatch(value);
@@ -249,13 +278,16 @@ export default function ContextProbePage() {
       return;
     }
     const picked = targets.filter((target) => selectedKeys.has(target.key));
+    // 档位升序: 同一模型串行时, 最终密度缓存来自固定顺序的最后一档。
+    const sizes = [...selectedSizes].sort((a, b) => a - b);
     const plan: ProbeTask[] = [];
     for (const target of picked) {
-      for (const size of selectedSizes) {
+      for (const size of sizes) {
         plan.push({
           key: `${target.key}#${size}`,
           channelId: target.channelId,
           channelName: target.channelName,
+          endpoint: target.endpoint,
           model: target.model,
           tokens: size,
           state: "pending",
@@ -265,12 +297,20 @@ export default function ContextProbePage() {
     setTasks(plan);
     setRunning(true);
     try {
-      // 三路并发消费队列: 游标推进, 每路完成一组就更新对应任务状态。
-      let cursor = 0;
+      // 全局三路并发; 同一「端点:模型」同一时刻只允许 1 个在途任务,
+      // 避免多档密度校准按完成顺序互相覆盖。
+      const pendingIndices = plan.map((_, index) => index);
+      const inFlight = new Set<string>();
+      const taskEndpointModel = (task: ProbeTask) => `${task.endpoint}:${task.model}`;
       const worker = async () => {
-        while (cursor < plan.length) {
-          const index = cursor++;
+        while (pendingIndices.length > 0) {
+          const position = pendingIndices.findIndex(
+            (index) => !inFlight.has(taskEndpointModel(plan[index])),
+          );
+          if (position < 0) return;
+          const [index] = pendingIndices.splice(position, 1);
           const task = plan[index];
+          inFlight.add(taskEndpointModel(task));
           setTasks((prev) =>
             prev.map((item, i) => (i === index ? { ...item, state: "running" } : item)),
           );
@@ -299,6 +339,8 @@ export default function ContextProbePage() {
                   : item,
               ),
             );
+          } finally {
+            inFlight.delete(taskEndpointModel(task));
           }
         }
       };
@@ -315,10 +357,12 @@ export default function ContextProbePage() {
   async function applyResult(task: ProbeTask) {
     try {
       await api.applyModelContext(task.channelId, task.model, task.tokens);
-      toast.success(`已把 ${task.model} 的上下文窗口写为 ${formatTokens(task.tokens)}`);
+      toast.success(
+        zhCN.contextProbe.appliedWindow(task.model, formatWindowTokens(task.tokens)),
+      );
       await queryClient.invalidateQueries({ queryKey: ["channels"] });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "写入失败");
+      toast.error(error instanceof Error ? error.message : zhCN.contextProbe.applyFailed);
     }
   }
 
@@ -356,7 +400,7 @@ export default function ContextProbePage() {
                   variant="primary"
                   onClick={() => toggleSize(value)}
                 >
-                  {formatTokens(value)}
+                  {formatWindowTokens(value)}
                 </Button>
               ))}
               <span className="flex items-center gap-1">
@@ -383,7 +427,7 @@ export default function ContextProbePage() {
               {running ? "探测中" : `开始探测（${selectedCount * selectedSizes.length} 组）`}
             </Button>
             <span className="text-xs text-ink-muted">
-              已选 {selectedCount} 个模型 × {selectedSizes.length} 个规模，三路并发执行
+              {zhCN.contextProbe.concurrencyHint(selectedCount, selectedSizes.length)}
             </span>
           </div>
         </CardContent>
@@ -486,15 +530,26 @@ export default function ContextProbePage() {
                           {item.syncedWindow > 0 ? (
                             <span
                               className="shrink-0 text-[10px] tabular-nums text-ink-muted"
-                              title="同步目录值，仅展示，不参与路由跳过"
+                              title={zhCN.contextProbe.syncedWindowTitle(
+                                formatExactTokens(item.syncedWindow),
+                              )}
                             >
-                              同步 {formatTokens(item.syncedWindow)}
+                              {zhCN.contextProbe.syncedWindow}{" "}
+                              {formatWindowTokens(item.syncedWindow)}
                             </span>
                           ) : null}
                           {item.manualWindow > 0 ? (
-                            <Pill tone="neutral" className="shrink-0 text-[10px]">
-                              已定义 {formatTokens(item.manualWindow)}
-                            </Pill>
+                            <span
+                              className="shrink-0"
+                              title={zhCN.contextProbe.definedWindowTitle(
+                                formatExactTokens(item.manualWindow),
+                              )}
+                            >
+                              <Pill tone="neutral" className="shrink-0 text-[10px]">
+                                {zhCN.contextProbe.definedWindow}{" "}
+                                {formatWindowTokens(item.manualWindow)}
+                              </Pill>
+                            </span>
                           ) : null}
                           <Input
                             type="number"
@@ -512,6 +567,11 @@ export default function ContextProbePage() {
                             variant="ghost"
                             className="h-7 shrink-0 px-2 text-xs"
                             disabled={savingWindows || windowDraft(item).trim() === ""}
+                            title={
+                              windowDraft(item).trim() === ""
+                                ? zhCN.contextProbe.saveDisabledHint
+                                : undefined
+                            }
                             onClick={() => void saveWindow(item)}
                             aria-label={`保存 ${item.model} 窗口`}
                           >
@@ -569,10 +629,10 @@ export default function ContextProbePage() {
                       <td className="max-w-[10rem] truncate py-2">{task.channelName}</td>
                       <td className="mono max-w-[14rem] truncate py-2">{task.model}</td>
                       <td className="py-2">
-                        {formatTokens(task.tokens)}
+                        {formatWindowTokens(task.tokens)}
                         {result?.actual_tokens ? (
                           <span className="ml-1 text-xs text-ink-muted">
-                            实 {formatTokens(result.actual_tokens)}
+                            实 {formatWindowTokens(result.actual_tokens)}
                           </span>
                         ) : null}
                       </td>
@@ -652,10 +712,10 @@ export default function ContextProbePage() {
                     <td className="max-w-[10rem] truncate py-2">{row.channel_name}</td>
                     <td className="mono max-w-[14rem] truncate py-2">{row.model_name}</td>
                     <td className="py-2">
-                      {formatTokens(row.tokens)}
+                      {formatWindowTokens(row.tokens)}
                       {row.actual_tokens ? (
                         <span className="ml-1 text-xs text-ink-muted">
-                          实 {formatTokens(row.actual_tokens)}
+                          实 {formatWindowTokens(row.actual_tokens)}
                         </span>
                       ) : null}
                     </td>

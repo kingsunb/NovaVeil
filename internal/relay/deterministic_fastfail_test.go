@@ -12,11 +12,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kingsunb/NovaVeil/internal/db"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/looplj/axonhub/llm"
 	"github.com/tidwall/gjson"
 )
+
+// createOpencodeIntegrationChannel 构造 OpencodeCompat 渠道;
+// ChannelCreate 强制关闭该标记, 故落库后改列并刷新缓存。
+func createOpencodeIntegrationChannel(t *testing.T, name string, baseURL, modelName string) model.Channel {
+	t.Helper()
+	channel := createIntegrationChannel(t, name, model.ChannelProviderOpenAI, baseURL, modelName)
+	if err := db.GetDB().Model(&model.Channel{}).Where("id = ?", channel.ID).Update("opencode_compat", true).Error; err != nil {
+		t.Fatalf("标记 OpenCode 兼容渠道失败: %v", err)
+	}
+	enabled := true
+	if _, err := op.ChannelUpdate(&model.ChannelUpdateRequest{ID: channel.ID, Enabled: &enabled}, context.Background()); err != nil {
+		t.Fatalf("刷新 OpenCode 兼容渠道缓存失败: %v", err)
+	}
+	core, err := op.ChannelGetCore(channel.ID)
+	if err != nil || !core.OpencodeCompat {
+		t.Fatalf("OpenCode 标记未进入缓存: %v", err)
+	}
+	return channel
+}
 
 func TestDeterministicRequestRejectionStopsAcrossMembers(t *testing.T) {
 	cases := []struct {
@@ -63,7 +83,7 @@ func TestDeterministicRequestRejectionStopsAcrossMembers(t *testing.T) {
 
 			firstModel := integrationUniqueName("it-det-fastfail-first")
 			secondModel := integrationUniqueName("it-det-fastfail-second")
-			firstChannel := createIntegrationChannel(t, "it-det-fastfail-first-ch", model.ChannelProviderOpenAI, first.URL, firstModel)
+			firstChannel := createOpencodeIntegrationChannel(t, "it-det-fastfail-first-ch", first.URL, firstModel)
 			secondChannel := createIntegrationChannel(t, "it-det-fastfail-second-ch", model.ChannelProviderOpenAI, second.URL, secondModel)
 			config := refSkipConfig()
 			config.MemberMaxAttempts = 1
@@ -166,7 +186,7 @@ func TestSanitizableDeterministic400RetriesOnceBeforeStopping(t *testing.T) {
 
 	firstModel := integrationUniqueName("it-det-sanitize-first")
 	secondModel := integrationUniqueName("it-det-sanitize-second")
-	firstChannel := createIntegrationChannel(t, "it-det-sanitize-first-ch", model.ChannelProviderOpenAI, first.URL, firstModel)
+	firstChannel := createOpencodeIntegrationChannel(t, "it-det-sanitize-first-ch", first.URL, firstModel)
 	secondChannel := createIntegrationChannel(t, "it-det-sanitize-second-ch", model.ChannelProviderOpenAI, second.URL, secondModel)
 	group := createIntegrationGroup(t, "it-det-sanitize-group", refSkipConfig(),
 		integrationLeafItem(t, firstChannel, firstModel),
@@ -207,7 +227,7 @@ func TestConvertedDeterministic400StopsAcrossMembers(t *testing.T) {
 
 	firstModel := integrationUniqueName("it-det-converted-first")
 	secondModel := integrationUniqueName("it-det-converted-second")
-	firstChannel := createIntegrationChannel(t, "it-det-converted-first-ch", model.ChannelProviderOpenAI, first.URL, firstModel)
+	firstChannel := createOpencodeIntegrationChannel(t, "it-det-converted-first-ch", first.URL, firstModel)
 	secondChannel := createIntegrationChannel(t, "it-det-converted-second-ch", model.ChannelProviderOpenAI, second.URL, secondModel)
 	group := createIntegrationGroup(t, "it-det-converted-group", refSkipConfig(),
 		integrationLeafItem(t, firstChannel, firstModel),
@@ -225,6 +245,71 @@ func TestConvertedDeterministic400StopsAcrossMembers(t *testing.T) {
 	}
 	if got := secondHits.Load(); got != 0 {
 		t.Fatalf("转换路径不得跨成员重试, 第二个成员实际调用 %d 次", got)
+	}
+}
+
+// 普通渠道命中同一标记时不得整请求终止, 应恢复成员级故障转移。
+func TestDeterministicRequestRejectionScopedToOpencode(t *testing.T) {
+	cases := []struct {
+		name                string
+		status              int
+		body                string
+		wantFirstMemberHits int64
+	}{
+		{
+			name:                "400 invalid request",
+			status:              http.StatusBadRequest,
+			body:                `{"error":{"message":"invalid parameter","type":"invalid_request_error"}}`,
+			wantFirstMemberHits: 2,
+		},
+		{
+			name:                "422 prompt too long",
+			status:              http.StatusUnprocessableEntity,
+			body:                `{"error":{"message":"prompt is too long","type":"invalid_request_error"}}`,
+			wantFirstMemberHits: 1,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			setupFailoverTest(t)
+
+			var firstHits, secondHits atomic.Int64
+			first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				firstHits.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(testCase.status)
+				_, _ = w.Write([]byte(testCase.body))
+			}))
+			defer first.Close()
+			second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				secondHits.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(chatCompletionBody("chatcmpl-scoped", "second-member", 1, 1))
+			}))
+			defer second.Close()
+
+			firstModel := integrationUniqueName("it-scoped-fastfail-first")
+			secondModel := integrationUniqueName("it-scoped-fastfail-second")
+			firstChannel := createIntegrationChannel(t, "it-scoped-fastfail-first-ch", model.ChannelProviderOpenAI, first.URL, firstModel)
+			secondChannel := createIntegrationChannel(t, "it-scoped-fastfail-second-ch", model.ChannelProviderOpenAI, second.URL, secondModel)
+			group := createIntegrationGroup(t, "it-scoped-fastfail-group", refSkipConfig(),
+				integrationLeafItem(t, firstChannel, firstModel),
+				integrationLeafItem(t, secondChannel, secondModel))
+
+			engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+			body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, group.Name)
+			recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("普通渠道应故障转移成功, 实际 %d: %s", recorder.Code, recorder.Body.String())
+			}
+			if got := firstHits.Load(); got != testCase.wantFirstMemberHits {
+				t.Fatalf("普通渠道首个成员调用次数 = %d, 期望 %d", got, testCase.wantFirstMemberHits)
+			}
+			if got := secondHits.Load(); got != 1 {
+				t.Fatalf("应有且仅有一次第二成员调用, 实际 %d", got)
+			}
+		})
 	}
 }
 

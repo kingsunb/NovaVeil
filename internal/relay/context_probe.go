@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // contextProbeMaxTokens 是单次探测允许的最大标称规模(十进制 1M)。
@@ -51,13 +53,10 @@ type ContextProbeResult struct {
 	ActualTokens int64 `json:"actual_tokens"`
 }
 
-// ProbeContextWindow 用指定标称 token 规模的请求探测渠道模型能否接受。
-// 填充文本按全渠道统一的「4 字符约 1 token」基准构造, 再乘上该模型已实测的密度比;
-// 同一套规则适用于所有渠道, 不按上游类型区分白名单。
-// 实测值与标称值偏差超过 10%(1M 档即 100K)时, 用本次实测密度按容忍下限(900K)
-// 自动重测一次并缓存密度, 保证探测结论与请求估算共用同一把尺。
-// 出站构造与业务转发同形(渠道配置、免费档改写、代理与 Bun 传输), 只按状态码判定容量,
-// 不复用会校验回答内容的透传路径: 探测请求故意只留 1 个输出 token, 回答不可用属预期。
+// ProbeContextWindow 按标称规模探测渠道模型的上下文容量。
+// 实测到 ActualTokens 即写密度缓存。
+// 超 10% 容差时按实测密度重测一次并覆盖缓存。
+// 出站构造与业务转发同形, 探测请求只留 1 个输出 token。
 func ProbeContextWindow(ctx context.Context, channelID int, modelName string, tokens int) (*ContextProbeResult, error) {
 	if strings.TrimSpace(modelName) == "" {
 		return nil, fmt.Errorf("model is required")
@@ -79,18 +78,29 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 		return nil, err
 	}
 	result.Tokens = nominal
-	if result.ActualTokens > 0 &&
-		math.Abs(float64(result.ActualTokens)-float64(nominal)) > float64(probeTolerance(nominal)) {
-		result = probeRecalibrate(ctx, channel, modelName, nominal, constructed, result)
+	if result.ActualTokens > 0 {
+		measured := recordProbeDensity(channel.BaseURL, modelName, int(result.ActualTokens), constructed)
+		if math.Abs(float64(result.ActualTokens)-float64(nominal)) > float64(probeTolerance(nominal)) {
+			result = probeRecalibrate(ctx, channel, modelName, nominal, measured, result)
+		}
 	}
 	return result, nil
 }
 
-// probeRecalibrate 用首次探测实测的密度比按容忍下限重测一次并缓存密度。
-// 重测失败时保留首次结论, 不把一次校准失败升级成探测失败。
-func probeRecalibrate(ctx context.Context, channel model.Channel, modelName string, nominal, constructed int, first *ContextProbeResult) *ContextProbeResult {
-	measured := clampTokenDensity(float64(first.ActualTokens) / float64(constructed))
-	tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), measured)
+// recordProbeDensity 写入实测密度并返回夹取后的比值。
+func recordProbeDensity(baseURL, modelName string, actual, constructed int) float64 {
+	if constructed <= 0 {
+		return 1
+	}
+	density := clampTokenDensity(float64(actual) / float64(constructed))
+	tokenDensityCache.Store(tokenDensityKey(baseURL, modelName), density)
+	return density
+}
+
+// probeRecalibrate 按实测密度重测一次并覆盖密度缓存。
+// 重测失败保留首测结论。
+// 校准失败不升级成探测失败。
+func probeRecalibrate(ctx context.Context, channel model.Channel, modelName string, nominal int, measured float64, first *ContextProbeResult) *ContextProbeResult {
 	retryConstructed := probeConstructedTokens(probeRetryTarget(nominal), measured)
 	retry, err := probeOnce(ctx, channel, modelName, retryConstructed)
 	if err != nil {
@@ -98,7 +108,7 @@ func probeRecalibrate(ctx context.Context, channel model.Channel, modelName stri
 	}
 	retry.Tokens = nominal
 	if retry.ActualTokens > 0 {
-		tokenDensityCache.Store(tokenDensityKey(channel.BaseURL, modelName), clampTokenDensity(float64(retry.ActualTokens)/float64(retryConstructed)))
+		recordProbeDensity(channel.BaseURL, modelName, int(retry.ActualTokens), retryConstructed)
 	}
 	return retry
 }
@@ -144,20 +154,25 @@ func probeConstructedTokens(target int, ratio float64) int {
 }
 
 // overflowRequestedRe 从拒绝体提取「你实际发了多少 token」的报告值。
-var overflowRequestedRe = regexp.MustCompile(`requested (?:about )?([\d,]+) tokens`)
+var overflowRequestedRe = regexp.MustCompile(`(?i)requested (?:about )?([\d,]+) tokens`)
+
+// promptTooLongRe 覆盖 Anthropic 的 prompt is too long 措辞。
+var promptTooLongRe = regexp.MustCompile(`(?i)prompt is too long:?\s+([\d,]+) tokens`)
 
 // parseRequestedOverflowTokens 解析上游口径的请求规模, 拿不到返回 false。
 // 例: OpenRouter 拒绝体「you requested about 1817292 tokens」→ 1817292。
 func parseRequestedOverflowTokens(detail string) (int64, bool) {
-	match := overflowRequestedRe.FindStringSubmatch(detail)
-	if match == nil {
-		return 0, false
+	for _, re := range []*regexp.Regexp{overflowRequestedRe, promptTooLongRe} {
+		match := re.FindStringSubmatch(detail)
+		if match == nil {
+			continue
+		}
+		value, err := strconv.ParseInt(strings.ReplaceAll(match[1], ",", ""), 10, 64)
+		if err == nil && value > 0 {
+			return value, true
+		}
 	}
-	value, err := strconv.ParseInt(strings.ReplaceAll(match[1], ",", ""), 10, 64)
-	if err != nil || value <= 0 {
-		return 0, false
-	}
-	return value, true
+	return 0, false
 }
 
 // probeOnce 发送一次指定构造规模的探测请求并按状态码判定容量。
@@ -199,6 +214,11 @@ func probeOnce(ctx context.Context, channel model.Channel, modelName string, tok
 			built.Body, _ = shapeOpencodeFreeBody(built.Body, isOpencodeV1Lane(effective))
 		}
 	}
+	// 收敛输出预算, 探测只测输入容量。
+	built.Body = clampProbeOutputBudget(built.Body, format)
+	if len(built.JSONBody) > 0 {
+		built.JSONBody = slices.Clone(built.Body)
+	}
 	client, err := helper.ChannelHttpClient(&effective)
 	if err != nil {
 		finishTestRequest(logRequest, "", nil, err)
@@ -226,7 +246,8 @@ func probeOnce(ctx context.Context, channel model.Channel, modelName string, tok
 	}
 	if actual {
 		result.ActualTokens = usage.PromptTokens
-	} else if reported, ok := parseRequestedOverflowTokens(result.Detail); ok {
+	} else if reported, ok := parseRequestedOverflowTokens(string(body)); ok {
+		// 完整响应体解析, 截断只用于展示。
 		result.ActualTokens = reported
 	}
 	var probeErr error
@@ -262,6 +283,36 @@ func probeOnce(ctx context.Context, channel model.Channel, modelName string, tok
 		return nil, probeErr
 	}
 	return result, nil
+}
+
+// clampProbeOutputBudget 把探测输出预算收敛到 1。
+func clampProbeOutputBudget(body []byte, format llm.APIFormat) []byte {
+	clamped := body
+	var err error
+	switch format {
+	case llm.APIFormatOpenAIChatCompletion:
+		if clamped, err = sjson.SetBytes(clamped, "max_tokens", 1); err != nil {
+			return body
+		}
+		if clamped, err = sjson.DeleteBytes(clamped, "reasoning_effort"); err != nil {
+			return body
+		}
+	case llm.APIFormatOpenAIResponse:
+		if clamped, err = sjson.SetBytes(clamped, "max_output_tokens", 1); err != nil {
+			return body
+		}
+		if clamped, err = sjson.DeleteBytes(clamped, "reasoning"); err != nil {
+			return body
+		}
+	case llm.APIFormatAnthropicMessage:
+		if clamped, err = sjson.DeleteBytes(clamped, "thinking"); err != nil {
+			return body
+		}
+		if clamped, err = sjson.SetBytes(clamped, "max_tokens", 1); err != nil {
+			return body
+		}
+	}
+	return clamped
 }
 
 // contextOverflowHints 是上游报上下文超限时的常见措辞, 用于把容量结论与参数错误分开。
