@@ -180,7 +180,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		nonRetryable := make(map[int]bool)             // 出现过确定性 4xx(400/404/422)的成员集合, 全部成员都出现时终止请求。
 		contextOverflowSeen := false                   // 本请求是否出现过上下文超限。
 		contextSkipped := make(map[int]bool)           // 上下文窗口装不下本请求而跳过的成员集合。
-		maxCandidateWindow := 0                        // 被跳过成员中最大的窗口值, 供拒绝消息给出量化提示。
+		maxCandidateWindow := 0                        // 已知窗口候选的最大窗口值, 供拒绝消息给出量化提示。
 		busyRejected := make(map[int]bool)             // 并发槽位满被本地准入拒绝的成员集合: 每成员满载一次即换下一优先级, 全部满载时终止请求。
 		rounds := 0                                    // 本请求已消耗的尝试轮次, 含引用链结构性跳过等一切循环路径。
 		startedAt := time.Now()                        // 请求进入转发循环的时刻, 用于整体安全截止时间判定。

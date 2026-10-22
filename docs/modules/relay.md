@@ -14,7 +14,7 @@
 4. 会话键 `sessionScopeKey`：`X-Session-Id` 缺省回退 `x-opencode-session`；有 API Key 时格式为 `apiKeyID:sessionKey`。
 5. 请求脱敏（fail-closed，见 [mask.md](mask.md)）。
 6. 重试循环：`maxRequestRounds` 与请求总截止时间双保险，每轮重读分组配置。
-7. 每轮选路：会话粘合 → `pickGroupItemWithContext` → 引用链解析（分组成员可以指向另一个分组，逐层解析到叶子成员）。
+7. 每轮选路：会话粘合 → `pickGroupItemWithContext` → 引用链解析（分组成员可以指向另一个分组，逐层解析到叶子成员）；上下文过滤开启时只跳过已知窗口装不下的成员，窗口未知的成员照常尝试。
 8. 多 Key `selectChannelKey`（游标轮询 + Key 级冷却）+ 渠道 RPM 滑动窗口等待。
 9. `buildOutbound` 按渠道类型与模型协议装配出站转换器，判定 `supportsNativeFormat` 走透传。
 10. 失败分类记账（业务/基础设施错误独立计数）→ 熔断/冷却 → `exclude` 换下一成员重试。

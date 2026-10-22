@@ -83,7 +83,7 @@ func TestContextFitsWindow(t *testing.T) {
 		window int
 		want   bool
 	}{
-		{name: "窗口未知不适配", window: 0, want: false},
+		{name: "窗口未知视为放行", window: 0, want: true},
 		{name: "正边界", window: 1000, want: true},
 		{name: "超出一个 token", window: 999, want: false},
 	}

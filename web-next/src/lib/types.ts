@@ -280,7 +280,7 @@ export interface GroupRelayConfig {
   auto_match_models: boolean;
   /** 是否把响应里的模型名改写回客户端请求的分组名，避免聚合分组透传真实上游模型名，默认 false。 */
   echo_response_model: boolean;
-  /** 是否按请求估算跳过上下文窗口不足的成员，默认 false；窗口未知（0）的成员跳过。 */
+  /** 是否按请求估算跳过上下文窗口不足的成员，默认 false；窗口未知（0）时照常尝试。 */
   context_fit_enabled: boolean;
 }
 

@@ -74,10 +74,10 @@ func estimateModelTokens(body []byte, baseURL, modelName string) int {
 	return scaled
 }
 
-// contextFitsWindow 报告请求能否装进窗口; 窗口未知视为不适配。
+// contextFitsWindow 报告请求能否装进窗口; 窗口未知视为放行, 交上游判定。
 func contextFitsWindow(body []byte, contextWindow int, baseURL, modelName string) bool {
 	if contextWindow <= 0 {
-		return false
+		return true
 	}
 	return estimateModelTokens(body, baseURL, modelName) <= contextWindow
 }

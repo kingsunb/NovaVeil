@@ -1538,7 +1538,7 @@ function GroupEditor({
               />
               <Toggle
                 label="上下文窗口过滤"
-                description="按请求估算 token 跳过装不下请求的成员；人工窗口优先，其次同步目录窗口，仍未知则跳过"
+                description="按请求估算 token 跳过装不下请求的成员；人工窗口优先，其次同步目录窗口，仍未知则照常尝试"
                 checked={relayConfig.context_fit_enabled}
                 onChange={(v) => updateRelay("context_fit_enabled", v)}
               />
@@ -1960,4 +1960,3 @@ function MemberRuntimeChips({
   }
   return null;
 }
-

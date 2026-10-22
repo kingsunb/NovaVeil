@@ -232,14 +232,13 @@ func TestContextFitRefChainAllSkippedDoesNotPublish(t *testing.T) {
 	assertNoPublishedCurrent(t, snapshots, top.ID, refID)
 }
 
-func TestContextFitSkipsUnknownWindowAndUsesSyncedWindow(t *testing.T) {
+func TestContextFitAttemptsUnknownWindowMember(t *testing.T) {
 	setupFailoverTest(t)
 	var unknownHits, knownHits atomic.Int64
 	unknown := chatUpstream(t, &unknownHits, "unknown")
 	known := chatUpstream(t, &knownHits, "known")
 	unknownChannel := createIntegrationChannel(t, "ctx-unknown", model.ChannelProviderOpenAI, unknown.URL, "ctx-unknown-model")
 	knownChannel := createIntegrationChannel(t, "ctx-synced", model.ChannelProviderOpenAI, known.URL, "ctx-synced-model")
-	setIntegrationSyncedContextWindow(t, unknownChannel, "ctx-unknown-model", 0)
 	setIntegrationSyncedContextWindow(t, knownChannel, "ctx-synced-model", 1_000_000)
 	group := createIntegrationGroup(t, "ctx-unknown-and-synced", contextFitRouteConfig(),
 		integrationLeafItem(t, unknownChannel, "ctx-unknown-model"),
@@ -253,12 +252,40 @@ func TestContextFitSkipsUnknownWindowAndUsesSyncedWindow(t *testing.T) {
 	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
 	recorder := postRelayJSON(t, engine, path, contextFitBody(group.Name, 689_106), "", nil)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("应跳过未知窗口并命中同步 1M 窗口, 实际 %d: %s", recorder.Code, recorder.Body.String())
+		t.Fatalf("未知窗口成员应照常尝试并成功, 实际 %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if unknownHits.Load() != 0 {
-		t.Fatalf("未知窗口成员不应调用上游, 实际 %d", unknownHits.Load())
+	if unknownHits.Load() != 1 {
+		t.Fatalf("未知窗口成员应由首个优先级承载一次, 实际 %d", unknownHits.Load())
 	}
-	if knownHits.Load() != 1 {
-		t.Fatalf("同步 1M 窗口成员应承载一次, 实际 %d", knownHits.Load())
+	if knownHits.Load() != 0 {
+		t.Fatalf("未知窗口成员成功后不应命中后续 1M 成员, 实际 %d", knownHits.Load())
+	}
+}
+
+func TestContextFitKnownSmallWindowStillSkippedWithUnknownCandidate(t *testing.T) {
+	setupFailoverTest(t)
+	var smallHits, unknownHits atomic.Int64
+	small := chatUpstream(t, &smallHits, "small")
+	unknown := chatUpstream(t, &unknownHits, "unknown")
+	smallChannel := createIntegrationChannel(t, "ctx-known-small", model.ChannelProviderOpenAI, small.URL, "ctx-known-small-model")
+	unknownChannel := createIntegrationChannel(t, "ctx-unknown-fallback", model.ChannelProviderOpenAI, unknown.URL, "ctx-unknown-fallback-model")
+	setIntegrationContextWindow(t, smallChannel.ID, "ctx-known-small-model", 200_000)
+	group := createIntegrationGroup(t, "ctx-small-and-unknown", contextFitRouteConfig(),
+		integrationLeafItem(t, smallChannel, "ctx-known-small-model"),
+		integrationLeafItem(t, unknownChannel, "ctx-unknown-fallback-model"))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	recorder := postRelayJSON(t, engine, path, contextFitBody(group.Name, 689_106), "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("已知小窗口应跳过并由未知窗口成员承接, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if smallHits.Load() != 0 {
+		t.Fatalf("已知 200K 窗口成员不应调用上游, 实际 %d", smallHits.Load())
+	}
+	if unknownHits.Load() != 1 {
+		t.Fatalf("未知窗口成员应承载一次, 实际 %d", unknownHits.Load())
+	}
+	if strings.Contains(recorder.Body.String(), errContextWindowTooSmall.Error()) {
+		t.Fatalf("存在未知窗口候选时不应本地拒绝: %s", recorder.Body.String())
 	}
 }

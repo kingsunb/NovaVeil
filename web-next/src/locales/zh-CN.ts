@@ -39,7 +39,7 @@ export const zhCN = {
   groups: {
     undefinedWindow: "未定义窗口",
     undefinedWindowTitle:
-      "未定义窗口：同步目录与人工值均未知，开启过滤时会跳过该成员",
+      "未定义窗口：同步目录与人工值均未知，开启过滤时仍照常尝试",
     definedWindowTitle: (exact: string) =>
       `生效的上下文窗口：${exact}；请求估算超出即跳过该成员`,
     windowSuffix: "窗口",
