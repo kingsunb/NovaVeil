@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -93,7 +94,7 @@ var startCmd = &cobra.Command{
 
 		// 内置免费渠道出厂开启 AutoSync: 启动后异步同步一次, 让模型跟随上游而非内定列表。
 		go func() {
-			if syncErr := task.SyncModelsTask(); syncErr != nil {
+			if syncErr := task.SyncModelsTask(); syncErr != nil && !errors.Is(syncErr, task.ErrSyncInProgress) {
 				log.Warnf("builtin channel model sync skipped: %v", syncErr)
 			}
 		}()

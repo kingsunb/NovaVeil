@@ -2,7 +2,9 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,6 +128,46 @@ func TestSyncModelsTaskSkipsDisabledChannels(t *testing.T) {
 
 	if err := SyncModelsTask(); err != nil {
 		t.Fatalf("SyncModelsTask: %v", err)
+	}
+}
+
+func TestSyncModelsTaskConcurrentReturnsInProgress(t *testing.T) {
+	syncModelsMu.Lock()
+	defer syncModelsMu.Unlock()
+
+	err := SyncModelsTask()
+	if !errors.Is(err, ErrSyncInProgress) {
+		t.Fatalf("concurrent sync error = %v, want ErrSyncInProgress", err)
+	}
+}
+
+func TestSyncFailureWarningIgnoresInProgressAndLogsRealError(t *testing.T) {
+	channel := insertSyncChannel(t, "https://opencode.ai/zen", nil)
+	prevFetch := fetchChannelModels
+	fetchChannelModels = func(context.Context, model.Channel) ([]string, error) {
+		return nil, errors.New("upstream down")
+	}
+	defer func() { fetchChannelModels = prevFetch }()
+
+	syncErr := SyncModelsTask()
+	if syncErr == nil || errors.Is(syncErr, ErrSyncInProgress) {
+		t.Fatalf("sync error = %v, want real failure for channel %s", syncErr, channel.Name)
+	}
+
+	var warnings []string
+	prevWarn := syncWarnf
+	syncWarnf = func(format string, args ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	}
+	defer func() { syncWarnf = prevWarn }()
+
+	warnSyncFailure(ErrSyncInProgress)
+	if len(warnings) != 0 {
+		t.Fatalf("in-progress sync must not warn: %v", warnings)
+	}
+	warnSyncFailure(syncErr)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "upstream down") {
+		t.Fatalf("real sync failure warning = %v", warnings)
 	}
 }
 

@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,7 +16,7 @@ import (
 
 // 模型列表与 OpenCode 目录的拉取点，测试替换它们以避免真实网络请求。
 var (
-	fetchChannelModels  = helper.FetchModels
+	fetchChannelModels   = helper.FetchModels
 	fetchOpencodeCatalog = helper.FetchOpencodeCatalog
 )
 
@@ -23,12 +24,16 @@ var (
 	syncModelsMu         sync.Mutex   // 保证同一时间只有一个模型同步任务运行。
 	lastSyncModelsTimeMu sync.RWMutex // 最近同步时间的读写锁。
 	lastSyncModelsTime   = time.Now() // 最近一次模型同步任务结束时间。
+	syncWarnf            = log.Warnf
 )
+
+// ErrSyncInProgress 表示已有模型同步任务正在运行。
+var ErrSyncInProgress = errors.New("模型同步正在进行中")
 
 // SyncModelsTask 同步渠道模型并清理失效关联，返回本次同步遇到的首个错误。
 func SyncModelsTask() error {
 	if !syncModelsMu.TryLock() {
-		return fmt.Errorf("模型同步正在进行中")
+		return ErrSyncInProgress
 	}
 	defer syncModelsMu.Unlock()
 
@@ -220,6 +225,13 @@ func SyncModelsTask() error {
 		}
 	}
 	return syncErr
+}
+
+func warnSyncFailure(err error) {
+	if err == nil || errors.Is(err, ErrSyncInProgress) {
+		return
+	}
+	syncWarnf("failed to sync models: %v", err)
 }
 
 // GetLastSyncModelsTime 返回最近一次模型同步任务结束时间。

@@ -3,8 +3,12 @@ package conf
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
+
+	"github.com/mattn/go-isatty"
 )
 
 // Banner is the NovaVeil ASCII wordmark shown on startup.
@@ -29,38 +33,68 @@ const (
 	Dim    string = "\033[2m"
 )
 
-func printInfo(label, value, printColor string) {
-	fmt.Printf("%s%-12s%s %s%s%s\n",
-		Dim, label+":", Reset,
-		printColor, value, Reset)
+var isTerminal = func(fd uintptr) bool {
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+}
+
+func printInfo(w io.Writer, label, value, printColor string, color bool) {
+	if !color {
+		fmt.Fprintf(w, "%-12s %s\n", label+":", value)
+		return
+	}
+	fmt.Fprintf(w, "%s%-12s%s %s%s%s\n", Dim, label+":", Reset, printColor, value, Reset)
 }
 
 // PrintBanner writes the NovaVeil wordmark and build metadata to stdout.
 func PrintBanner() {
-	fmt.Print(Cyan + Bold)
-	fmt.Print(Banner)
-	fmt.Print(Reset)
+	printBanner(os.Stdout, bannerColorEnabled(isTerminal(os.Stdout.Fd())))
+}
 
-	fmt.Print(Blue + Bold)
-	fmt.Printf("          🚀 %s - %s\n", APP_NAME, APP_DESC)
-	fmt.Print(Reset)
+func bannerColorEnabled(stdoutIsTTY bool) bool {
+	return os.Getenv("NO_COLOR") == "" && stdoutIsTTY
+}
 
-	fmt.Print(Dim)
-	fmt.Println(strings.Repeat("─", 60))
-	fmt.Print(Reset)
+func printBanner(w io.Writer, color bool) {
+	if color {
+		fmt.Fprint(w, Cyan+Bold)
+	}
+	fmt.Fprint(w, Banner)
+	if color {
+		fmt.Fprint(w, Reset)
+	}
+
+	if color {
+		fmt.Fprint(w, Blue+Bold)
+	}
+	fmt.Fprintf(w, "          %s - %s\n", APP_NAME, APP_DESC)
+	if color {
+		fmt.Fprint(w, Reset)
+	}
+
+	if color {
+		fmt.Fprint(w, Dim)
+	}
+	fmt.Fprintln(w, strings.Repeat("─", 60))
+	if color {
+		fmt.Fprint(w, Reset)
+	}
 
 	if IsDebug() {
-		printInfo("Mode", "Debug", Red)
+		printInfo(w, "Mode", "Debug", Red, color)
 	}
-	printInfo("Version", Version, Green)
-	printInfo("Commit", Commit[:min(8, len(Commit))], Yellow)
-	printInfo("Build Time", formatDate(BuildTime), Blue)
-	printInfo("Built By", Author, Purple)
-	printInfo("Repo", Repo, Cyan)
+	printInfo(w, "Version", Version, Green, color)
+	printInfo(w, "Commit", Commit[:min(8, len(Commit))], Yellow, color)
+	printInfo(w, "Build Time", formatDate(BuildTime), Blue, color)
+	printInfo(w, "Built By", Author, Purple, color)
+	printInfo(w, "Repo", Repo, Cyan, color)
 
-	fmt.Print(Dim)
-	fmt.Println(strings.Repeat("═", 60))
-	fmt.Print(Reset)
+	if color {
+		fmt.Fprint(w, Dim)
+	}
+	fmt.Fprintln(w, strings.Repeat("═", 60))
+	if color {
+		fmt.Fprint(w, Reset)
+	}
 }
 
 func formatDate(date string) string {

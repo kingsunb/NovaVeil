@@ -78,8 +78,6 @@ func Init() {
 	}
 	syncLLMInterval := time.Duration(syncLLMIntervalHours) * time.Hour
 	Register(string(model.SettingKeySyncLLMInterval), syncLLMInterval, true, func() {
-		if err := SyncModelsTask(); err != nil {
-			log.Warnf("failed to sync models: %v", err)
-		}
+		warnSyncFailure(SyncModelsTask())
 	})
 }

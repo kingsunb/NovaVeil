@@ -78,10 +78,10 @@ The supplied Compose files enforce:
 - a 90-second container stop grace period for the sequential HTTP/task/conversation/stat/log/database shutdown hooks;
 - an HTTP healthcheck using the image's BusyBox `wget`.
 
-The healthcheck calls `/`, the existing embedded frontend root. A dedicated
-`/healthz` endpoint is not present in the current backend. If one is added later,
-it should be unauthenticated, side-effect free, and should replace `/` in both the
-Dockerfile and Compose healthchecks.
+The production Compose healthcheck calls the unauthenticated, side-effect free
+`/healthz` endpoint, which runs `SELECT 1` with a 2-second timeout and returns no
+internal details. The image-level Dockerfile healthcheck still probes `/` for
+frontend liveness.
 
 ## Network and HTTPS
 

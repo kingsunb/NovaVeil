@@ -161,7 +161,7 @@ go run main.go start
 cat data/initial-admin-password     # username: admin / password: <随机>
 ```
 
-登录后**必须立即修改密码**才能进行其他操作；改密成功后该引导文件自动删除。
+登录后**必须立即修改密码**才能进行其他操作；首次成功登录后该引导文件即自动删除。
 
 ### 4.3 开发模式（前后端分离热更新）
 

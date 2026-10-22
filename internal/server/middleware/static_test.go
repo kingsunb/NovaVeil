@@ -307,6 +307,66 @@ func TestStaticSkipsAPIPaths(t *testing.T) {
 	}
 }
 
+func TestStaticSkipsHealthz(t *testing.T) {
+	fs2, _ := fakeFileSystem(t)
+	r := gin.New()
+	r.Use(StaticEmbed("", fs2))
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("healthz status = %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `"status":"ok"`) {
+		t.Fatalf("healthz was intercepted by static fallback: %q", w.Body.String())
+	}
+}
+
+func TestStaticMethodContract(t *testing.T) {
+	fs2, _ := fakeFileSystem(t)
+	r := gin.New()
+	r.Use(StaticEmbed("", fs2))
+
+	cases := []struct {
+		method string
+		want   int
+	}{
+		{http.MethodGet, http.StatusOK},
+		{http.MethodHead, http.StatusOK},
+		{http.MethodPost, http.StatusMethodNotAllowed},
+		{http.MethodPut, http.StatusMethodNotAllowed},
+		{http.MethodDelete, http.StatusMethodNotAllowed},
+		{http.MethodPatch, http.StatusMethodNotAllowed},
+		{http.MethodTrace, http.StatusMethodNotAllowed},
+	}
+	for _, tc := range cases {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(tc.method, "/", nil))
+		if w.Code != tc.want {
+			t.Errorf("%s / = %d, want %d", tc.method, w.Code, tc.want)
+		}
+		if tc.want == http.StatusMethodNotAllowed && w.Header().Get("Allow") != "GET, HEAD" {
+			t.Errorf("%s / Allow = %q, want %q", tc.method, w.Header().Get("Allow"), "GET, HEAD")
+		}
+	}
+}
+
+func TestStaticDoesNotRejectNonGetAPIMethods(t *testing.T) {
+	fs2, _ := fakeFileSystem(t)
+	r := gin.New()
+	r.Use(StaticEmbed("", fs2))
+	r.PUT("/api/v1/channel/update", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/api/v1/channel/update", nil))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("PUT API status = %d, want 204", w.Code)
+	}
+}
+
 // TestStaticSPAFallbackForFrontendRoutes 确保前端路由（/channels /dashboard 等）
 // 直接访问时返回 index.html（SPA fallback），而非 404。
 func TestStaticSPAFallbackForFrontendRoutes(t *testing.T) {

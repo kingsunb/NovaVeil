@@ -15,6 +15,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.20.3
 	github.com/looplj/axonhub/llm v0.0.0-20261021081413-cbdf9a6d4a3d
+	github.com/mattn/go-isatty v0.0.24
 	github.com/refraction-networking/utls v1.8.2
 	github.com/samber/lo v1.53.0
 	github.com/spf13/cobra v1.10.2
@@ -81,7 +82,6 @@ require (
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
-	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect

@@ -56,8 +56,15 @@ func static(urlPrefix string, fileSystem http.FileSystem) gin.HandlerFunc {
 	}
 	return func(c *gin.Context) {
 		// API 路径（管理端 /api 与中转 /v1）交由后端路由处理，不做静态/SPA fallback。
-		if strings.HasPrefix(c.Request.URL.Path, "/api") || strings.HasPrefix(c.Request.URL.Path, "/v1") {
+		if c.Request.URL.Path == "/healthz" ||
+			strings.HasPrefix(c.Request.URL.Path, "/api") ||
+			strings.HasPrefix(c.Request.URL.Path, "/v1") {
 			c.Next()
+			return
+		}
+		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+			c.Header("Allow", "GET, HEAD")
+			c.AbortWithStatus(http.StatusMethodNotAllowed)
 			return
 		}
 		file, err := fileSystem.Open(c.Request.URL.Path)
