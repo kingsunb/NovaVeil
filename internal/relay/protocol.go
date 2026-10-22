@@ -99,6 +99,7 @@ func buildPassthroughRequest(format llm.APIFormat, raw *httpclient.Request, chan
 	// BaseURL 以 ## 结尾表示地址已完整, 不再追加版本号和协议路径。
 	base := strings.TrimSuffix(channel.BaseURL, "##")
 	rawURL := base != channel.BaseURL
+	base = opencodeV2FamilyBaseURL(base, channel, opencodeFamilyForFormat(format))
 
 	var path string
 	if channel.PassThroughBodyEnabled && !rawURL {

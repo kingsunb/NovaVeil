@@ -1,6 +1,9 @@
 package relay
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -31,6 +34,8 @@ const (
 	opencodeProjectHeader       = "x-opencode-project"
 	opencodeParentHeader        = "x-parent-session-id"
 	opencodeParentSessionHeader = "x-opencode-parent-session-id"
+	opencodeTraceparentHeader   = "traceparent"
+	opencodeB3Header            = "b3"
 )
 
 // opencodeSessionIDPattern 是上游接受的 x-opencode-session 整段格式:
@@ -245,10 +250,10 @@ func applyResolvedOpencodeSession(channel model.Channel, session string, request
 // v1 档只镜像 x-opencode-session-id 且不发 affinity/X-Session-Id; v2 档保留客户端
 // child session, root 会话用于 x-opencode-session/affinity/X-Session-Id。
 // 非空父会话规范化为官方会话号并写双 parent 头; v2 同时把 root 切到父会话。
-// 官方不发送 x-opencode-request, 此处也不再注入。
-func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient.Request) {
+// v2 免费档补 b3/traceparent。
+func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient.Request) error {
 	if !channel.OpencodeCompat || request == nil {
-		return
+		return nil
 	}
 	if request.Headers == nil {
 		request.Headers = make(http.Header)
@@ -293,6 +298,27 @@ func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient
 		project = gjson.GetBytes(request.Body, "metadata.project_id").String()
 	}
 	request.Headers.Set(opencodeProjectHeader, opencodeid.ProjectIDForLane(project, v1))
+	if isOpencodeFreeLane(channel) && !v1 {
+		return injectOpencodeTraceHeaders(request)
+	}
+	return nil
+}
+
+// injectOpencodeTraceHeaders 写入同源追踪头。
+func injectOpencodeTraceHeaders(request *httpclient.Request) error {
+	var trace [16]byte
+	var span [8]byte
+	var parent [8]byte
+	for _, value := range [][]byte{trace[:], span[:], parent[:]} {
+		if _, err := rand.Read(value); err != nil {
+			return fmt.Errorf("generate opencode trace id: %w", err)
+		}
+	}
+	traceID := hex.EncodeToString(trace[:])
+	spanID := hex.EncodeToString(span[:])
+	request.Headers.Set(opencodeTraceparentHeader, "00-"+traceID+"-"+spanID+"-01")
+	request.Headers.Set(opencodeB3Header, traceID+"-"+spanID+"-1-"+hex.EncodeToString(parent[:]))
+	return nil
 }
 
 // resolveRequestRandomValue 在请求级一次性解析本请求所有随机头应使用的稳定会话 ID:

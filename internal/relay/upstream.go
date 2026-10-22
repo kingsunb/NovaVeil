@@ -183,7 +183,7 @@ func sendPassthroughStream(ctx context.Context, format llm.APIFormat, request *h
 		return nil, err
 	}
 	// 客户端的 Accept 属于库自管头不会透传, 需显式声明才能让上游按 SSE 返回。
-	// OpenCode 免费档由调用方传入官方 Accept(v1 */*, v2 application/json, text/event-stream),
+	// OpenCode 免费档由调用方传入官方 Accept(v1/v2 均为 */*),
 	// 不能用默认值覆盖——上游会把 Accept 与官方客户端不一致当作指纹差异。
 	if accept == "" {
 		accept = "text/event-stream"

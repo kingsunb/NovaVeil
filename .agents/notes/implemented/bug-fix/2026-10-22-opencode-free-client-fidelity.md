@@ -14,6 +14,7 @@ OpenCode 免费档按客户端指纹放行。上游最新客户端是 v2 `2.1.3`
 - v2 Chat 生成的工具 `function` 增加 `strict: false`；匹配器要求客户端工具显式 `strict=false`，否则替换为规范定义。v1 的 legacy `read` 占位不增加该字段。
 - 生成工具的 JSON 使用 `json.Encoder` 且 `SetEscapeHTML(false)`，去掉末尾换行；不使用字符串替换反解 `\u003c` / `\u003e` / `\u0026`。
 - 已有版本与头讨论见 [opencode2api 兼容跟进](../architecture/2026-10-19-opencode2api-compat-followup.md)、[免费档头集合对齐](2026-10-20-opencode-free-lane-header-parity.md)、[v2 免费档整形](../feature/2026-10-21-opencode-v2-free-tier-shaping.md)。
+- family 路由、追踪头与项目号回退的后续修正在 [OpenCode 免费档新客户端指纹对齐](2026-10-22-opencode-free-fingerprint-parity.md) 中接管。
 
 ## 备选方案
 
@@ -25,7 +26,7 @@ OpenCode 免费档按客户端指纹放行。上游最新客户端是 v2 `2.1.3`
 ## 后果
 
 - **收益**：两档 UA 与 v2 Chat 的三处已知字节差异对齐官方客户端，且存量渠道无需迁移即可获得新 UA；工具定义匹配不再把缺失 `strict` 的旧定义误判为一致。
-- **代价与已知上限**：免费额度已耗尽，不能真实调用上游验证放行结果；v1 仍使用 legacy `read` 占位且不校验工具 schema。未跟进的 family 路由、全局键序与 shell 平台改写仍是已知非修复差异。若上游开始校验这些差异，或要求 UA 再升版，需要重访本决定。
+- **代价与已知上限**：免费额度已耗尽，不能真实调用上游验证放行结果；v1 仍使用 legacy `read` 占位且不校验工具 schema。family 与追踪头已由新笔记接管，全局键序与 shell 平台改写仍是已知非修复差异。若上游开始校验这些差异，或要求 UA 再升版，需要重访本决定。
 
 ## 验证
 

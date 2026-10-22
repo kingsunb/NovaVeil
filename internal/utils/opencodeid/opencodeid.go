@@ -112,14 +112,14 @@ func GenerateRequestID() string {
 	return "req_" + hex.EncodeToString(buf)
 }
 
-// defaultProjectSignal 是缺省项目信号: 入站请求未带项目标识时统一使用。
-const defaultProjectSignal = "directory:novaveil:default-project"
+// globalProjectID 是无 Git 项目号。
+const globalProjectID = "global"
 
 // officialSessionPattern 等识别官方会话号形态。
 var (
 	officialSessionPattern    = regexp.MustCompile(`^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`)
 	descendingTimePartPattern = regexp.MustCompile(`^[0-9a-f]{9}f[c-f][0-9a-f]$`)
-	gitCommitPattern          = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	projectIDPattern          = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
 
 // SessionIDFromSignal 由信号确定性派生官方 ses_ 会话号。
@@ -156,14 +156,10 @@ func base62Fixed(data []byte, width int) string {
 	return string(out)
 }
 
-// ProjectIDForLane 渲染裸 40-hex 项目号; 两档都原样保留 global 与 git 提交号。
+// ProjectIDForLane 保留合法值, 否则回退 global。
 func ProjectIDForLane(signal string, _ bool) string {
-	if signal == "" {
-		signal = defaultProjectSignal
-	}
-	if signal == "global" || gitCommitPattern.MatchString(signal) {
+	if signal == globalProjectID || projectIDPattern.MatchString(signal) {
 		return signal
 	}
-	sum := sha256.Sum256([]byte("opencode-project\x00" + signal))
-	return hex.EncodeToString(sum[:20])
+	return globalProjectID
 }

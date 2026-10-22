@@ -103,7 +103,7 @@ func isOpencodeFreeModel(channel model.Channel, modelName string) bool {
 // 免费档客户端、Bun 版本与默认输出上限。
 const (
 	opencodeV1ClientVersion   = "1.19.4"
-	opencodeV1BunVersion      = "1.3.14"
+	opencodeV1BunVersion      = "1.4.4"
 	opencodeV2ClientVersion   = "2.1.3"
 	opencodeV2CompletionLimit = 32000
 )
@@ -124,6 +124,45 @@ func isOpencodeV1Lane(channel model.Channel) bool {
 		strings.Contains(strings.ToLower(channel.BaseURL), "/zen")
 }
 
+// opencodeUpstreamFamily 返回 v2 family 段。
+func opencodeUpstreamFamily(provider model.ChannelProvider) string {
+	switch provider {
+	case model.ChannelProviderOpenAI, model.ChannelProviderOpenAIResponses:
+		return "openai"
+	case model.ChannelProviderAnthropic:
+		return "anthropic"
+	default:
+		return ""
+	}
+}
+
+// opencodeFamilyForFormat 按客户端协议选 family。
+func opencodeFamilyForFormat(format llm.APIFormat) string {
+	switch format {
+	case llm.APIFormatOpenAIChatCompletion, llm.APIFormatOpenAIResponse:
+		return "openai"
+	case llm.APIFormatAnthropicMessage:
+		return "anthropic"
+	default:
+		return ""
+	}
+}
+
+// opencodeV2FamilyBaseURL 仅补裸 /inference。
+func opencodeV2FamilyBaseURL(base string, channel model.Channel, family string) string {
+	if family == "" || !isOpencodeFreeLane(channel) || isOpencodeV1Lane(channel) ||
+		strings.HasSuffix(strings.TrimSpace(channel.BaseURL), "##") {
+		return base
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || strings.TrimRight(parsed.Path, "/") != "/inference" {
+		return base
+	}
+	parsed.Path = "/inference/" + family
+	parsed.RawPath = ""
+	return parsed.String()
+}
+
 // opencodeModelProtocol 在渠道模型表中按名查 UpstreamProtocol; 未找到或为空返回 chat(默认)。
 // 与 opencode2api 的 v1ProviderUtils 默认分支一致: SystemOne 等无 v1 对应的协议也报 chat 包。
 func opencodeModelProtocol(channel model.Channel, modelName string) string {
@@ -138,11 +177,10 @@ func opencodeModelProtocol(channel model.Channel, modelName string) string {
 	return model.UpstreamProtocolChat
 }
 
-// opencodeV1Accept / opencodeV2Accept 是两档官方客户端发出的 Accept: v1 模型请求由
-// AI SDK 以 fetch 默认值发出(*/*), v2 CLI 显式要求 JSON 或 SSE。
+// opencodeV1Accept / opencodeV2Accept 是两档官方客户端发出的 Accept: 均为 */*。
 const (
 	opencodeV1Accept = "*/*"
-	opencodeV2Accept = "application/json, text/event-stream"
+	opencodeV2Accept = "*/*"
 )
 
 // isOpencodeFreeLane 报告渠道是否属于 OpenCode 免费档: OpencodeCompat 且档位为 "zen"
@@ -167,14 +205,14 @@ func opencodeFreeLaneAccept(channel model.Channel) string {
 
 // applyOpencodeFreeLaneHeaders 在连线上游前按档位设置 OpenCode 免费档的请求头:
 //   - v1 档(/zen): User-Agent 用协议相关的 opencode/1.19.4 ai-sdk/provider-utils/<ver>
-//     runtime/bun/1.3.14(<ver> 按出站协议), Accept 用 */*, 并发送 x-opencode-request
+//     runtime/bun/1.4.4(<ver> 按出站协议), Accept 用 */*, 并发送 x-opencode-request
 //     (msg_ 升序 id);
 //   - v2 档(/inference): User-Agent 动态覆盖为 opencode/latest/2.1.3/cli,
-//     Accept 用 application/json, text/event-stream, 且不发送 x-opencode-request
+//     Accept 用 */*, 且不发送 x-opencode-request
 //     (v2 网关对此头 403); Anthropic 出站补 beta=true。
 //
 // 仅对免费档改写头, 改写发生在 applyChannelConfig 之后, 覆盖渠道静态同名头。
-// x-opencode-project 的裸 40-hex 由 injectOpencodeCorrelationHeaders 注入, 此处不重复。
+// x-opencode-project 由关联头注入统一处理。
 func applyOpencodeFreeLaneHeaders(channel model.Channel, request *httpclient.Request, modelName string) {
 	accept := opencodeFreeLaneAccept(channel)
 	if accept == "" || request == nil {

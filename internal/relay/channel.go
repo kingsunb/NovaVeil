@@ -169,15 +169,17 @@ func buildOutbound(channel model.Channel, channelModel *model.ChannelModel, form
 	}
 	staticKey := auth.NewStaticKeyProvider(key)
 	passthrough := supportsNativeFormat(channel, channelModel, format)
-	switch outboundProvider(channel, channelModel) {
+	provider := outboundProvider(channel, channelModel)
+	baseURL := opencodeV2FamilyBaseURL(channel.BaseURL, channel, opencodeUpstreamFamily(provider))
+	switch provider {
 	case model.ChannelProviderOpenAI:
-		outbound, err := openai.NewOutboundTransformerWithConfig(&openai.Config{PlatformType: openai.PlatformOpenAI, BaseURL: channel.BaseURL, APIKeyProvider: staticKey})
+		outbound, err := openai.NewOutboundTransformerWithConfig(&openai.Config{PlatformType: openai.PlatformOpenAI, BaseURL: baseURL, APIKeyProvider: staticKey})
 		return outbound, passthrough, err
 	case model.ChannelProviderOpenAIResponses:
-		outbound, err := responses.NewOutboundTransformerWithConfig(&responses.Config{BaseURL: channel.BaseURL, APIKeyProvider: staticKey})
+		outbound, err := responses.NewOutboundTransformerWithConfig(&responses.Config{BaseURL: baseURL, APIKeyProvider: staticKey})
 		return outbound, passthrough, err
 	case model.ChannelProviderAnthropic:
-		outbound, err := anthropic.NewOutboundTransformerWithConfig(&anthropic.Config{Type: anthropic.PlatformDirect, BaseURL: channel.BaseURL, APIKeyProvider: staticKey})
+		outbound, err := anthropic.NewOutboundTransformerWithConfig(&anthropic.Config{Type: anthropic.PlatformDirect, BaseURL: baseURL, APIKeyProvider: staticKey})
 		return outbound, passthrough, err
 	case model.ChannelProviderCustom:
 		// 固定回复渠道按 OpenAI Chat 出站构造: 真实传输被 cannedTransport 顶替,
@@ -425,8 +427,10 @@ func applyChannelConfig(channel model.Channel, request *httpclient.Request, rand
 		applyResolvedOpencodeSession(channel, opencodeSession[0], request)
 	}
 	// opencode 关联头在会话号最终确定之后补充: x-session-affinity / x-opencode-session-id /
-	// X-Session-Id 镜像最终会话号, x-opencode-project 补裸 40-hex 项目 ID(非 OpencodeCompat 为无操作)。
-	injectOpencodeCorrelationHeaders(channel, request)
+	// X-Session-Id 镜像最终会话号, x-opencode-project 无合法值时回退 global。
+	if err := injectOpencodeCorrelationHeaders(channel, request); err != nil {
+		return err
+	}
 	// [debug] 打印最终发往上游的完整请求头, 便于排查 opencode 兼容头等注入是否生效。
 	// 仅 Debug 级别输出; Authorization / X-Api-Key / X-Goog-Api-Key 仅显示前缀, 不泄露完整凭据。
 	if log.GetLevel() <= log.DebugLevel {

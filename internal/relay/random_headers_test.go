@@ -564,7 +564,7 @@ func TestOpencodeSessionEmptyKeyMintsOncePerCaller(t *testing.T) {
 
 // TestInjectOpencodeCorrelationHeaders 验证 OpencodeCompat 渠道在会话号确定后补关联头:
 // x-session-affinity / x-opencode-session-id / X-Session-Id 三者镜像最终会话号,
-// x-opencode-project 稳定(裸 40-hex); 非 OpencodeCompat 渠道完全不注入。
+// 无合法项目信号时 x-opencode-project 回退 global; 非 OpencodeCompat 渠道完全不注入。
 // 对齐 opencode v2 官方客户端 model-request.ts:282-292 的头集合。
 func TestInjectOpencodeCorrelationHeaders(t *testing.T) {
 	channel := model.Channel{ID: 999, OpencodeCompat: true}
@@ -572,7 +572,7 @@ func TestInjectOpencodeCorrelationHeaders(t *testing.T) {
 	// 模拟 applyChannelConfig 的完整次序: 动态头占位 → 显式会话号覆盖 → 关联头补充。
 	req := newRandomHeaderRequest()
 	applyResolvedOpencodeSession(channel, validSesA, req)
-	injectOpencodeCorrelationHeaders(channel, req)
+	mustInjectOpencodeCorrelationHeaders(t, channel, req)
 
 	if got := req.Headers.Get(opencodeAffinityHeader); got != validSesA {
 		t.Fatalf("x-session-affinity 应镜像最终会话号 %q, 实际 %q", validSesA, got)
@@ -584,21 +584,21 @@ func TestInjectOpencodeCorrelationHeaders(t *testing.T) {
 		t.Fatalf("X-Session-Id 应镜像最终会话号 %q, 实际 %q", validSesA, got)
 	}
 	project := req.Headers.Get(opencodeProjectHeader)
-	if !validOpencodeProjectID(project) {
-		t.Fatalf("x-opencode-project 格式应为裸 40-hex, 实际 %q", project)
+	if project != "global" {
+		t.Fatalf("x-opencode-project = %q, 期望 global", project)
 	}
 
-	// 项目 ID 跨请求稳定。
+	// 无合法项目信号时跨请求稳定回退 global。
 	req2 := newRandomHeaderRequest()
 	applyResolvedOpencodeSession(channel, validSesA, req2)
-	injectOpencodeCorrelationHeaders(channel, req2)
+	mustInjectOpencodeCorrelationHeaders(t, channel, req2)
 	if got := req2.Headers.Get(opencodeProjectHeader); got != project {
 		t.Fatalf("x-opencode-project 应稳定, 首次 %q 再次 %q", project, got)
 	}
 
 	// 没有会话号时 affinity / session-id / X-Session-Id 不注入, 但 project 仍补。
 	req3 := newRandomHeaderRequest()
-	injectOpencodeCorrelationHeaders(channel, req3)
+	mustInjectOpencodeCorrelationHeaders(t, channel, req3)
 	for _, h := range []string{opencodeAffinityHeader, opencodeSessionIDHeader, opencodeUpstreamSessID} {
 		if got := req3.Headers.Get(h); got != "" {
 			t.Fatalf("无会话号时不应注入 %s, 实际 %q", h, got)
@@ -610,7 +610,7 @@ func TestInjectOpencodeCorrelationHeaders(t *testing.T) {
 
 	// 非 OpencodeCompat 渠道完全不注入。
 	req4 := newRandomHeaderRequest()
-	injectOpencodeCorrelationHeaders(model.Channel{ID: 998, OpencodeCompat: false}, req4)
+	mustInjectOpencodeCorrelationHeaders(t, model.Channel{ID: 998, OpencodeCompat: false}, req4)
 	for _, h := range []string{opencodeAffinityHeader, opencodeSessionIDHeader, opencodeUpstreamSessID, opencodeProjectHeader} {
 		if req4.Headers.Get(h) != "" {
 			t.Fatalf("非 OpencodeCompat 渠道不应注入 %s, 实际 %q", h, req4.Headers.Get(h))
@@ -625,7 +625,7 @@ func TestInjectOpencodeCorrelationHeadersV2Child(t *testing.T) {
 	req.Headers.Set(opencodeSessionIDHeader, validSesB)
 	req.Headers.Set(opencodeProjectHeader, "global")
 
-	injectOpencodeCorrelationHeaders(channel, req)
+	mustInjectOpencodeCorrelationHeaders(t, channel, req)
 
 	if got := req.Headers.Get(opencodeSessionHeader); got != validSesA {
 		t.Fatalf("x-opencode-session = %q, 期望 root %q", got, validSesA)
@@ -645,7 +645,7 @@ func TestInjectOpencodeCorrelationHeadersV2Child(t *testing.T) {
 
 	fallback := newRandomHeaderRequest()
 	fallback.Headers.Set(opencodeSessionHeader, validSesA)
-	injectOpencodeCorrelationHeaders(channel, fallback)
+	mustInjectOpencodeCorrelationHeaders(t, channel, fallback)
 	if got := fallback.Headers.Get(opencodeSessionIDHeader); got != validSesA {
 		t.Fatalf("无 child 时 x-opencode-session-id = %q, 期望 root %q", got, validSesA)
 	}
@@ -660,7 +660,7 @@ func TestInjectOpencodeCorrelationHeadersV2Parent(t *testing.T) {
 		req.Headers.Set(opencodeSessionHeader, validSesA)
 		req.Headers.Set(opencodeSessionIDHeader, validSesB)
 		req.Headers.Set(opencodeParentHeader, "parent-signal")
-		injectOpencodeCorrelationHeaders(channel, req)
+		mustInjectOpencodeCorrelationHeaders(t, channel, req)
 
 		if got := req.Headers.Get(opencodeParentHeader); got != parent {
 			t.Fatalf("x-parent-session-id = %q, 期望 %q", got, parent)
@@ -685,7 +685,7 @@ func TestInjectOpencodeCorrelationHeadersV2Parent(t *testing.T) {
 	fallback := newRandomHeaderRequest()
 	fallback.Headers.Set(opencodeSessionHeader, validSesA)
 	fallback.Headers.Set(opencodeParentHeader, "parent-signal")
-	injectOpencodeCorrelationHeaders(channel, fallback)
+	mustInjectOpencodeCorrelationHeaders(t, channel, fallback)
 	if got := fallback.Headers.Get(opencodeSessionHeader); got != parent {
 		t.Fatalf("无 child 时 x-opencode-session = %q, 期望父会话 %q", got, parent)
 	}
@@ -702,7 +702,7 @@ func TestInjectOpencodeCorrelationHeadersV1Unchanged(t *testing.T) {
 	req.Headers.Set(opencodeSessionIDHeader, validSesB)
 	req.Headers.Set(opencodeParentHeader, "parent-signal")
 
-	injectOpencodeCorrelationHeaders(channel, req)
+	mustInjectOpencodeCorrelationHeaders(t, channel, req)
 
 	if got := req.Headers.Get(opencodeSessionHeader); got != validSesA {
 		t.Fatalf("v1 x-opencode-session = %q, 期望 %q", got, validSesA)
@@ -730,21 +730,102 @@ func TestInjectOpencodeCorrelationHeadersProjectBothLanes(t *testing.T) {
 			channel := model.Channel{ID: 1004, OpencodeCompat: true, BaseURL: baseURL}
 			req := newRandomHeaderRequest()
 			req.Headers.Set(opencodeProjectHeader, project)
-			injectOpencodeCorrelationHeaders(channel, req)
+			mustInjectOpencodeCorrelationHeaders(t, channel, req)
 			if got := req.Headers.Get(opencodeProjectHeader); got != project {
 				t.Fatalf("%s 项目号 = %q, 期望原样 %q", baseURL, got, project)
+			}
+		}
+		for _, project := range []string{"", "prj_abc", strings.ToUpper(commit)} {
+			channel := model.Channel{ID: 1004, OpencodeCompat: true, BaseURL: baseURL}
+			req := newRandomHeaderRequest()
+			if project != "" {
+				req.Headers.Set(opencodeProjectHeader, project)
+			}
+			mustInjectOpencodeCorrelationHeaders(t, channel, req)
+			if got := req.Headers.Get(opencodeProjectHeader); got != "global" {
+				t.Fatalf("%s 项目号 %q = %q, 期望 global", baseURL, project, got)
 			}
 		}
 	}
 }
 
-// validOpencodeProjectID 校验 x-opencode-project 格式: 裸 40 位小写十六进制(SHA-1)。
-// 对齐 opencode v2 官方客户端的 directory-based project ID: Hash.fast = SHA-1,
-// 输出裸 40-hex, 不带 prj_ 前缀(packages/schema/src/project-id.ts)。
-func validOpencodeProjectID(v string) bool {
-	if len(v) != 40 {
-		return false
+func TestInjectOpencodeTraceHeadersV2FreeLane(t *testing.T) {
+	channel := model.Channel{ID: 1005, OpencodeCompat: true, BaseURL: "https://opencode.ai/inference"}
+	req := newRandomHeaderRequest()
+	req.Headers.Set(opencodeTraceparentHeader, "00-00000000000000000000000000000000-0000000000000000-01")
+	req.Headers.Set(opencodeB3Header, "00000000000000000000000000000000-0000000000000000-1-0000000000000000")
+	mustInjectOpencodeCorrelationHeaders(t, channel, req)
+
+	traceID, spanID := assertOpencodeTraceHeaders(t, req)
+	req2 := newRandomHeaderRequest()
+	mustInjectOpencodeCorrelationHeaders(t, channel, req2)
+	traceID2, spanID2 := assertOpencodeTraceHeaders(t, req2)
+	if traceID == traceID2 || spanID == spanID2 {
+		t.Fatalf("逐请求应重生成追踪 ID: %s/%s 与 %s/%s", traceID, spanID, traceID2, spanID2)
 	}
-	_, err := hex.DecodeString(v)
-	return err == nil
+	if req.Headers.Get(opencodeB3Header) == req2.Headers.Get(opencodeB3Header) {
+		t.Fatal("逐请求应重生成 b3")
+	}
+}
+
+func TestInjectOpencodeTraceHeadersSkipNonV2Free(t *testing.T) {
+	cases := []struct {
+		name    string
+		channel model.Channel
+	}{
+		{"v1", model.Channel{ID: 1006, OpencodeCompat: true, BaseURL: "https://opencode.ai/zen"}},
+		{"go", model.Channel{ID: 1007, OpencodeCompat: true, BaseURL: "https://opencode.ai/zen/v1"}},
+		{"非兼容渠道", model.Channel{ID: 1008, BaseURL: "https://opencode.ai/inference"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := newRandomHeaderRequest()
+			mustInjectOpencodeCorrelationHeaders(t, tc.channel, req)
+			for _, header := range []string{opencodeTraceparentHeader, opencodeB3Header} {
+				if got := req.Headers.Get(header); got != "" {
+					t.Fatalf("%s 不应注入 %s, 实际 %q", tc.name, header, got)
+				}
+			}
+		})
+	}
+}
+
+func mustInjectOpencodeCorrelationHeaders(t *testing.T, channel model.Channel, req *httpclient.Request) {
+	t.Helper()
+	if err := injectOpencodeCorrelationHeaders(channel, req); err != nil {
+		t.Fatalf("injectOpencodeCorrelationHeaders: %v", err)
+	}
+}
+
+func assertOpencodeTraceHeaders(t *testing.T, req *httpclient.Request) (string, string) {
+	t.Helper()
+	traceparent := strings.Split(req.Headers.Get(opencodeTraceparentHeader), "-")
+	if len(traceparent) != 4 || traceparent[0] != "00" || traceparent[3] != "01" {
+		t.Fatalf("traceparent 格式错误: %q", req.Headers.Get(opencodeTraceparentHeader))
+	}
+	traceID, spanID := traceparent[1], traceparent[2]
+	assertLowerHex(t, "traceparent trace id", traceID, 32)
+	assertLowerHex(t, "traceparent span id", spanID, 16)
+
+	b3 := strings.Split(req.Headers.Get(opencodeB3Header), "-")
+	if len(b3) != 4 || b3[2] != "1" {
+		t.Fatalf("b3 格式错误: %q", req.Headers.Get(opencodeB3Header))
+	}
+	if b3[0] != traceID || b3[1] != spanID {
+		t.Fatalf("b3 与 traceparent 不同源: %q / %q", req.Headers.Get(opencodeB3Header), req.Headers.Get(opencodeTraceparentHeader))
+	}
+	assertLowerHex(t, "b3 parent span id", b3[3], 16)
+	return traceID, spanID
+}
+
+func assertLowerHex(t *testing.T, name, value string, length int) {
+	t.Helper()
+	if len(value) != length {
+		t.Fatalf("%s 长度 = %d, 期望 %d: %q", name, len(value), length, value)
+	}
+	for _, r := range value {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			t.Fatalf("%s 含非小写十六进制字符: %q", name, value)
+		}
+	}
 }
