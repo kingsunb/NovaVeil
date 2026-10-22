@@ -54,8 +54,6 @@ func init() {
 //
 //   - OpenCode Free：公开免费端点，OpenAI Compatible；需要 OpenCode 会话头，
 //     后端 OpencodeCompat 机制负责注入 x-opencode-session。
-//   - UncloseAI Free：公开免注册端点，OpenAI Compatible；模型列表变动频繁，
-//     管理员可按需开启 AutoSync 跟随 /v1/models。
 //   - AI Horde Free：社区志愿算力，OpenAI Compatible 匿名端点；匿名 key 固定为
 //     0000000000，队列式响应较慢，不保证工具调用。
 //   - Pollinations Free：免 key OpenAI Compatible 端点，模型列表较大，
@@ -183,15 +181,6 @@ var BuiltinFreeChannels = []model.Channel{
 			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
 			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
 			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
-		},
-	},
-	{
-		Name:    "UncloseAI Free",
-		Type:    model.ChannelProviderOpenAI,
-		BaseURL: "https://hermes.ai.unturf.com",
-		Key:     "builtin",
-		Models: []model.ChannelModel{
-			{Name: "Lorbus/Qwen3.6-27B-int4-AutoRound"},
 		},
 	},
 	{

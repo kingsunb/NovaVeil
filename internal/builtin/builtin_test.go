@@ -178,8 +178,8 @@ func TestEnsureFreeBuiltinChannelsClearsCustomFreeFlag(t *testing.T) {
 }
 
 func TestBuiltinFreeChannelsDefinitions(t *testing.T) {
-	if len(BuiltinFreeChannels) == 0 {
-		t.Fatal("BuiltinFreeChannels should contain at least one fixed free provider")
+	if got, want := len(BuiltinFreeChannels), 17; got != want {
+		t.Fatalf("BuiltinFreeChannels count = %d, want %d", got, want)
 	}
 	seen := make(map[string]bool, len(BuiltinFreeChannels))
 	for i, def := range BuiltinFreeChannels {
@@ -188,6 +188,9 @@ func TestBuiltinFreeChannelsDefinitions(t *testing.T) {
 		}
 		if seen[def.Name] {
 			t.Fatalf("duplicate builtin free channel name %q", def.Name)
+		}
+		if def.Name == "UncloseAI Free" {
+			t.Fatal("retired UncloseAI Free must not be registered")
 		}
 		seen[def.Name] = true
 		if def.Type == "" {

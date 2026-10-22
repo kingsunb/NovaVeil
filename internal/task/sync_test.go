@@ -106,6 +106,29 @@ func TestSyncCatalogFailureKeepsModelsAndProtocols(t *testing.T) {
 	}
 }
 
+func TestSyncModelsTaskSkipsDisabledChannels(t *testing.T) {
+	channel := insertSyncChannel(t, "https://opencode.ai/zen", []model.ChannelModel{
+		{Name: "kept", Source: model.ChannelModelSourceAuto},
+	})
+	if err := db.GetDB().Model(&model.Channel{}).Where("id = ?", channel.ID).Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable channel: %v", err)
+	}
+	if err := op.InitCache(); err != nil {
+		t.Fatalf("refresh cache: %v", err)
+	}
+
+	prevModels := fetchChannelModels
+	fetchChannelModels = func(context.Context, model.Channel) ([]string, error) {
+		t.Fatal("disabled channel must not be synced")
+		return nil, nil
+	}
+	defer func() { fetchChannelModels = prevModels }()
+
+	if err := SyncModelsTask(); err != nil {
+		t.Fatalf("SyncModelsTask: %v", err)
+	}
+}
+
 func insertSyncChannel(t *testing.T, baseURL string, models []model.ChannelModel) model.Channel {
 	t.Helper()
 	channel := model.Channel{

@@ -47,7 +47,7 @@ func SyncModelsTask() error {
 	channels := op.ChannelList()
 	var syncErr error
 	for _, channel := range channels {
-		if !channel.AutoSync {
+		if !channel.Enabled || !channel.AutoSync {
 			continue
 		}
 		if err := op.ValidateChannelEgressBaseURL(channel.BaseURL); err != nil {
