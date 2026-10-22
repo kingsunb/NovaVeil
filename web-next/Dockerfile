@@ -63,7 +63,7 @@ RUN mkdir -p /usr/share/nginx/html/__flags \
 # 暴露 8080（非 root-friendly，避免 80 端口的权限问题）
 EXPOSE 8080
 
-# 健康检查：wget 拉根路径，5s 超时
+# 探 /healthz, 5s 超时
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
 

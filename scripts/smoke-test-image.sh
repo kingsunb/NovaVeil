@@ -49,7 +49,7 @@ while [ "${i}" -lt 60 ]; do
         echo "container stopped during smoke test: ${state}" >&2
         exit 1
     }
-    if wget -q -T 3 -O /dev/null "http://127.0.0.1:${port}/"; then
+    if wget -q -T 3 -O /dev/null "http://127.0.0.1:${port}/healthz"; then
         ready=1
         break
     fi

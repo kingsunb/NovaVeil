@@ -78,10 +78,10 @@ The supplied Compose files enforce:
 - a 90-second container stop grace period for the sequential HTTP/task/conversation/stat/log/database shutdown hooks;
 - an HTTP healthcheck using the image's BusyBox `wget`.
 
-The production Compose healthcheck calls the unauthenticated, side-effect free
-`/healthz` endpoint, which runs `SELECT 1` with a 2-second timeout and returns no
-internal details. The image-level Dockerfile healthcheck still probes `/` for
-frontend liveness.
+The production Compose and image-level Dockerfile healthchecks call the
+unauthenticated, side-effect free `/healthz` endpoint, which runs `SELECT 1` with
+a 2-second timeout and returns no internal details. `docker-compose.local.yml`
+uses the same probe, while `GET /` continues to serve the SPA.
 
 ## Network and HTTPS
 

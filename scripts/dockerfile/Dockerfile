@@ -38,9 +38,9 @@ USER ${APP_UID}:${APP_GID}
 WORKDIR /app
 EXPOSE 8080
 
-# 探测已嵌入前端的根路径, 证明 HTTP server 已完成启动。使用镜像内 BusyBox wget。
+# 镜像 wget 探测数据库探活端点
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1
+    CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["start"]
