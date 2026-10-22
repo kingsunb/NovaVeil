@@ -30,7 +30,35 @@ func setIntegrationSyncedContextWindow(t *testing.T, channel model.Channel, mode
 	}
 }
 
-func TestContextFitSkipsSmallWindowsAndReachesLargeWindow(t *testing.T) {
+func drainRouteSnapshots(stream chan RouteState) []RouteState {
+	var snapshots []RouteState
+	for {
+		select {
+		case snapshot, ok := <-stream:
+			if !ok {
+				return snapshots
+			}
+			snapshots = append(snapshots, snapshot)
+		default:
+			return snapshots
+		}
+	}
+}
+
+func assertNoPublishedCurrent(t *testing.T, snapshots []RouteState, groupID int, itemIDs ...int) {
+	t.Helper()
+	blocked := make(map[int]bool, len(itemIDs))
+	for _, itemID := range itemIDs {
+		blocked[itemID] = true
+	}
+	for _, snapshot := range snapshots {
+		if snapshot.GroupID == groupID && blocked[snapshot.CurrentItemID] {
+			t.Fatalf("被窗口跳过的成员 %d 不应发布为当前承载", snapshot.CurrentItemID)
+		}
+	}
+}
+
+func TestContextFitDoesNotPublishSkippedMemberAsCurrent(t *testing.T) {
 	setupFailoverTest(t)
 	var small1Hits, small2Hits, large1Hits, large2Hits atomic.Int64
 	small1 := chatUpstream(t, &small1Hits, "small-1")
@@ -56,10 +84,13 @@ func TestContextFitSkipsSmallWindowsAndReachesLargeWindow(t *testing.T) {
 		integrationLeafItem(t, large1Channel, "ctx-large-1-model"),
 		integrationLeafItem(t, large2Channel, "ctx-large-2-model"))
 	small1ID := itemIDByModelName(t, group, "ctx-small-1-model")
+	small2ID := itemIDByModelName(t, group, "ctx-small-2-model")
 	large1ID := itemIDByModelName(t, group, "ctx-large-1-model")
 	session := "ctx-four-members-session"
 	bindSessionSticky(group, sessionScopeKey(0, session), small1ID)
 
+	_, stream := OpenRouteStream()
+	defer CloseRouteStream(stream)
 	requestID := nextRequestID()
 	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
 	recorder := postRelayJSON(t, engine, path, contextFitBody(group.Name, 689_106), session, nil)
@@ -74,6 +105,18 @@ func TestContextFitSkipsSmallWindowsAndReachesLargeWindow(t *testing.T) {
 	}
 	if target, ok := stickyTargetOf(t, group.ID, session); !ok || target != large1ID {
 		t.Fatalf("粘合应迁移到首个 1M 成员 %d, 实际 %d/%v", large1ID, target, ok)
+	}
+	snapshots := drainRouteSnapshots(stream)
+	assertNoPublishedCurrent(t, snapshots, group.ID, small1ID, small2ID)
+	snapshot := routeSnapshot(t, group.ID)
+	if snapshot.CurrentItemID != large1ID {
+		t.Fatalf("最终当前承载应为首个 1M 成员 %d, 实际 %d", large1ID, snapshot.CurrentItemID)
+	}
+	if _, cooling := snapshot.Cooldowns[small1ID]; cooling {
+		t.Fatalf("窗口跳过不应冷却成员 %d", small1ID)
+	}
+	if _, cooling := snapshot.Cooldowns[small2ID]; cooling {
+		t.Fatalf("窗口跳过不应冷却成员 %d", small2ID)
 	}
 	if state := requestStateOf(t, requestID); state.RelayMode != "passthrough" {
 		t.Fatalf("chat 到 chat 应记录 passthrough, 实际 %q", state.RelayMode)
@@ -92,7 +135,11 @@ func TestContextFitAllSmallWindowsRejectedBeforeDispatch(t *testing.T) {
 	group := createIntegrationGroup(t, "ctx-only-small", contextFitRouteConfig(),
 		integrationLeafItem(t, small1Channel, "ctx-only-small-1-model"),
 		integrationLeafItem(t, small2Channel, "ctx-only-small-2-model"))
+	small1ID := itemIDByModelName(t, group, "ctx-only-small-1-model")
+	small2ID := itemIDByModelName(t, group, "ctx-only-small-2-model")
 
+	_, stream := OpenRouteStream()
+	defer CloseRouteStream(stream)
 	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
 	recorder := postRelayJSON(t, engine, path, contextFitBody(group.Name, 689_106), "", nil)
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), errContextWindowTooSmall.Error()) {
@@ -101,6 +148,88 @@ func TestContextFitAllSmallWindowsRejectedBeforeDispatch(t *testing.T) {
 	if small1Hits.Load() != 0 || small2Hits.Load() != 0 {
 		t.Fatalf("全部窗口不足时不应调用上游, 实际 %d/%d", small1Hits.Load(), small2Hits.Load())
 	}
+	assertNoPublishedCurrent(t, drainRouteSnapshots(stream), group.ID, small1ID, small2ID)
+}
+
+func TestContextFitRefChainDoesNotPublishSkippedMemberAsCurrent(t *testing.T) {
+	setupFailoverTest(t)
+	var small1Hits, small2Hits, largeHits atomic.Int64
+	small1 := chatUpstream(t, &small1Hits, "small-1")
+	small2 := chatUpstream(t, &small2Hits, "small-2")
+	large := chatUpstream(t, &largeHits, "large")
+	small1Channel := createIntegrationChannel(t, "ctx-ref-small-1", model.ChannelProviderOpenAI, small1.URL, "ctx-ref-small-1-model")
+	small2Channel := createIntegrationChannel(t, "ctx-ref-small-2", model.ChannelProviderOpenAI, small2.URL, "ctx-ref-small-2-model")
+	largeChannel := createIntegrationChannel(t, "ctx-ref-large", model.ChannelProviderOpenAI, large.URL, "ctx-ref-large-model")
+	setIntegrationContextWindow(t, small1Channel.ID, "ctx-ref-small-1-model", 200_000)
+	setIntegrationContextWindow(t, small2Channel.ID, "ctx-ref-small-2-model", 200_000)
+	setIntegrationContextWindow(t, largeChannel.ID, "ctx-ref-large-model", 1_000_000)
+
+	inner := createIntegrationGroup(t, "ctx-ref-inner", contextFitRouteConfig(),
+		integrationLeafItem(t, small1Channel, "ctx-ref-small-1-model"),
+		integrationLeafItem(t, small2Channel, "ctx-ref-small-2-model"),
+		integrationLeafItem(t, largeChannel, "ctx-ref-large-model"))
+	small1ID := itemIDByModelName(t, inner, "ctx-ref-small-1-model")
+	small2ID := itemIDByModelName(t, inner, "ctx-ref-small-2-model")
+	largeID := itemIDByModelName(t, inner, "ctx-ref-large-model")
+	top := createIntegrationGroup(t, "ctx-ref-top", contextFitRouteConfig(), integrationRefItem(inner.Name))
+
+	_, stream := OpenRouteStream()
+	defer CloseRouteStream(stream)
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	recorder := postRelayJSON(t, engine, path, contextFitBody(top.Name, 689_106), "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("引用链应命中 1M 成员, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if small1Hits.Load() != 0 || small2Hits.Load() != 0 {
+		t.Fatalf("引用链窗口不足成员不应调用上游, 实际 %d/%d", small1Hits.Load(), small2Hits.Load())
+	}
+	if largeHits.Load() != 1 {
+		t.Fatalf("引用链应由首个 1M 成员承载, 实际 %d", largeHits.Load())
+	}
+	assertNoPublishedCurrent(t, drainRouteSnapshots(stream), inner.ID, small1ID, small2ID)
+	snapshot := routeSnapshot(t, inner.ID)
+	if snapshot.CurrentItemID != largeID {
+		t.Fatalf("内层最终当前承载应为 1M 成员 %d, 实际 %d", largeID, snapshot.CurrentItemID)
+	}
+	if _, cooling := snapshot.Cooldowns[small1ID]; cooling {
+		t.Fatalf("窗口跳过不应冷却成员 %d", small1ID)
+	}
+	if _, cooling := snapshot.Cooldowns[small2ID]; cooling {
+		t.Fatalf("窗口跳过不应冷却成员 %d", small2ID)
+	}
+}
+
+func TestContextFitRefChainAllSkippedDoesNotPublish(t *testing.T) {
+	setupFailoverTest(t)
+	var small1Hits, small2Hits atomic.Int64
+	small1 := chatUpstream(t, &small1Hits, "small-1")
+	small2 := chatUpstream(t, &small2Hits, "small-2")
+	small1Channel := createIntegrationChannel(t, "ctx-ref-all-small-1", model.ChannelProviderOpenAI, small1.URL, "ctx-ref-all-small-1-model")
+	small2Channel := createIntegrationChannel(t, "ctx-ref-all-small-2", model.ChannelProviderOpenAI, small2.URL, "ctx-ref-all-small-2-model")
+	setIntegrationContextWindow(t, small1Channel.ID, "ctx-ref-all-small-1-model", 200_000)
+	setIntegrationContextWindow(t, small2Channel.ID, "ctx-ref-all-small-2-model", 200_000)
+
+	inner := createIntegrationGroup(t, "ctx-ref-all-small-inner", contextFitRouteConfig(),
+		integrationLeafItem(t, small1Channel, "ctx-ref-all-small-1-model"),
+		integrationLeafItem(t, small2Channel, "ctx-ref-all-small-2-model"))
+	small1ID := itemIDByModelName(t, inner, "ctx-ref-all-small-1-model")
+	small2ID := itemIDByModelName(t, inner, "ctx-ref-all-small-2-model")
+	top := createIntegrationGroup(t, "ctx-ref-all-small-top", contextFitRouteConfig(), integrationRefItem(inner.Name))
+	refID := itemIDByModelName(t, top, inner.Name)
+
+	_, stream := OpenRouteStream()
+	defer CloseRouteStream(stream)
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	recorder := postRelayJSON(t, engine, path, contextFitBody(top.Name, 689_106), "", nil)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), errContextWindowTooSmall.Error()) {
+		t.Fatalf("引用链全部窗口不足应返回 400, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if small1Hits.Load() != 0 || small2Hits.Load() != 0 {
+		t.Fatalf("引用链全部窗口不足不应调用上游, 实际 %d/%d", small1Hits.Load(), small2Hits.Load())
+	}
+	snapshots := drainRouteSnapshots(stream)
+	assertNoPublishedCurrent(t, snapshots, inner.ID, small1ID, small2ID)
+	assertNoPublishedCurrent(t, snapshots, top.ID, refID)
 }
 
 func TestContextFitSkipsUnknownWindowAndUsesSyncedWindow(t *testing.T) {

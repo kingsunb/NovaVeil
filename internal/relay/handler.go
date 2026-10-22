@@ -237,19 +237,54 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			}
 			relayConfig = group.RelayConfig
 
+			selectionSkipped := contextSkipped
+			allContextSkipped := false
+			if relayConfig.ContextFitEnabled {
+				scan := scanContextFit(group, raw.Body)
+				for itemID := range scan.skipped {
+					contextSkipped[itemID] = true
+				}
+				if scan.maxWindow > maxCandidateWindow {
+					maxCandidateWindow = scan.maxWindow
+				}
+				allContextSkipped = scan.candidates > 0 && scan.fitting == 0
+				if len(scan.blockedRefs) > 0 {
+					selectionSkipped = make(map[int]bool, len(contextSkipped)+len(scan.blockedRefs))
+					for itemID := range contextSkipped {
+						selectionSkipped[itemID] = true
+					}
+					for itemID := range scan.blockedRefs {
+						selectionSkipped[itemID] = true
+					}
+				}
+			}
+
 			// 会话粘合仅在故障转移模式生效, 分组配置随时可改故每轮重新判断; 先在顶层选出本层成员。
 			item := model.GroupItem{}
 			if sessionStickyEnabled(group, scopeKey) {
 				// 粘合有效时本轮直接使用粘合成员, 失效则按优先级正常选路。
-				item = pickSessionStickySkipping(group, scopeKey, exclude, contextSkipped)
+				item = pickSessionStickySkipping(group, scopeKey, exclude, selectionSkipped)
 			}
 			if item.ID == 0 {
 				// 手动模式取人工指定的成员, 故障转移模式按优先级选择未禁用且不在冷却中的成员;
 				// 选路层会跳过被禁用渠道的成员, 派发处另有兜底检查覆盖粘合等旁路。
 				// 没有目标时等待重新选择, 期间人工切换渠道, 补齐成员或成员冷却到期即可让请求继续。
-				item = pickGroupItemSkipping(ctx, group, exclude, contextSkipped, format)
+				item = pickGroupItemSkipping(ctx, group, exclude, selectionSkipped, format)
 			}
 			if item.ID == 0 {
+				candidateCount := routableCandidateCount(group)
+				if allContextSkipped || (candidateCount > 0 && len(contextSkipped) >= candidateCount) {
+					detail := fmt.Errorf(
+						"%s（请求约 %d token，候选集最大窗口 %d token）",
+						errContextWindowTooSmall.Error(),
+						estimateRequestTokens(raw.Body),
+						maxCandidateWindow,
+					)
+					request.markFailed(detail, "", nil)
+					recordErrorLog(request)
+					rejectRequest(c, inbound, detail)
+					return
+				}
 				// 全冷却自动清除: 分组配置了 AllCooldownRetryBaseSeconds 且所有非禁用成员都在冷却中时,
 				// 清除全部冷却让 failover 依次重试每个成员, 而非空转到冷却自然到期。
 				// 退避间隔线性递增(base, 2*base, 3*base, …), 上限 AllCooldownRetryMaxSeconds,
@@ -282,7 +317,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 不给引用成员上冷却也不等待, 立即排除该引用改试顶层下一优先级。
 			// 把客户端协议 format 透传给引用链解析: 目标分组启用 PreferPassthrough 时,
 			// 嵌套引用选路也要按客户端协议做同协议优先排序, 与顶层 pickGroupItem 一致。
-			hops, failedIdx = resolveGroupRefChainSkipping(ctx, group, item, scopeKey, exclude, contextSkipped, format)
+			hops, failedIdx = resolveGroupRefChainSkipping(ctx, group, item, scopeKey, exclude, selectionSkipped, format)
 			if failedIdx >= 0 {
 				// 防热旋: 单个 exclude 变量记不住多个损坏的兄弟引用, 全部引用都结构性失效时
 				// 会交替重选形成紧循环。跳过次数超过成员总数即视为整组不可用, 退避一轮后

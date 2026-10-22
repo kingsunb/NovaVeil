@@ -201,6 +201,12 @@ func pickGroupItemSkipping(ctx context.Context, group model.Group, exclude int, 
 		routeMu.Unlock()
 		return model.GroupItem{}
 	}
+	if route.CurrentItemID != 0 && skipped[route.CurrentItemID] {
+		route.CurrentItemID = 0
+		route.AffinityUntil = 0
+		route.affinityArmed = false
+		publishRouteLocked(route)
+	}
 
 	// 亲和期内沿用当前成员, 不提前探测已恢复的高优先级成员;
 	// 当前成员渠道已被禁用时不再延续亲和, 落到下方常规扫描重新选路。

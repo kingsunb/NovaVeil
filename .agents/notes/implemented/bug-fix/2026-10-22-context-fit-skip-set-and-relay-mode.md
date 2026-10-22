@@ -37,8 +37,8 @@ Status: implemented
 
 ## 验证
 
-- `GOTOOLCHAIN=go1.26.7 go test -count=1 ./internal/relay -run 'TestEstimateModelTokensScale|TestContextFitsWindow|TestRelayModeForProtocolMatrix|TestContextFitSkipsSmallWindowsAndReachesLargeWindow|TestContextFitAllSmallWindowsRejectedBeforeDispatch|TestContextFitSkipsUnknownWindowAndUsesSyncedWindow'`
+- `GOTOOLCHAIN=go1.26.10 go test -count=1 ./internal/relay -run 'TestEstimateModelTokensScale|TestContextFitsWindow|TestRelayModeForProtocolMatrix|TestContextFitDoesNotPublishSkippedMemberAsCurrent|TestContextFitAllSmallWindowsRejectedBeforeDispatch|TestContextFitSkipsUnknownWindowAndUsesSyncedWindow'`
 - 四成员用例断言：689K 请求只命中首个 1M 成员，两个 200K 成员上游计数均为 0，粘合迁移到 1M 成员，记录为 `passthrough`。
 - 全量候选窗口不足用例断言：返回 `errContextWindowTooSmall` 且所有上游计数为 0；未知窗口用例断言未知成员被跳过、同步 1M 成员承载。
 
-相关历史决策见 [分组级上下文窗口过滤](../feature/2026-10-20-context-fit-routing.md) 与 [上下文窗口手工定义与统一实测密度校准](../feature/2026-10-21-context-window-manual-limits-and-uniform-density.md)。
+相关历史决策见 [分组级上下文窗口过滤](../feature/2026-10-20-context-fit-routing.md)、[上下文窗口手工定义与统一实测密度校准](../feature/2026-10-21-context-window-manual-limits-and-uniform-density.md) 与 [上下文窗口跳过在路由发布前生效](2026-10-22-context-skip-route-publication.md)。

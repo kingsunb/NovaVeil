@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"github.com/kingsunb/NovaVeil/internal/model"
 )
 
 // errContextWindowTooSmall 表示全部候选成员的窗口都装不下本请求。
@@ -78,4 +80,76 @@ func contextFitsWindow(body []byte, contextWindow int, baseURL, modelName string
 		return false
 	}
 	return estimateModelTokens(body, baseURL, modelName) <= contextWindow
+}
+
+type contextFitScan struct {
+	candidates  int
+	fitting     int
+	maxWindow   int
+	skipped     map[int]bool
+	blockedRefs map[int]bool
+}
+
+// scanContextFit 在选路前标记窗口不足的可达叶子。
+func scanContextFit(group model.Group, body []byte) contextFitScan {
+	scan := contextFitScan{
+		skipped:     make(map[int]bool),
+		blockedRefs: make(map[int]bool),
+	}
+	scan.scanGroup(group, body, 0, make(map[int]bool))
+	return scan
+}
+
+func (s *contextFitScan) scanGroup(group model.Group, body []byte, refDepth int, visiting map[int]bool) {
+	if visiting[group.ID] {
+		return
+	}
+	visiting[group.ID] = true
+	defer delete(visiting, group.ID)
+
+	for _, item := range group.Items {
+		if group.Mode == model.GroupModeManual && item.ID != group.ActiveItemID {
+			continue
+		}
+		if item.IsGroupRef() {
+			if refDepth >= model.MaxGroupRefDepth {
+				continue
+			}
+			ref, err := groupLookupFunc(item.RefGroupName)
+			if err != nil {
+				continue
+			}
+			beforeCandidates, beforeFitting := s.candidates, s.fitting
+			s.scanGroup(ref, body, refDepth+1, visiting)
+			if s.candidates > beforeCandidates && s.fitting == beforeFitting {
+				s.blockedRefs[item.ID] = true
+				clearSessionStickyByItem(group.ID, item.ID)
+			}
+			continue
+		}
+		if item.ChannelModel == nil {
+			s.candidates++
+			s.fitting++
+			continue
+		}
+		channel, err := channelLookupFunc(item.ChannelModel.ChannelID)
+		if err == nil && !channel.Enabled {
+			continue
+		}
+		s.candidates++
+		if err != nil {
+			s.fitting++
+			continue
+		}
+		window := effectiveContextWindow(channel.ModelLimits, item.ChannelModel)
+		if window > s.maxWindow {
+			s.maxWindow = window
+		}
+		if contextFitsWindow(body, window, channel.BaseURL, item.ChannelModel.Name) {
+			s.fitting++
+			continue
+		}
+		s.skipped[item.ID] = true
+		clearSessionStickyByItem(group.ID, item.ID)
+	}
 }
