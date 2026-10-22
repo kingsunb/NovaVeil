@@ -35,7 +35,7 @@
 
 ### 工具链
 
-Go 1.26.7 / Node 22.19 / pnpm 11.21 在 CI 硬编码；本地开发用 `GOTOOLCHAIN=auto` 让 1.26.7 工具链自动下载进 `GOMODCACHE`，与系统 Go 隔离（详见 [STANDALONE_DEPLOYMENT.md](../STANDALONE_DEPLOYMENT.md) §2）。
+Go 1.26.10 / Node 22.19 / pnpm 11.21 在 CI 硬编码；本地开发用 `GOTOOLCHAIN=auto` 按 `go.mod` 的 1.26.7 最低版本下载工具链，与系统 Go 隔离（详见 [STANDALONE_DEPLOYMENT.md](../STANDALONE_DEPLOYMENT.md) §2）。
 
 ## 设计想法
 

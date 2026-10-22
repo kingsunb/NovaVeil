@@ -58,7 +58,7 @@ export GOTOOLCHAIN=auto
 或显式指定本地已安装的 Go（版本需 ≥ go.mod 声明版本）：
 
 ```bash
-export GOTOOLCHAIN=go1.26.7        # 指向已安装的具体版本
+export GOTOOLCHAIN=go1.26.10       # 指向已安装的具体版本
 ```
 
 ### 2.4 排查「版本不匹配」报错

@@ -61,7 +61,7 @@ docker buildx imagetools inspect ghcr.io/kingsunb/novaveil:<version>
 The runtime base is pinned to the Alpine 3.21.7 multi-platform OCI index digest
 `sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d`.
 Every platform build therefore resolves through the reviewed immutable index rather
-than a mutable tag. Release binaries use Go 1.26.7 or newer patch releases so the
+than a mutable tag. Release binaries use Go 1.26.10 or newer patch releases so the
 image vulnerability gate does not ship known fixed standard-library CVEs.
 
 ## Runtime restrictions
