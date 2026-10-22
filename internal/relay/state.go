@@ -402,6 +402,17 @@ func (r *RequestState) startRound(cancel context.CancelFunc, target RoundTarget)
 	return r.Round
 }
 
+// setRelayMode 在候选选定后记录实际转发方式。
+func (r *RequestState) setRelayMode(mode string) {
+	mu.Lock()
+	defer mu.Unlock()
+	if r.RelayMode == mode {
+		return
+	}
+	r.RelayMode = mode
+	publishRequestLocked(r)
+}
+
 // finishRound 记录本轮上游结果, errText 非空表示本轮失败或取消的原因; 空串表示已取得可提交响应。
 // 该调用只把本轮写入终态轨迹, 不会撤销本轮的 cancel 函数或上游响应流: 首事件到达后仍可能因客户端断开
 // 或管理端中止需要立即触发中止, 真正的资源释放统一由 releaseRoundLifecycle 在本轮真正终结时调用。

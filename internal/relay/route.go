@@ -166,9 +166,13 @@ func pickGroupItem(group model.Group, exclude int, clientFormat ...llm.APIFormat
 }
 
 func pickGroupItemWithContext(ctx context.Context, group model.Group, exclude int, clientFormat ...llm.APIFormat) model.GroupItem {
+	return pickGroupItemSkipping(ctx, group, exclude, nil, clientFormat...)
+}
+
+func pickGroupItemSkipping(ctx context.Context, group model.Group, exclude int, skipped map[int]bool, clientFormat ...llm.APIFormat) model.GroupItem {
 	if group.Mode == model.GroupModeManual {
 		for _, item := range group.Items {
-			if item.ID == group.ActiveItemID && item.ID != exclude {
+			if item.ID == group.ActiveItemID && !itemExcluded(item, exclude, skipped) {
 				// 指定成员的渠道被禁用时按无目标处理: 请求进入等待, 重新启用或人工换渠道后继续。
 				if channelDisabledForRouting(item) {
 					return model.GroupItem{}
@@ -200,7 +204,7 @@ func pickGroupItemWithContext(ctx context.Context, group model.Group, exclude in
 
 	// 亲和期内沿用当前成员, 不提前探测已恢复的高优先级成员;
 	// 当前成员渠道已被禁用时不再延续亲和, 落到下方常规扫描重新选路。
-	if route.CurrentItemID != 0 && route.CurrentItemID != exclude && route.AffinityUntil > now {
+	if route.CurrentItemID != 0 && route.CurrentItemID != exclude && !skipped[route.CurrentItemID] && route.AffinityUntil > now {
 		item := itemOf(group, route.CurrentItemID)
 		if item.ID != 0 && !channelDisabledForRouting(item) {
 			routeMu.Unlock()
@@ -213,7 +217,7 @@ func pickGroupItemWithContext(ctx context.Context, group model.Group, exclude in
 	var expired []model.GroupItem
 	var selected model.GroupItem
 	for _, item := range items {
-		if item.ID == exclude {
+		if itemExcluded(item, exclude, skipped) {
 			continue
 		}
 		if channelDisabledForRouting(item) {
@@ -255,11 +259,15 @@ func pickGroupItemWithContext(ctx context.Context, group model.Group, exclude in
 			return item
 		}
 		// 整批探测失败, 常规规则确认一无所获, 落入紧急兜底判定。
-		return claimEmergencyItem(group, exclude)
+		return claimEmergencyItemSkipping(group, exclude, skipped)
 	}
 
 	routeMu.Unlock()
-	return claimEmergencyItem(group, exclude)
+	return claimEmergencyItemSkipping(group, exclude, skipped)
+}
+
+func itemExcluded(item model.GroupItem, exclude int, skipped map[int]bool) bool {
+	return item.ID == exclude || skipped[item.ID]
 }
 
 // passthroughOrderedItems 返回故障转移模式的候选扫描顺序: 分组开启 PreferPassthrough 且调用方携带
@@ -301,11 +309,15 @@ func itemMatchesClientFormat(item model.GroupItem, format llm.APIFormat) bool {
 
 // claimEmergencyItem 紧急兜底放行的加锁入口: 常规选路一无所获时把配置的紧急成员交给本轮请求。
 func claimEmergencyItem(group model.Group, exclude int) model.GroupItem {
+	return claimEmergencyItemSkipping(group, exclude, nil)
+}
+
+func claimEmergencyItemSkipping(group model.Group, exclude int, skipped map[int]bool) model.GroupItem {
 	routeMu.Lock()
 	defer routeMu.Unlock()
 
 	route := groupRouteLocked(group)
-	return claimEmergencyLocked(route, group, exclude, time.Now().UnixMilli())
+	return claimEmergencyLocked(route, group, exclude, skipped, time.Now().UnixMilli())
 }
 
 // claimEmergencyLocked 判定并占用一个紧急兜底并发额度: 配置关闭、成员不存在或已删除、
@@ -313,9 +325,9 @@ func claimEmergencyItem(group model.Group, exclude int) model.GroupItem {
 // 紧急放行是全部常规成员不可用时的最后防线, 不因成员自身的常规冷却记录却步;
 // 紧急业务失败写入的 emergencyBlocks 封锁标记才拦停后续放行, 避免冷却中的故障兜底成员被持续击打。
 // 放行即递增进程内信号量并在路由状态上标记紧急模式, 供 SSE 快照与成败上报区分来源; 调用方必须持有锁。
-func claimEmergencyLocked(route *RouteState, group model.Group, exclude int, now int64) model.GroupItem {
+func claimEmergencyLocked(route *RouteState, group model.Group, exclude int, skipped map[int]bool, now int64) model.GroupItem {
 	itemID := group.RelayConfig.EmergencyItemID
-	if itemID <= 0 || itemID == exclude || route.EmergencyActive >= emergencyMaxConcurrent {
+	if itemID <= 0 || itemID == exclude || skipped[itemID] || route.EmergencyActive >= emergencyMaxConcurrent {
 		return model.GroupItem{}
 	}
 	item := itemOf(group, itemID)
@@ -711,12 +723,16 @@ func pickRefChainHop(group model.Group, sessionKey string, exclude int, clientFo
 }
 
 func pickRefChainHopWithContext(ctx context.Context, group model.Group, sessionKey string, exclude int, clientFormat ...llm.APIFormat) model.GroupItem {
+	return pickRefChainHopSkipping(ctx, group, sessionKey, exclude, nil, clientFormat...)
+}
+
+func pickRefChainHopSkipping(ctx context.Context, group model.Group, sessionKey string, exclude int, skipped map[int]bool, clientFormat ...llm.APIFormat) model.GroupItem {
 	item := model.GroupItem{}
 	if sessionStickyEnabled(group, sessionKey) {
-		item = pickSessionStickyExcluding(group, sessionKey, exclude)
+		item = pickSessionStickySkipping(group, sessionKey, exclude, skipped)
 	}
 	if item.ID == 0 {
-		item = pickGroupItem(group, exclude, clientFormat...)
+		item = pickGroupItemSkipping(ctx, group, exclude, skipped, clientFormat...)
 	}
 	return item
 }
@@ -734,6 +750,10 @@ func resolveGroupRefChain(top model.Group, first model.GroupItem, sessionKey str
 }
 
 func resolveGroupRefChainWithContext(ctx context.Context, top model.Group, first model.GroupItem, sessionKey string, exclude int, clientFormat ...llm.APIFormat) (hops []refHop, failedIdx int) {
+	return resolveGroupRefChainSkipping(ctx, top, first, sessionKey, exclude, nil, clientFormat...)
+}
+
+func resolveGroupRefChainSkipping(ctx context.Context, top model.Group, first model.GroupItem, sessionKey string, exclude int, skipped map[int]bool, clientFormat ...llm.APIFormat) (hops []refHop, failedIdx int) {
 	hops = append(hops, refHop{group: top, item: first})
 	visited := map[int]bool{top.ID: true}
 	item := first
@@ -748,7 +768,7 @@ func resolveGroupRefChainWithContext(ctx context.Context, top model.Group, first
 			return hops, fail
 		}
 		visited[next.ID] = true
-		nextItem := pickRefChainHopWithContext(ctx, next, sessionKey, exclude, clientFormat...)
+		nextItem := pickRefChainHopSkipping(ctx, next, sessionKey, exclude, skipped, clientFormat...)
 		if nextItem.ID == 0 {
 			return hops, fail
 		}

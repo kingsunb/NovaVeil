@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> 现行窗口来源与未知窗口处理见 [上下文过滤跳过集合与同步窗口刷新](../bug-fix/2026-10-22-context-fit-skip-set-and-relay-mode.md)。
+
 ## 问题
 
 上下文窗口治理此前有两处口径问题：

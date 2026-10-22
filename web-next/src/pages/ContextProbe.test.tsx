@@ -242,10 +242,10 @@ describe("<ContextProbePage /> 精度与批量语义", () => {
     expect(await screen.findByText("已定义 131.072K")).toBeInTheDocument();
     expect(screen.getByText("同步 1M")).toBeInTheDocument();
     expect(
-      screen.getByTitle("人工定义的上下文窗口：131,072 token；路由过滤只认这个值"),
+      screen.getByTitle("人工覆盖的上下文窗口：131,072 token；优先于同步目录值"),
     ).toBeInTheDocument();
     expect(
-      screen.getByTitle("同步目录值：1,000,000 token；仅展示，不参与路由跳过"),
+      screen.getByTitle("同步目录值：1,000,000 token；无人工覆盖时参与路由跳过"),
     ).toBeInTheDocument();
   });
 

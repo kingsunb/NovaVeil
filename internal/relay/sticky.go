@@ -69,14 +69,18 @@ func pickSessionSticky(group model.Group, sessionKey string) model.GroupItem {
 
 // 读取粘合, 已排除成员则清除。
 func pickSessionStickyExcluding(group model.Group, sessionKey string, exclude int) model.GroupItem {
+	return pickSessionStickySkipping(group, sessionKey, exclude, nil)
+}
+
+func pickSessionStickySkipping(group model.Group, sessionKey string, exclude int, skipped map[int]bool) model.GroupItem {
 	routeMu.Lock()
 	defer routeMu.Unlock()
 
-	return pickSessionStickyLocked(group, sessionKey, exclude)
+	return pickSessionStickyLocked(group, sessionKey, exclude, skipped)
 }
 
 // pickSessionStickyLocked 校验并返回会话粘合成员; 调用方必须持有锁。
-func pickSessionStickyLocked(group model.Group, sessionKey string, exclude int) model.GroupItem {
+func pickSessionStickyLocked(group model.Group, sessionKey string, exclude int, skipped map[int]bool) model.GroupItem {
 	sessions := sessionStickies[group.ID]
 	entry, ok := sessions[sessionKey]
 	if !ok {
@@ -85,7 +89,7 @@ func pickSessionStickyLocked(group model.Group, sessionKey string, exclude int) 
 
 	now := time.Now().UnixMilli()
 	item := itemOf(group, entry.ItemID)
-	valid := entry.ExpireAtUnixMilli > now && item.ID != 0 && item.ID != exclude
+	valid := entry.ExpireAtUnixMilli > now && item.ID != 0 && !itemExcluded(item, exclude, skipped)
 	if valid {
 		// 目标成员正在冷却说明它刚进入 OPEN, 粘合随之失效。
 		if route := routes[group.ID]; route != nil {

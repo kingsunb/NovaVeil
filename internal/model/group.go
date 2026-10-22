@@ -36,7 +36,7 @@ type GroupRelayConfig struct {
 	MaskEnabled                    bool    `json:"mask_enabled"`                                                // 是否对本分组启用请求脱敏, 默认 false; 须同时全局 Enabled=true 才生效, 旧分组 JSON 反序列化自动得关, 无需数据迁移。
 	AutoMatchModels                bool    `json:"auto_match_models"`                                           // 是否启用自动匹配: 以分组名称为关键词, 自动将所有名称包含该关键词的渠道模型加入分组成员, 默认关闭, 旧分组 JSON 反序列化自动得关, 无需数据迁移。
 	EchoResponseModel              bool    `json:"echo_response_model"`                                         // 是否把响应里的模型名改写回客户端请求的分组名, 避免聚合分组把真实上游模型名透传给下游, 默认关闭, 旧分组 JSON 反序列化自动得关, 无需数据迁移。
-	ContextFitEnabled              bool    `json:"context_fit_enabled"`                                        // 是否按请求估算跳过上下文窗口不足的成员, 默认关闭; 窗口未知(0)的成员始终放行。
+	ContextFitEnabled              bool    `json:"context_fit_enabled"`                                         // 是否按请求估算跳过上下文窗口不足的成员, 默认关闭; 窗口未知(0)的成员跳过。
 }
 
 // DefaultGroupRelayConfig 返回新分组使用的 Relay 默认配置。

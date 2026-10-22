@@ -15,9 +15,9 @@ export const zhCN = {
     definedWindow: "已定义",
     syncedWindow: "同步",
     definedWindowTitle: (exact: string) =>
-      `人工定义的上下文窗口：${exact}；路由过滤只认这个值`,
+      `人工覆盖的上下文窗口：${exact}；优先于同步目录值`,
     syncedWindowTitle: (exact: string) =>
-      `同步目录值：${exact}；仅展示，不参与路由跳过`,
+      `同步目录值：${exact}；无人工覆盖时参与路由跳过`,
     concurrencyHint: (models: number, sizes: number) =>
       `已选 ${models} 个模型 × ${sizes} 个规模；全局三路并发，同一上游端点的同一模型按档位从小到大串行`,
     batchSelectFirst: "先勾选模型",
@@ -39,9 +39,9 @@ export const zhCN = {
   groups: {
     undefinedWindow: "未定义窗口",
     undefinedWindowTitle:
-      "未定义窗口：过滤时始终放行，不会因上下文不足被跳过；同步目录值不参与过滤",
+      "未定义窗口：同步目录与人工值均未知，开启过滤时会跳过该成员",
     definedWindowTitle: (exact: string) =>
-      `人工定义的上下文窗口：${exact}；请求估算超出即跳过该成员`,
+      `生效的上下文窗口：${exact}；请求估算超出即跳过该成员`,
     windowSuffix: "窗口",
   },
 };

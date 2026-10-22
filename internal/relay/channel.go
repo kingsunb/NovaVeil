@@ -71,6 +71,14 @@ func supportsNativeFormat(channel model.Channel, channelModel *model.ChannelMode
 	}
 }
 
+// relayModeFor 按实际出站协议记录透传或转换。
+func relayModeFor(channel model.Channel, channelModel *model.ChannelModel, format llm.APIFormat) string {
+	if supportsNativeFormat(channel, channelModel, format) {
+		return "passthrough"
+	}
+	return "converted"
+}
+
 // clientFormatLabel 返回客户端协议在日志中的展示名。
 func clientFormatLabel(format llm.APIFormat) string {
 	switch format {
@@ -238,12 +246,16 @@ func maxReasoningEffortFor(channel model.Channel, modelName string) string {
 	return ""
 }
 
-// effectiveContextWindow 返回人工验证过的窗口覆盖值(探测「应用」或编辑器手填)。
-// 同步目录带来的窗口是文档值, 未经实测, 不作为过滤依据: 未验证不拦, 宁可放行
-// 也不基于猜测误拒; 返回 0 表示该模型没有可信窗口, 调用方应放行。
-func effectiveContextWindow(limits map[string]model.ChannelModelLimit, modelName string) int {
-	if limit, ok := lookupModelLimit(limits, modelName); ok && limit.ContextWindow != nil && *limit.ContextWindow > 0 {
+// effectiveContextWindow 人工窗口优先, 否则回落到同步窗口。
+func effectiveContextWindow(limits map[string]model.ChannelModelLimit, channelModel *model.ChannelModel) int {
+	if channelModel == nil {
+		return 0
+	}
+	if limit, ok := lookupModelLimit(limits, channelModel.Name); ok && limit.ContextWindow != nil && *limit.ContextWindow > 0 {
 		return *limit.ContextWindow
+	}
+	if channelModel.ContextWindow > 0 {
+		return channelModel.ContextWindow
 	}
 	return 0
 }

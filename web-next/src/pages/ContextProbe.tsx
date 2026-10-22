@@ -33,9 +33,9 @@ interface ProbeTarget {
   /** 上游端点; 与后端密度缓存键「端点:模型」共用, 同键任务串行。 */
   endpoint: string;
   model: string;
-  /** 渠道上人工定义的窗口; 0 表示未定义。只有人工值参与路由跳过。 */
+  /** 渠道上人工定义的窗口; 0 表示未定义。人工值优先。 */
   manualWindow: number;
-  /** 同步目录带来的窗口; 仅展示, 不参与路由跳过。 */
+  /** 同步目录带来的窗口; 无人工值时参与路由跳过。 */
   syncedWindow: number;
 }
 
@@ -473,7 +473,7 @@ export default function ContextProbePage() {
               批量清除
             </Button>
             <span className="text-xs text-ink-muted">
-              只认人工定义值；同步目录值仅展示，不参与路由跳过
+              人工值优先；未定义时回落到同步目录值，仍未知则跳过
             </span>
           </div>
         </div>

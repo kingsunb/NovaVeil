@@ -427,9 +427,7 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 				channelModelCache.Del(cachedModel.ID)
 				continue
 			}
-			cachedModel.Source = currentModel.Source
-			cachedModel.UpstreamProtocol = currentModel.UpstreamProtocol
-			channelModelCache.Set(cachedModel.ID, cachedModel)
+			channelModelCache.Set(currentModel.ID, currentModel)
 			delete(currentModelsByID, cachedModel.ID)
 		}
 		for _, addedModel := range currentModelsByID {

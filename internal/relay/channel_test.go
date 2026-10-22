@@ -235,6 +235,59 @@ func TestUpstreamProtocolSelection(t *testing.T) {
 	})
 }
 
+func TestRelayModeForProtocolMatrix(t *testing.T) {
+	opencode := model.Channel{
+		Type:           model.ChannelProviderOpenAI,
+		BaseURL:        "https://opencode.ai/zen",
+		Key:            "public",
+		OpencodeCompat: true,
+	}
+	cases := []struct {
+		name     string
+		channel  model.Channel
+		protocol string
+		format   llm.APIFormat
+		want     string
+	}{
+		{
+			name:     "chat 到 chat 透传",
+			channel:  opencode,
+			protocol: model.UpstreamProtocolChat,
+			format:   llm.APIFormatOpenAIChatCompletion,
+			want:     "passthrough",
+		},
+		{
+			name:     "chat 到 responses 转换",
+			channel:  opencode,
+			protocol: model.UpstreamProtocolResponses,
+			format:   llm.APIFormatOpenAIChatCompletion,
+			want:     "converted",
+		},
+		{
+			name:     "responses 到 chat 转换",
+			channel:  opencode,
+			protocol: model.UpstreamProtocolChat,
+			format:   llm.APIFormatOpenAIResponse,
+			want:     "converted",
+		},
+		{
+			name:     "anthropic 到 chat 转换",
+			channel:  opencode,
+			protocol: model.UpstreamProtocolChat,
+			format:   llm.APIFormatAnthropicMessage,
+			want:     "converted",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			channelModel := &model.ChannelModel{Name: "same-model", UpstreamProtocol: tc.protocol}
+			if got := relayModeFor(tc.channel, channelModel, tc.format); got != tc.want {
+				t.Fatalf("relay_mode = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestOpencodeBaseURLVersionPrefix(t *testing.T) {
 	bases := []string{"https://opencode.ai/zen", "https://opencode.ai/zen/go"}
 	cases := []struct {

@@ -99,14 +99,15 @@ function nextDraftItemUid(prefix = "new") {
   return `${prefix}:${draftItemSeq}`;
 }
 
-/** 成员的人工定义窗口；0 表示未定义（上下文过滤时始终放行）。 */
+/** 人工窗口优先，其次同步目录窗口。 */
 function memberContextWindow(
   channel: Channel | undefined,
   modelName: string | undefined,
 ): number {
   if (!channel || !modelName) return 0;
-  const window = channel.model_limits?.[modelName]?.context_window ?? 0;
-  return window > 0 ? window : 0;
+  const manual = channel.model_limits?.[modelName]?.context_window ?? 0;
+  if (manual > 0) return manual;
+  return channel.models?.find((model) => model.name === modelName)?.context_window ?? 0;
 }
 
 /** 上下文过滤开启时才出现的成员窗口标注。 */
@@ -1537,7 +1538,7 @@ function GroupEditor({
               />
               <Toggle
                 label="上下文窗口过滤"
-                description="按请求估算 token 跳过装不下请求的成员；打开后成员行显示各自窗口，未定义（0）的成员始终放行"
+                description="按请求估算 token 跳过装不下请求的成员；人工窗口优先，其次同步目录窗口，仍未知则跳过"
                 checked={relayConfig.context_fit_enabled}
                 onChange={(v) => updateRelay("context_fit_enabled", v)}
               />

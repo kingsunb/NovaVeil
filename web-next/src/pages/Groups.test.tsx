@@ -1058,10 +1058,21 @@ describe("GroupEditor 成员名次输入", () => {
 });
 
 describe("分组上下文窗口展示", () => {
-  // gpt-4o 人工定义 131072 窗口；gpt-4o-mini 未定义（过滤时始终放行）
+  // gpt-4o 人工定义 131072 窗口；gpt-4o-mini 窗口未知
   const channelWithWindow: typeof sampleChannel = {
     ...sampleChannel,
     model_limits: { "gpt-4o": { context_window: 131_072 } },
+  };
+  const syncedWindows: Record<string, number> = {
+    "gpt-4o": 128_000,
+    "gpt-4o-mini": 200_000,
+  };
+  const channelWithSyncedWindow: typeof sampleChannel = {
+    ...sampleChannel,
+    models: sampleChannel.models.map((model) => ({
+      ...model,
+      context_window: syncedWindows[model.name],
+    })),
   };
   // 列表快照会带上成员的 channel_model（含渠道 id 与模型名）
   const groupWithModels: typeof sampleGroup = {
@@ -1095,13 +1106,13 @@ describe("分组上下文窗口展示", () => {
     relay_config: { ...groupWithModels.relay_config, context_fit_enabled: true },
   };
 
-  function setupFetch(group: unknown) {
+  function setupFetch(group: unknown, channel: typeof sampleChannel = channelWithWindow) {
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) => {
         if (url.includes("/group/list")) return Promise.resolve(jsonOk([group]));
         if (url.includes("/channel/list"))
-          return Promise.resolve(jsonOk([channelWithWindow]));
+          return Promise.resolve(jsonOk([channel]));
         return Promise.resolve(jsonOk(null));
       }),
     );
@@ -1131,10 +1142,21 @@ describe("分组上下文窗口展示", () => {
     );
     expect(
       screen.getByTitle(
-        "人工定义的上下文窗口：131,072 token；请求估算超出即跳过该成员",
+        "生效的上下文窗口：131,072 token；请求估算超出即跳过该成员",
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("未定义窗口")).toBeInTheDocument();
+  });
+
+  it("人工窗口缺失时两个成员都回落到同步目录窗口", async () => {
+    setupFetch(groupWithFitOn, channelWithSyncedWindow);
+    render(<GroupsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("gpt-4o-prod"));
+
+    expect(await screen.findByText("128K 窗口")).toBeInTheDocument();
+    expect(await screen.findByText("200K 窗口")).toBeInTheDocument();
+    expect(screen.queryByText("131.072K 窗口")).not.toBeInTheDocument();
+    expect(screen.queryByText("未定义窗口")).not.toBeInTheDocument();
   });
 
   it("编辑页跟开关实时联动：关闭不显示，开启后显示", async () => {

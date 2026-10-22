@@ -241,13 +241,13 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			item := model.GroupItem{}
 			if sessionStickyEnabled(group, scopeKey) {
 				// 粘合有效时本轮直接使用粘合成员, 失效则按优先级正常选路。
-				item = pickSessionStickyExcluding(group, scopeKey, exclude)
+				item = pickSessionStickySkipping(group, scopeKey, exclude, contextSkipped)
 			}
 			if item.ID == 0 {
 				// 手动模式取人工指定的成员, 故障转移模式按优先级选择未禁用且不在冷却中的成员;
 				// 选路层会跳过被禁用渠道的成员, 派发处另有兜底检查覆盖粘合等旁路。
 				// 没有目标时等待重新选择, 期间人工切换渠道, 补齐成员或成员冷却到期即可让请求继续。
-				item = pickGroupItemWithContext(ctx, group, exclude, format)
+				item = pickGroupItemSkipping(ctx, group, exclude, contextSkipped, format)
 			}
 			if item.ID == 0 {
 				// 全冷却自动清除: 分组配置了 AllCooldownRetryBaseSeconds 且所有非禁用成员都在冷却中时,
@@ -282,7 +282,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 不给引用成员上冷却也不等待, 立即排除该引用改试顶层下一优先级。
 			// 把客户端协议 format 透传给引用链解析: 目标分组启用 PreferPassthrough 时,
 			// 嵌套引用选路也要按客户端协议做同协议优先排序, 与顶层 pickGroupItem 一致。
-			hops, failedIdx = resolveGroupRefChainWithContext(ctx, group, item, scopeKey, exclude, format)
+			hops, failedIdx = resolveGroupRefChainSkipping(ctx, group, item, scopeKey, exclude, contextSkipped, format)
 			if failedIdx >= 0 {
 				// 防热旋: 单个 exclude 变量记不住多个损坏的兄弟引用, 全部引用都结构性失效时
 				// 会交替重选形成紧循环。跳过次数超过成员总数即视为整组不可用, 退避一轮后
@@ -383,6 +383,36 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 仅对 OpenAI Chat 协议与 OpenAI 系渠道生效; 必须在真实模型名写入后、发起上游前完成。
 			raw.Body = injectMissingReasonings(raw.Body, format, channel.Type)
 
+			passthrough := supportsNativeFormat(channel, channelModel, format)
+			request.setRelayMode(relayModeFor(channel, channelModel, format))
+
+			// 上下文装不下时跳过该成员, 不计成员失败。
+			contextWindow := effectiveContextWindow(channel.ModelLimits, channelModel)
+			if relayConfig.ContextFitEnabled && !contextFitsWindow(raw.Body, contextWindow, channel.BaseURL, channelModel.Name) {
+				contextSkipped[item.ID] = true
+				if contextWindow > maxCandidateWindow {
+					maxCandidateWindow = contextWindow
+				}
+				// 跳过不是失败, 整链占用须归还。
+				releaseRefChainHops(hops)
+				clearSessionStickyByItem(group.ID, item.ID)
+				if len(contextSkipped) >= routableCandidateCount(hops[0].group) {
+					// 报出请求规模与候选集最大窗口, 调用方可据此截断请求或换模型。
+					detail := fmt.Errorf(
+						"%s（请求约 %d token，候选集最大窗口 %d token）",
+						errContextWindowTooSmall.Error(),
+						estimateModelTokens(raw.Body, channel.BaseURL, channelModel.Name),
+						maxCandidateWindow,
+					)
+					request.markFailed(detail, "", nil)
+					recordErrorLog(request)
+					rejectRequest(c, inbound, detail)
+					return
+				}
+				exclude = item.ID
+				continue
+			}
+
 			// 单渠道多 Key: 发起上游前选出本轮使用的凭据并装配生效渠道副本。
 			// 全部 Key 都在冷却中, 或代理模板按当前别名解析失败时, 按一轮真实失败记账,
 			// 不发起上游请求; 渠道未配置多 Key 时回退旧 Key 字段走同一路径。
@@ -427,6 +457,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					KeyLabel:     channelKeyLabel(keyIndex, selectedKey),
 					ClientFormat: clientFormatLabel(format),
 					UpstreamType: upstreamTypeLabel(channel, channelModel),
+					Passthrough:  passthrough,
 					ProxyAddr:    roundProxyLabel(channel, effective),
 				})
 				request.finishRound(AttemptFailed, classifyRound(dispatchErr, ctx, roundCtx), dispatchErr.Error())
@@ -444,33 +475,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
 					return
 				}
-				continue
-			}
-
-			// 上下文装不下时跳过该成员, 不计成员失败。
-			contextWindow := effectiveContextWindow(channel.ModelLimits, channelModel.Name)
-			// 未验证(无人工覆盖)的模型没有可信窗口, 直接放行不猜; 只拦已验证的。
-			if relayConfig.ContextFitEnabled && contextWindow > 0 && !contextFitsWindow(raw.Body, contextWindow, channel.BaseURL, channelModel.Name) {
-				contextSkipped[item.ID] = true
-				if contextWindow > maxCandidateWindow {
-					maxCandidateWindow = contextWindow
-				}
-				// 跳过不是失败, 整链占用须归还。
-				releaseRefChainHops(hops)
-				if len(contextSkipped) >= routableCandidateCount(hops[0].group) {
-					// 报出请求规模与候选集最大窗口, 调用方可据此截断请求或换模型。
-					detail := fmt.Errorf(
-						"%s（请求约 %d token，候选集最大窗口 %d token）",
-						errContextWindowTooSmall.Error(),
-						estimateModelTokens(raw.Body, channel.BaseURL, channelModel.Name),
-						maxCandidateWindow,
-					)
-					request.markFailed(detail, "", nil)
-					recordErrorLog(request)
-					rejectRequest(c, inbound, detail)
-					return
-				}
-				exclude = item.ID
 				continue
 			}
 
@@ -504,7 +508,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				ThinkingLevel: modelLimit.ThinkingLevel,
 				ClientFormat:  clientFormatLabel(format),
 				UpstreamType:  upstreamTypeLabel(channel, channelModel),
-				Passthrough:   supportsNativeFormat(channel, channelModel, format),
+				Passthrough:   passthrough,
 				ProxyAddr:     roundProxyLabel(channel, effective),
 			})
 			// 成员级响应超时: 流式只约束等待首个有效事件的阶段, 非流式约束等待完整响应的阶段。

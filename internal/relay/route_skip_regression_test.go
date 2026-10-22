@@ -130,6 +130,7 @@ func TestStickyExcludedFallsBackToRegularRouting(t *testing.T) {
 	highChannel := createIntegrationChannel(t, "it-sticky-skip-high", model.ChannelProviderOpenAI, highUpstream.URL, "it-sticky-skip-high-model")
 	setIntegrationContextWindow(t, highChannel.ID, "it-sticky-skip-high-model", 1)
 	lowChannel := createIntegrationChannel(t, "it-sticky-skip-low", model.ChannelProviderOpenAI, lowUpstream.URL, "it-sticky-skip-low-model")
+	setIntegrationContextWindow(t, lowChannel.ID, "it-sticky-skip-low-model", 1_000_000)
 	config := contextFitRouteConfig()
 	config.SessionStickyEnabled = true
 	config.SessionStickySeconds = 300

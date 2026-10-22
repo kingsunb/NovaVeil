@@ -44,6 +44,32 @@ func TestEstimateModelTokensUsesSharedDensity(t *testing.T) {
 	}
 }
 
+func TestEstimateModelTokensScale(t *testing.T) {
+	cases := []struct {
+		name   string
+		tokens int
+	}{
+		{name: "1K", tokens: 1_000},
+		{name: "200K", tokens: 200_000},
+		{name: "689K", tokens: 689_106},
+		{name: "1M", tokens: 1_000_000},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			const baseURL = "https://scale.example/"
+			modelName := "model-" + tc.name
+			key := tokenDensityKey(baseURL, modelName)
+			tokenDensityCache.Delete(key)
+			t.Cleanup(func() { tokenDensityCache.Delete(key) })
+
+			body := []byte(strings.Repeat("a", tc.tokens*4))
+			if got := estimateModelTokens(body, baseURL, modelName); got != tc.tokens {
+				t.Fatalf("estimateModelTokens(%s) = %d, want %d", tc.name, got, tc.tokens)
+			}
+		})
+	}
+}
+
 func TestContextFitsWindow(t *testing.T) {
 	const baseURL = "https://upstream.example/"
 	const modelName = "window-model"
@@ -57,7 +83,7 @@ func TestContextFitsWindow(t *testing.T) {
 		window int
 		want   bool
 	}{
-		{name: "窗口未知放行", window: 0, want: true},
+		{name: "窗口未知不适配", window: 0, want: false},
 		{name: "正边界", window: 1000, want: true},
 		{name: "超出一个 token", window: 999, want: false},
 	}
