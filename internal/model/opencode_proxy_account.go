@@ -2,8 +2,8 @@ package model
 
 import "time"
 
-// OpencodeProxyAccount 是 OpenCode 免费档渠道成功用过的代理账号(出口 IP)。
-// 只记录验证成功的账号, 未成功的不落库。
+// OpencodeProxyAccount 是 OpenCode 免费档渠道用过的代理账号(出口 IP)。
+// 成功与 403/429 冷却是两件事, 被拒账号同样落库。
 type OpencodeProxyAccount struct {
 	ID            uint      `gorm:"primarykey" json:"id"`
 	ChannelID     int       `gorm:"uniqueIndex:idx_oc_proxy_channel_account;not null" json:"channel_id"`

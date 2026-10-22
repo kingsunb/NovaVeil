@@ -22,10 +22,12 @@ const (
 	ocProxyCooldown = 12 * time.Hour
 	// 429 后的账号冷却时长。
 	ocProxyRateLimitedCooldown = 24 * time.Hour
-	// ocProxyMaxAccounts 限制每渠道内存与库内账号数。
-	ocProxyMaxAccounts = 200
+	// ocProxyMaxAccounts 是每渠道账号数上限, 库内按此淘汰。
+	ocProxyMaxAccounts = 2000
 	// 每成员每请求最多换号三次。
 	ocProxyMaxRetries = 3
+	// ocPruneInterval 限制淘汰查询频率, 避免每次落库都全表排序。
+	ocPruneInterval = 10 * time.Minute
 )
 
 // ocProxyAccount 是一个代理账号的进程内状态。
@@ -39,9 +41,10 @@ type ocProxyAccount struct {
 
 // ocProxyPool 是单渠道的账号池, 首次使用时从库加载。
 type ocProxyPool struct {
-	mu       sync.Mutex
-	loaded   bool
-	accounts map[string]*ocProxyAccount
+	mu          sync.Mutex
+	loaded      bool
+	lastPruneAt time.Time
+	accounts    map[string]*ocProxyAccount
 }
 
 var ocProxyPools sync.Map
@@ -103,6 +106,7 @@ func pickOpencodeProxyAccount(ctx context.Context, channelID int) string {
 	if picked == nil {
 		picked = &ocProxyAccount{account: newOpencodeProxyAccount()}
 		pool.accounts[picked.account] = picked
+		pool.trimLocked(picked.account)
 	}
 	picked.active++
 	account := picked.account
@@ -125,6 +129,34 @@ func ocProxyUsable(account *ocProxyAccount, now time.Time) bool {
 	return true
 }
 
+// needsPrune 报告是否需要淘汰库内账号; 调用方需持锁。满额才查库, 且限频。
+func (p *ocProxyPool) needsPrune() bool {
+	if len(p.accounts) < ocProxyMaxAccounts || time.Since(p.lastPruneAt) <= ocPruneInterval {
+		return false
+	}
+	p.lastPruneAt = time.Now()
+	return true
+}
+
+// trimLocked 把内存账号数压回上限, 淘汰最久未成功的; 调用方需持锁。
+func (p *ocProxyPool) trimLocked(keep string) {
+	for len(p.accounts) > ocProxyMaxAccounts {
+		var oldest *ocProxyAccount
+		for _, state := range p.accounts {
+			if state.account == keep {
+				continue
+			}
+			if oldest == nil || state.lastSuccessAt.Before(oldest.lastSuccessAt) {
+				oldest = state
+			}
+		}
+		if oldest == nil {
+			return
+		}
+		delete(p.accounts, oldest.account)
+	}
+}
+
 // releaseOpencodeProxyAccount 归还账号的并发槽位。
 func releaseOpencodeProxyAccount(channelID int, account string) {
 	pool := ocProxyPoolFor(channelID)
@@ -145,14 +177,19 @@ func markOpencodeProxySuccess(channelID int, account string) {
 	if !ok {
 		state = &ocProxyAccount{account: account}
 		pool.accounts[account] = state
+		pool.trimLocked(account)
 	}
 	state.verified = true
 	state.lastSuccessAt = now
 	state.cooldownUntil = time.Time{}
+	prune := pool.needsPrune()
 	pool.mu.Unlock()
 	go func() {
 		if err := op.SaveOpencodeProxySuccess(channelID, account, now); err != nil {
 			log.Warnf("opencode 代理账号成功记录落库失败: %v", err)
+			return
+		}
+		if !prune {
 			return
 		}
 		if err := op.PruneOpencodeProxyAccounts(channelID, ocProxyMaxAccounts); err != nil {
@@ -171,22 +208,30 @@ func markOpencodeProxyRateLimited(channelID int, account string) {
 	markOpencodeProxyCooldown(channelID, account, ocProxyRateLimitedCooldown)
 }
 
-// 写入账号冷却并异步落库。
+// 写入账号冷却并异步落库; 未成功过的账号同样入槽。
 func markOpencodeProxyCooldown(channelID int, account string, cooldown time.Duration) {
 	pool := ocProxyPoolFor(channelID)
 	pool.mu.Lock()
 	state, ok := pool.accounts[account]
-	if !ok || !state.verified {
-		delete(pool.accounts, account)
-		pool.mu.Unlock()
-		return
+	if !ok {
+		state = &ocProxyAccount{account: account}
+		pool.accounts[account] = state
+		pool.trimLocked(account)
 	}
 	until := time.Now().Add(cooldown)
 	state.cooldownUntil = until
+	prune := pool.needsPrune()
 	pool.mu.Unlock()
 	go func() {
 		if err := op.SaveOpencodeProxyCooldown(channelID, account, until); err != nil {
 			log.Warnf("opencode 代理账号冷却落库失败: %v", err)
+			return
+		}
+		if !prune {
+			return
+		}
+		if err := op.PruneOpencodeProxyAccounts(channelID, ocProxyMaxAccounts); err != nil {
+			log.Warnf("opencode 代理账号清理失败: %v", err)
 		}
 	}()
 }

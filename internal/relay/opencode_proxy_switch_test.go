@@ -351,9 +351,19 @@ func TestOpencodeProxy429StopsAtRetryLimit(t *testing.T) {
 			t.Fatalf("耗尽后应固定复用最后一个账号, 实际 %v", seen)
 		}
 	}
-	if pool := opencodeProxyPoolSnapshot(t, channel.ID); len(pool) != 0 {
-		t.Fatalf("未验证坏账号不应滞留池内, 实际 %+v", pool)
+	pool := opencodeProxyPoolSnapshot(t, channel.ID)
+	if len(pool) != len(unique) {
+		t.Fatalf("尝试过的账号应全部入冷却槽, 实际 %+v", pool)
 	}
+	for account, state := range pool {
+		if !state.cooldownUntil.After(time.Now()) {
+			t.Fatalf("账号 %s 应处于冷却中, 实际 %+v", account, state)
+		}
+	}
+	waitFor(t, 2*time.Second, func() bool {
+		rows, err := op.LoadOpencodeProxyAccounts(channel.ID)
+		return err == nil && len(rows) == len(pool)
+	})
 
 	itemID := group.Items[0].ID
 	route := routeSnapshot(t, group.ID)
@@ -515,9 +525,19 @@ func TestOpencodeProxy403StopsAtRetryLimit(t *testing.T) {
 			t.Fatalf("耗尽后应固定复用最后一个账号, 实际 %v", seen)
 		}
 	}
-	if pool := opencodeProxyPoolSnapshot(t, channel.ID); len(pool) != 0 {
-		t.Fatalf("未验证坏账号不应滞留池内, 实际 %+v", pool)
+	pool := opencodeProxyPoolSnapshot(t, channel.ID)
+	if len(pool) != len(unique) {
+		t.Fatalf("尝试过的账号应全部入冷却槽, 实际 %+v", pool)
 	}
+	for account, state := range pool {
+		if !state.cooldownUntil.After(time.Now()) {
+			t.Fatalf("账号 %s 应处于冷却中, 实际 %+v", account, state)
+		}
+	}
+	waitFor(t, 2*time.Second, func() bool {
+		rows, err := op.LoadOpencodeProxyAccounts(channel.ID)
+		return err == nil && len(rows) == len(pool)
+	})
 
 	itemID := group.Items[0].ID
 	route := routeSnapshot(t, group.ID)
@@ -569,9 +589,19 @@ func TestOpencodeProxy403MultiKeyStopsAtRetryLimitWithoutKeyCooldown(t *testing.
 			t.Fatalf("耗尽后应固定复用最后一个账号, 实际 %v", seen)
 		}
 	}
-	if pool := opencodeProxyPoolSnapshot(t, channel.ID); len(pool) != 0 {
-		t.Fatalf("未验证坏账号不应滞留池内, 实际 %+v", pool)
+	pool := opencodeProxyPoolSnapshot(t, channel.ID)
+	if len(pool) != len(unique) {
+		t.Fatalf("尝试过的账号应全部入冷却槽, 实际 %+v", pool)
 	}
+	for account, state := range pool {
+		if !state.cooldownUntil.After(time.Now()) {
+			t.Fatalf("账号 %s 应处于冷却中, 实际 %+v", account, state)
+		}
+	}
+	waitFor(t, 2*time.Second, func() bool {
+		rows, err := op.LoadOpencodeProxyAccounts(channel.ID)
+		return err == nil && len(rows) == len(pool)
+	})
 	assertOpencodeProxyKeysNotCooling(t, channel)
 
 	itemID := group.Items[0].ID
