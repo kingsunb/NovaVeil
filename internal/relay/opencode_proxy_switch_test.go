@@ -148,13 +148,40 @@ func opencodeProxyPoolSnapshot(t *testing.T, channelID int) map[string]ocProxyAc
 func assertOpencodeProxyKeysNotCooling(t *testing.T, channel model.Channel) {
 	t.Helper()
 	if len(channel.Keys) == 0 {
-		t.Fatal("测试渠道应配置多把 Key")
+		t.Fatal("测试渠道应配置 Key")
 	}
 	for _, key := range channel.Keys {
 		if channelKeyCooling(channel.ID, key.ID) {
-			t.Fatalf("代理账号 403 不应冷却 Key %q", key.Remark)
+			t.Fatalf("代理账号拒绝不应冷却 Key %q", key.Remark)
 		}
 	}
+}
+
+func assertOpencodeProxyCooldownDuration(t *testing.T, until time.Time, want time.Duration) {
+	t.Helper()
+	remaining := time.Until(until)
+	if remaining < want-time.Minute || remaining > want+time.Minute {
+		t.Fatalf("账号冷却剩余时长应约为 %v, 实际 %v", want, remaining)
+	}
+}
+
+func assertOpencodeProxyPersistedCooldown(t *testing.T, channelID int, account string, want time.Duration) {
+	t.Helper()
+	var persisted model.OpencodeProxyAccount
+	waitFor(t, 2*time.Second, func() bool {
+		rows, err := op.LoadOpencodeProxyAccounts(channelID)
+		if err != nil {
+			return false
+		}
+		for _, row := range rows {
+			if row.Account == account {
+				persisted = row
+				return !row.CooldownUntil.IsZero()
+			}
+		}
+		return false
+	})
+	assertOpencodeProxyCooldownDuration(t, persisted.CooldownUntil, want)
 }
 
 func opencodeProxyTestConfig() model.GroupRelayConfig {
@@ -213,6 +240,7 @@ func TestOpencodeProxy403RetriesAnotherAccount(t *testing.T) {
 	if cooldown != 1 {
 		t.Fatalf("账号池应恰有 1 个冷却账号, 实际 %d: %+v", cooldown, pool)
 	}
+	assertOpencodeProxyCooldownDuration(t, pool["bad-account"].cooldownUntil, ocProxyCooldown)
 
 	itemID := group.Items[0].ID
 	route := routeSnapshot(t, group.ID)
@@ -228,6 +256,164 @@ func TestOpencodeProxy403RetriesAnotherAccount(t *testing.T) {
 	state := requestStateOf(t, nextRequestID()-1)
 	if state.Status != StatusSuccess || len(state.Attempts) != 2 || state.Attempts[0].Outcome != AttemptFailed || state.Attempts[1].Outcome != AttemptSuccess {
 		t.Fatalf("应记录失败后成功两轮, 实际 %s/%+v", state.Status, state.Attempts)
+	}
+}
+
+func TestOpencodeProxy429CoolsAccount24hAndRetriesAnother(t *testing.T) {
+	setupFailoverTest(t)
+	resetChannelKeyHealth()
+	t.Cleanup(resetChannelKeyHealth)
+	probe := newOpencodeProxyProbe(t, func(account string) (int, []byte) {
+		if account == "bad-account" {
+			return http.StatusTooManyRequests, []byte(`{"error":{"message":"rate limited"}}`)
+		}
+		return http.StatusOK, chatCompletionBody("chatcmpl-opencode-429-retry", "ok-from-next-account", 3, 5)
+	})
+	channel := createOpencodeProxyTestChannel(t, probe.template,
+		model.ChannelKey{Key: "single-alpha", Remark: "alpha"},
+	)
+	seedOpencodeProxyAccounts(t, channel.ID, map[string]time.Time{
+		"bad-account":  time.Now(),
+		"good-account": time.Now().Add(-time.Hour),
+	})
+	group := createIntegrationGroup(t, "opencode-proxy-429-retry", opencodeProxyTestConfig(), integrationLeafItem(t, channel, channel.Models[0].Name))
+
+	expectedID := nextRequestID()
+	recorder := postOpencodeProxyRequest(t, group, nil)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "ok-from-next-account") {
+		t.Fatalf("429 换号后应成功, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := probe.seenAccounts(); len(got) != 2 || got[0] != "bad-account" || got[1] != "good-account" {
+		t.Fatalf("应先用被限速账号再换好账号, 实际 %v", got)
+	}
+
+	pool := opencodeProxyPoolSnapshot(t, channel.ID)
+	bad, ok := pool["bad-account"]
+	if !ok {
+		t.Fatalf("被限速账号应留在池内, 实际 %+v", pool)
+	}
+	assertOpencodeProxyCooldownDuration(t, bad.cooldownUntil, ocProxyRateLimitedCooldown)
+	if state, ok := pool["good-account"]; !ok || !state.cooldownUntil.IsZero() {
+		t.Fatalf("成功账号不应冷却, 实际 %+v", state)
+	}
+	assertOpencodeProxyKeysNotCooling(t, channel)
+	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", ocProxyRateLimitedCooldown)
+
+	itemID := group.Items[0].ID
+	route := routeSnapshot(t, group.ID)
+	if _, cooling := route.Cooldowns[itemID]; cooling {
+		t.Fatalf("429 换号不应冷却成员, 实际 %v", route.Cooldowns)
+	}
+	if route.Levels[itemID] != 0 || route.HalfOpens[itemID] != 0 {
+		t.Fatalf("429 换号不应改变成员健康度, 实际 levels=%v half_opens=%v", route.Levels, route.HalfOpens)
+	}
+	if route.CurrentItemID != itemID {
+		t.Fatalf("成功成员应保持当前路由, 实际 %d/%d", route.CurrentItemID, itemID)
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusSuccess || len(state.Attempts) != 2 || state.Attempts[0].Outcome != AttemptFailed || state.Attempts[1].Outcome != AttemptSuccess {
+		t.Fatalf("应记录失败后成功两轮, 实际 %s/%+v", state.Status, state.Attempts)
+	}
+}
+
+func TestOpencodeProxy429StopsAtRetryLimit(t *testing.T) {
+	setupFailoverTest(t)
+	probe := newOpencodeProxyProbe(t, func(string) (int, []byte) {
+		return http.StatusTooManyRequests, []byte(`{"error":{"message":"rate limited"}}`)
+	})
+	channel := createOpencodeProxyTestChannel(t, probe.template)
+	t.Cleanup(func() { ocProxyPools.Delete(channel.ID) })
+	config := opencodeProxyTestConfig()
+	config.MemberMaxAttempts = 3
+	config.MemberRetryIntervalSeconds = 0
+	group := createIntegrationGroup(t, "opencode-proxy-429-limit", config, integrationLeafItem(t, channel, channel.Models[0].Name))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	expectedID := nextRequestID()
+	recorder := postOpencodeProxyRequest(t, group, ctx)
+	if recorder.Body.Len() != 0 {
+		t.Fatalf("持续 429 不应泄漏响应体, 实际 %s", recorder.Body.String())
+	}
+	seen := probe.seenAccounts()
+	if len(seen) < ocProxyMaxRetries+1 {
+		t.Fatalf("应至少完成 %d 次换号尝试, 实际 %d: %v", ocProxyMaxRetries+1, len(seen), seen)
+	}
+	unique := make(map[string]struct{}, ocProxyMaxRetries+1)
+	for _, account := range seen {
+		unique[account] = struct{}{}
+	}
+	if len(unique) != ocProxyMaxRetries+1 {
+		t.Fatalf("换号耗尽后不应再新建账号, 实际 %d 个: %v", len(unique), seen)
+	}
+	for _, account := range seen[ocProxyMaxRetries:] {
+		if account != seen[ocProxyMaxRetries] {
+			t.Fatalf("耗尽后应固定复用最后一个账号, 实际 %v", seen)
+		}
+	}
+	if pool := opencodeProxyPoolSnapshot(t, channel.ID); len(pool) != 0 {
+		t.Fatalf("未验证坏账号不应滞留池内, 实际 %+v", pool)
+	}
+
+	itemID := group.Items[0].ID
+	route := routeSnapshot(t, group.ID)
+	if _, cooling := route.Cooldowns[itemID]; !cooling {
+		t.Fatalf("超过换号上限后应回落成员失败路径, 实际 %v", route.Cooldowns)
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusCanceled && state.Status != StatusFailed {
+		t.Fatalf("请求应以可预期失败终态结束, 实际 %s(%s)", state.Status, state.Error)
+	}
+}
+
+func TestOpencodeProxy429MultiKeySwitchesAccountWithoutKeyCooldown(t *testing.T) {
+	setupFailoverTest(t)
+	resetChannelKeyHealth()
+	t.Cleanup(resetChannelKeyHealth)
+	probe := newOpencodeProxyProbe(t, func(account string) (int, []byte) {
+		if account == "bad-account" {
+			return http.StatusTooManyRequests, []byte(`{"error":{"message":"rate limited"}}`)
+		}
+		return http.StatusOK, chatCompletionBody("chatcmpl-opencode-429-multikey", "ok-429-multikey-account-switch", 3, 5)
+	})
+	channel := createOpencodeProxyTestChannel(t, probe.template,
+		model.ChannelKey{Key: "multikey-alpha", Remark: "alpha"},
+		model.ChannelKey{Key: "multikey-beta", Remark: "beta"},
+	)
+	seedOpencodeProxyAccounts(t, channel.ID, map[string]time.Time{
+		"bad-account":  time.Now(),
+		"good-account": time.Now().Add(-time.Hour),
+	})
+	group := createIntegrationGroup(t, "opencode-proxy-429-multikey-retry", opencodeProxyTestConfig(), integrationLeafItem(t, channel, channel.Models[0].Name))
+
+	expectedID := nextRequestID()
+	recorder := postOpencodeProxyRequest(t, group, nil)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "ok-429-multikey-account-switch") {
+		t.Fatalf("多 Key 渠道 429 换号后应成功, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := probe.seenAccounts(); len(got) != 2 || got[0] != "bad-account" || got[1] != "good-account" {
+		t.Fatalf("应先用被限速账号再换好账号, 实际 %v", got)
+	}
+
+	pool := opencodeProxyPoolSnapshot(t, channel.ID)
+	bad, ok := pool["bad-account"]
+	if !ok {
+		t.Fatalf("被限速账号应留在池内, 实际 %+v", pool)
+	}
+	assertOpencodeProxyCooldownDuration(t, bad.cooldownUntil, ocProxyRateLimitedCooldown)
+	assertOpencodeProxyKeysNotCooling(t, channel)
+
+	itemID := group.Items[0].ID
+	route := routeSnapshot(t, group.ID)
+	if _, cooling := route.Cooldowns[itemID]; cooling {
+		t.Fatalf("429 换号不应冷却成员, 实际 %v", route.Cooldowns)
+	}
+	if route.Levels[itemID] != 0 || route.HalfOpens[itemID] != 0 {
+		t.Fatalf("429 换号不应改变成员健康度, 实际 levels=%v half_opens=%v", route.Levels, route.HalfOpens)
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusSuccess || len(state.Attempts) != 2 {
+		t.Fatalf("应记录一次换号后成功, 实际 %s/%+v", state.Status, state.Attempts)
 	}
 }
 

@@ -18,8 +18,10 @@ const (
 	ocProxyPerAccountLimit = 5
 	// ocProxySuccessTTL 内成功过的账号优先复用。
 	ocProxySuccessTTL = 7 * 24 * time.Hour
-	// ocProxyCooldown 是 403 后的冷却时长, 不累积。
+	// 403 后的账号冷却时长。
 	ocProxyCooldown = 12 * time.Hour
+	// 429 后的账号冷却时长。
+	ocProxyRateLimitedCooldown = 24 * time.Hour
 	// ocProxyMaxAccounts 限制每渠道内存与库内账号数。
 	ocProxyMaxAccounts = 200
 	// 每成员每请求最多换号三次。
@@ -159,8 +161,18 @@ func markOpencodeProxySuccess(channelID int, account string) {
 	}()
 }
 
-// markOpencodeProxyForbidden 让账号冷却 12 小时; 未验证的直接丢弃。
+// 403 后冷却账号 12 小时。
 func markOpencodeProxyForbidden(channelID int, account string) {
+	markOpencodeProxyCooldown(channelID, account, ocProxyCooldown)
+}
+
+// 429 后冷却账号 24 小时。
+func markOpencodeProxyRateLimited(channelID int, account string) {
+	markOpencodeProxyCooldown(channelID, account, ocProxyRateLimitedCooldown)
+}
+
+// 写入账号冷却并异步落库。
+func markOpencodeProxyCooldown(channelID int, account string, cooldown time.Duration) {
 	pool := ocProxyPoolFor(channelID)
 	pool.mu.Lock()
 	state, ok := pool.accounts[account]
@@ -169,7 +181,7 @@ func markOpencodeProxyForbidden(channelID int, account string) {
 		pool.mu.Unlock()
 		return
 	}
-	until := time.Now().Add(ocProxyCooldown)
+	until := time.Now().Add(cooldown)
 	state.cooldownUntil = until
 	pool.mu.Unlock()
 	go func() {

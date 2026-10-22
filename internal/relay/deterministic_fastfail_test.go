@@ -425,6 +425,9 @@ func TestCredentialAndRateLimitStatusesRemainRetryable(t *testing.T) {
 			if got := hits.Load(); got != 2 {
 				t.Fatalf("%d 应轮换到第二把 Key, 上游实际调用 %d 次", testCase.status, got)
 			}
+			if testCase.status == http.StatusTooManyRequests && !channelKeyCooling(channel.ID, channel.Keys[0].ID) {
+				t.Fatal("非 OpenCode 渠道的 429 仍应冷却首把 Key")
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			if len(authHeaders) != 2 || authHeaders[0] == authHeaders[1] {

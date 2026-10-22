@@ -547,12 +547,19 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				result.Close()
 				err = memberTimeoutError(metadataStreaming, timeoutSeconds)
 			}
-			// 代理账号结果回填: 成功记成功, 403 冷却 12 小时。
+			// 回填账号结果: 成功或 403/429 冷却。
+			proxyAccountRejection := false
 			if proxyAccount != "" {
 				if err == nil {
 					markOpencodeProxySuccess(channel.ID, proxyAccount)
-				} else if code, ok := UpstreamStatusCode(err); ok && code == http.StatusForbidden {
-					markOpencodeProxyForbidden(channel.ID, proxyAccount)
+				} else if code, ok := UpstreamStatusCode(err); ok {
+					proxyAccountRejection = code == http.StatusForbidden || code == http.StatusTooManyRequests
+					switch code {
+					case http.StatusForbidden:
+						markOpencodeProxyForbidden(channel.ID, proxyAccount)
+					case http.StatusTooManyRequests:
+						markOpencodeProxyRateLimited(channel.ID, proxyAccount)
+					}
 				}
 			}
 
@@ -577,13 +584,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 且该渠道配置了多把 Key 时, 仅把本轮使用的 Key 标记冷却(时长取分组
 				// MemberCooldownSeconds), 不计渠道失败、不等待, 立即重选同一成员的下一把 Key。
 				// 429 的用量限额对单把 Key 是持续性不可用, 不轮换会反复重试同一把耗尽的 Key。
-				// 代理账号的 403 只冷却账号并进入下方换号分支, 不冷却 Key。
+				// 代理账号 403/429 不冷却 Key。
 				// 旧式单 Key 与仅剩一把的渠道不走此路径, 照常进入下方失败计数与冷却处理。
 				keyAuthRejection := isAuthRejectionError(err)
-				if code, ok := UpstreamStatusCode(err); ok && code == http.StatusForbidden && proxyAccount != "" {
-					keyAuthRejection = false
-				}
-				if outcome == AttemptFailed && len(channel.Keys) > 1 && (keyAuthRejection || isKeyRateLimitError(err)) {
+				if outcome == AttemptFailed && !proxyAccountRejection && len(channel.Keys) > 1 && (keyAuthRejection || isKeyRateLimitError(err)) {
 					markChannelKeyCooldown(channel.ID, selectedKey.ID, group.RelayConfig.MemberCooldownSeconds)
 					request.finishRound(AttemptFailed, classifyUpstreamStatus(err), brief)
 					request.releaseRoundLifecycle()
@@ -614,17 +618,15 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					releaseRefChainHops(hops)
 					continue
 				}
-				// 403 只惩罚账号, 不惩罚成员; 换号仍走同一成员。
-				if proxyAccount != "" {
-					if code, ok := UpstreamStatusCode(err); ok && code == http.StatusForbidden {
-						if opencodeAccountRetries[item.ID] >= ocProxyMaxRetries {
-							opencodeAccountPinned[item.ID] = proxyAccount
-						} else {
-							opencodeAccountRetries[item.ID]++
-							request.releaseRoundLifecycle()
-							releaseRefChainHops(hops)
-							continue
-						}
+				// 403/429 不惩罚成员, 换号同成员。
+				if proxyAccountRejection {
+					if opencodeAccountRetries[item.ID] >= ocProxyMaxRetries {
+						opencodeAccountPinned[item.ID] = proxyAccount
+					} else {
+						opencodeAccountRetries[item.ID]++
+						request.releaseRoundLifecycle()
+						releaseRefChainHops(hops)
+						continue
 					}
 				}
 				// 上游在任何内容到达前提前关闭流(提前 EOF): 多为瞬时抖动, 首次发生时对同成员

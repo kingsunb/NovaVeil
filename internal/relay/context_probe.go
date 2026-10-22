@@ -270,13 +270,15 @@ func probeOnce(ctx context.Context, channel model.Channel, modelName string, tok
 		probeErr = fmt.Errorf("上游返回异常状态: %s %s", response.Status, result.Detail)
 	}
 	finishTestRequest(logRequest, result.Detail, usage, probeErr)
-	// 探测结果回填账号池: 成功记成功, 403 按 IP 被标记冷却, 下次自动换号。
+	// 回填探测账号: 成功或 403/429 冷却。
 	if proxyAccount != "" {
 		switch {
 		case result.Accepted:
 			markOpencodeProxySuccess(channel.ID, proxyAccount)
 		case response.StatusCode == http.StatusForbidden:
 			markOpencodeProxyForbidden(channel.ID, proxyAccount)
+		case response.StatusCode == http.StatusTooManyRequests:
+			markOpencodeProxyRateLimited(channel.ID, proxyAccount)
 		}
 	}
 	if probeErr != nil {
