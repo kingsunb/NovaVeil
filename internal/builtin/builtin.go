@@ -86,7 +86,7 @@ var BuiltinFreeChannels = []model.Channel{
 		OpencodeCompat: true,
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "cli"},
-			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.0.32/cli"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.3/cli"},
 		},
 		Models: []model.ChannelModel{
 			// 协议来自 models.opencode.ai 的 opencode 提供方：这六个模型没有单独的
@@ -114,7 +114,7 @@ var BuiltinFreeChannels = []model.Channel{
 		OpencodeCompat: true,
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "cli"},
-			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.0.32/cli"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.3/cli"},
 		},
 		Models: []model.ChannelModel{
 			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
@@ -138,7 +138,7 @@ var BuiltinFreeChannels = []model.Channel{
 		OpencodeCompat: true,
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "cli"},
-			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.0.32/cli"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.3/cli"},
 		},
 		Models: []model.ChannelModel{
 			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
@@ -156,7 +156,7 @@ var BuiltinFreeChannels = []model.Channel{
 		// BaseURL https://opencode.ai/zen → 转换器追加 /v1/chat/completions →
 		// https://opencode.ai/zen/v1/chat/completions, 即 legacy 免费档端点。
 		// 与 /inference 档的区别(由 applyOpencodeFreeLaneHeaders 在转发时动态设置):
-		//   - User-Agent 用 v1 模型请求格式 opencode/1.19.3 ai-sdk/provider-utils/<ver>
+		//   - User-Agent 用 v1 模型请求格式 opencode/1.19.4 ai-sdk/provider-utils/<ver>
 		//     runtime/bun/1.3.14, <ver> 按出站协议(chat=4.0.23/responses=4.0.40/anthropic=4.0.46);
 		//   - x-opencode-project 用裸 40-hex(由 injectOpencodeCorrelationHeaders 注入);
 		//   - 额外发送 x-opencode-request(msg_ 递增 id), v2 档不发此头(网关 403);
@@ -385,7 +385,7 @@ var BuiltinOfficialChannels = []model.Channel{
 		OpencodeCompat: true,
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "desktop"},
-			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.0.32/desktop"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.3/desktop"},
 		},
 	},
 	{

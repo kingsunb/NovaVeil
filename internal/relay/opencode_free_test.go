@@ -84,7 +84,7 @@ func TestShapeOpencodeFreeBodyForcesAgentShape(t *testing.T) {
 
 // TestShapeOpencodeFreeBodyIdempotent 验证已满足 Agent 形态(真实工具定义)的请求不再改写。
 func TestShapeOpencodeFreeBodyIdempotent(t *testing.T) {
-	body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[` +
+	body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"max_completion_tokens":32000,"tools":[` +
 		func() string {
 			var parts []string
 			for _, core := range opencodeFreeCoreTools {
@@ -228,7 +228,7 @@ func TestShapeOpencodeFreeBodyKeepsExactPatch(t *testing.T) {
 		tools = append(tools, opencodeFreeChatTool(core))
 	}
 	tools = append(tools, opencodeFreeChatTool("patch"))
-	body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[` + strings.Join(tools, ",") + `]}`)
+	body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"max_completion_tokens":32000,"tools":[` + strings.Join(tools, ",") + `]}`)
 	if got, changed := shapeOpencodeFreeBody(body, false); changed {
 		t.Fatalf("真实 patch 定义不应改写: %s", got)
 	}
@@ -241,6 +241,142 @@ func quoteJSON(t *testing.T, value string) string {
 		t.Fatalf("marshal string: %v", err)
 	}
 	return string(encoded)
+}
+
+func TestShapeOpencodeFreeBodyV2CompletionLimit(t *testing.T) {
+	cases := []struct {
+		name      string
+		body      string
+		v1Lane    bool
+		wantLimit bool
+		wantValue int64
+	}{
+		{
+			name:      "v2 无上限时补默认值",
+			body:      `{"model":"x-free","messages":[]}`,
+			wantLimit: true,
+			wantValue: 32000,
+		},
+		{
+			name: "显式 max_tokens=0 不覆盖",
+			body: `{"model":"x-free","max_tokens":0,"messages":[]}`,
+		},
+		{
+			name:      "显式 max_completion_tokens=0 不覆盖",
+			body:      `{"model":"x-free","max_completion_tokens":0,"messages":[]}`,
+			wantLimit: true,
+			wantValue: 0,
+		},
+		{
+			name:   "v1 不补",
+			body:   `{"model":"x-free","messages":[]}`,
+			v1Lane: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, _ := shapeOpencodeFreeBody([]byte(tc.body), tc.v1Lane)
+			limit := gjson.GetBytes(body, "max_completion_tokens")
+			if limit.Exists() != tc.wantLimit {
+				t.Fatalf("max_completion_tokens exists = %v, 期望 %v: %s", limit.Exists(), tc.wantLimit, body)
+			}
+			if tc.wantLimit && limit.Int() != tc.wantValue {
+				t.Fatalf("max_completion_tokens = %d, 期望 %d", limit.Int(), tc.wantValue)
+			}
+		})
+	}
+}
+
+func TestOpencodeToolMatchesRequiresStrictFalse(t *testing.T) {
+	def, ok := knownOpencodeTool("shell")
+	if !ok {
+		t.Fatal("knownOpencodeTool 应识别 shell")
+	}
+	cases := []struct {
+		name    string
+		strict  any
+		include bool
+		want    bool
+	}{
+		{name: "显式 false 匹配", strict: false, include: true, want: true},
+		{name: "缺失不匹配", include: false},
+		{name: "true 不匹配", strict: true, include: true},
+		{name: "字符串不匹配", strict: "false", include: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			function := map[string]any{
+				"name":        "shell",
+				"description": def.Description,
+				"parameters":  def.Parameters,
+			}
+			if tc.include {
+				function["strict"] = tc.strict
+			}
+			raw, err := json.Marshal(map[string]any{"type": "function", "function": function})
+			if err != nil {
+				t.Fatalf("marshal tool: %v", err)
+			}
+			if got := opencodeToolMatches(def, gjson.ParseBytes(raw)); got != tc.want {
+				t.Fatalf("opencodeToolMatches = %v, 期望 %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOpencodeFreeChatToolStrictAndEncoding(t *testing.T) {
+	raw := opencodeFreeChatTool("read")
+	tool := gjson.Parse(raw)
+	if strict := tool.Get("function.strict"); strict.Type != gjson.False {
+		t.Fatalf("生成工具应显式 strict=false: %s", raw)
+	}
+	if strings.Contains(raw, `\u003c`) || !strings.Contains(raw, "<line>") {
+		t.Fatalf("工具 JSON 不应转义 HTML: %s", raw)
+	}
+
+	legacy := v1DeprecatedReadTool()
+	if gjson.Parse(legacy).Get("function.strict").Exists() {
+		t.Fatalf("v1 legacy 工具不应带 strict: %s", legacy)
+	}
+}
+
+func TestApplyOpencodeFreeLaneHeadersV2UserAgent(t *testing.T) {
+	channel := model.Channel{
+		OpencodeCompat: true,
+		BaseURL:        "https://opencode.ai/inference",
+		Models: []model.ChannelModel{{
+			Name:             "chat-x",
+			UpstreamProtocol: model.UpstreamProtocolChat,
+		}},
+	}
+	request := &httpclient.Request{
+		Headers: http.Header{"User-Agent": {"opencode/latest/2.0.32/cli"}},
+		Body:    []byte(`{"model":"chat-x"}`),
+	}
+	applyOpencodeFreeLaneHeaders(channel, request, "chat-x")
+	if got := request.Headers.Get("User-Agent"); got != "opencode/latest/2.1.3/cli" {
+		t.Fatalf("User-Agent = %q, 期望 v2 动态值", got)
+	}
+}
+
+func TestApplyOpencodeFreeLaneHeadersV1UserAgentVersion(t *testing.T) {
+	channel := model.Channel{
+		OpencodeCompat: true,
+		BaseURL:        "https://opencode.ai/zen",
+		Models: []model.ChannelModel{{
+			Name:             "chat-x",
+			UpstreamProtocol: model.UpstreamProtocolChat,
+		}},
+	}
+	request := &httpclient.Request{
+		Headers: http.Header{},
+		Body:    []byte(`{"model":"chat-x"}`),
+	}
+	applyOpencodeFreeLaneHeaders(channel, request, "chat-x")
+	want := "opencode/1.19.4 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14"
+	if got := request.Headers.Get("User-Agent"); got != want {
+		t.Fatalf("User-Agent = %q, 期望 %q", got, want)
+	}
 }
 
 func TestApplyOpencodeFreeLaneHeadersV2AnthropicBeta(t *testing.T) {

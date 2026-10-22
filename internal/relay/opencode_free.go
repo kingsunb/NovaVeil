@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -69,6 +70,9 @@ func knownOpencodeTool(name string) (opencodeToolDef, bool) {
 
 // opencodeToolMatches 判定工具定义完全一致。
 func opencodeToolMatches(def opencodeToolDef, tool gjson.Result) bool {
+	if tool.Get("function.strict").Type != gjson.False {
+		return false
+	}
 	if tool.Get("function.description").String() != def.Description {
 		return false
 	}
@@ -96,11 +100,12 @@ func isOpencodeFreeModel(channel model.Channel, modelName string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "free")
 }
 
-// opencodeV1ClientVersion / opencodeV1BunVersion 是 v1 档(/zen)声称的 OpenCode 1.x
-// 客户端版本与 Bun 运行时版本, 取自同一发行版抓包, 与 opencode2api 的 httpx 对齐。
+// 免费档客户端、Bun 版本与默认输出上限。
 const (
-	opencodeV1ClientVersion = "1.19.3"
-	opencodeV1BunVersion    = "1.3.14"
+	opencodeV1ClientVersion   = "1.19.4"
+	opencodeV1BunVersion      = "1.3.14"
+	opencodeV2ClientVersion   = "2.1.3"
+	opencodeV2CompletionLimit = 32000
 )
 
 // opencodeV1ProviderUtils 按出站协议返回 v1 模型请求 User-Agent 中的 provider-utils 版本。
@@ -161,10 +166,10 @@ func opencodeFreeLaneAccept(channel model.Channel) string {
 }
 
 // applyOpencodeFreeLaneHeaders 在连线上游前按档位设置 OpenCode 免费档的请求头:
-//   - v1 档(/zen): User-Agent 用协议相关的 opencode/1.19.3 ai-sdk/provider-utils/<ver>
+//   - v1 档(/zen): User-Agent 用协议相关的 opencode/1.19.4 ai-sdk/provider-utils/<ver>
 //     runtime/bun/1.3.14(<ver> 按出站协议), Accept 用 */*, 并发送 x-opencode-request
 //     (msg_ 升序 id);
-//   - v2 档(/inference): User-Agent 由渠道 CustomHeader 静态设置(opencode/latest/2.0.32/cli),
+//   - v2 档(/inference): User-Agent 动态覆盖为 opencode/latest/2.1.3/cli,
 //     Accept 用 application/json, text/event-stream, 且不发送 x-opencode-request
 //     (v2 网关对此头 403); Anthropic 出站补 beta=true。
 //
@@ -180,6 +185,8 @@ func applyOpencodeFreeLaneHeaders(channel model.Channel, request *httpclient.Req
 	}
 	request.Headers.Set("Accept", accept)
 	if !isOpencodeV1Lane(channel) {
+		// 动态覆盖渠道静态 UA，存量库也生效。
+		request.Headers.Set("User-Agent", "opencode/latest/"+opencodeV2ClientVersion+"/cli")
 		if opencodeModelProtocol(channel, modelName) == model.UpstreamProtocolAnthropic {
 			applyAnthropicBetaQuery(request)
 		}
@@ -241,6 +248,11 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool) ([]byte, bool) {
 	}
 	if next, injected := ensureOpencodeFreeTools(out); injected {
 		out, changed = next, true
+	}
+	if !gjson.GetBytes(out, "max_tokens").Exists() && !gjson.GetBytes(out, "max_completion_tokens").Exists() {
+		if next, err := sjson.SetBytes(out, "max_completion_tokens", opencodeV2CompletionLimit); err == nil {
+			out, changed = next, true
+		}
 	}
 	return out, changed
 }
@@ -356,15 +368,27 @@ func opencodeFreeChatTool(name string) string {
 			parameters = def.Parameters
 		}
 	}
-	b, _ := json.Marshal(map[string]any{
+	b, _ := marshalOpencodeJSON(map[string]any{
 		"type": "function",
 		"function": map[string]any{
 			"name":        name,
 			"description": description,
 			"parameters":  parameters,
+			"strict":      false,
 		},
 	})
 	return string(b)
+}
+
+// marshalOpencodeJSON 编码 JSON 时不转义 HTML。
+func marshalOpencodeJSON(value any) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
 }
 
 // collapseOpencodeFreeStream 把免费档强制流式得到的完整 SSE 折叠成客户端协议的非流式正文。
