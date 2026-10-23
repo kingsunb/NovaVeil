@@ -240,7 +240,8 @@ func TestOpencodeProxy403RetriesAnotherAccount(t *testing.T) {
 	if cooldown != 1 {
 		t.Fatalf("账号池应恰有 1 个冷却账号, 实际 %d: %+v", cooldown, pool)
 	}
-	assertOpencodeProxyCooldownDuration(t, pool["bad-account"].cooldownUntil, ocProxyAbuseCooldown)
+	assertOpencodeProxyCooldownDuration(t, pool["bad-account"].cooldownUntil, ocProxyRejectedCooldown)
+	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", ocProxyRejectedCooldown)
 
 	itemID := group.Items[0].ID
 	route := routeSnapshot(t, group.ID)
@@ -292,12 +293,12 @@ func TestOpencodeProxy429CoolsAccount24hAndRetriesAnother(t *testing.T) {
 	if !ok {
 		t.Fatalf("被限速账号应留在池内, 实际 %+v", pool)
 	}
-	assertOpencodeProxyCooldownDuration(t, bad.cooldownUntil, ocProxyRateLimitedCooldown)
+	assertOpencodeProxyCooldownDuration(t, bad.cooldownUntil, ocProxyRejectedCooldown)
 	if state, ok := pool["good-account"]; !ok || !state.cooldownUntil.IsZero() {
 		t.Fatalf("成功账号不应冷却, 实际 %+v", state)
 	}
 	assertOpencodeProxyKeysNotCooling(t, channel)
-	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", ocProxyRateLimitedCooldown)
+	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", ocProxyRejectedCooldown)
 
 	itemID := group.Items[0].ID
 	route := routeSnapshot(t, group.ID)
@@ -405,7 +406,7 @@ func TestOpencodeProxy429MultiKeySwitchesAccountWithoutKeyCooldown(t *testing.T)
 	if !ok {
 		t.Fatalf("被限速账号应留在池内, 实际 %+v", pool)
 	}
-	assertOpencodeProxyCooldownDuration(t, bad.cooldownUntil, ocProxyRateLimitedCooldown)
+	assertOpencodeProxyCooldownDuration(t, bad.cooldownUntil, ocProxyRejectedCooldown)
 	assertOpencodeProxyKeysNotCooling(t, channel)
 
 	itemID := group.Items[0].ID

@@ -18,7 +18,7 @@ OpenCode 免费档的代理账号只是出口 IP。上游返回 403 表示当前
 - 本轮确实使用了账号池选出的代理账号（`proxyAccount != ""`）；
 - 当前成员本请求已换号次数小于 `ocProxyMaxRetries`。
 
-处理顺序固定为：先由 `markOpencodeProxyForbidden` 冷却当前账号，再用 `finishRound` 把本轮记为 4xx 失败，释放轮次生命周期，归还引用链探测占用，然后 `continue` 重新选路。重试不调用 `recordRouteFailure`，不设置 `exclude`，不清会话粘合，也不写成员冷却或半开标记。
+处理顺序固定为：先由 `markOpencodeProxyRejected` 冷却当前账号（2026-10-24 起 403/429 统一 24 小时，见 [OpenCode 免费档 403 与 429 统一冷却 24 小时](2026-10-24-opencode-403-429-uniform-cooldown.md)），再用 `finishRound` 把本轮记为 4xx 失败，释放轮次生命周期，归还引用链探测占用，然后 `continue` 重新选路。重试不调用 `recordRouteFailure`，不设置 `exclude`，不清会话粘合，也不写成员冷却或半开标记。
 
 `ocProxyMaxRetries` 固定为 3，不新增配置项。每个成员每请求最多换号 3 次，即最多覆盖 4 个账号；计数按成员存放在请求级 `map[int]int` 中。账号池全部冷却或并发满时 `pickOpencodeProxyAccount` 仍可能新建账号，但新建同样受该上限约束。耗尽时把最后一个账号固定在请求内，后续成员级失败重试不再调用账号池；只有成员失败计数达到阈值、切换到其他成员或请求终止才会结束，因此上游尝试总数仍由既有成员重试策略决定，但不会继续新建账号。
 

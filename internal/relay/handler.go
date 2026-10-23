@@ -601,13 +601,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					markOpencodeProxySuccess(channel.ID, proxyAccount)
 				} else if code, ok := UpstreamStatusCode(err); ok {
 					proxyAccountRejection = code == http.StatusForbidden || code == http.StatusTooManyRequests
-					switch code {
-					case http.StatusForbidden:
-						if isOpencodeNetworkAbuse(err) {
-							markOpencodeProxyAbuseBlock(channel.ID, proxyAccount)
-						}
-					case http.StatusTooManyRequests:
-						markOpencodeProxyRateLimited(channel.ID, proxyAccount)
+					if proxyAccountRejection {
+						markOpencodeProxyRejected(channel.ID, proxyAccount)
 					}
 				}
 			}

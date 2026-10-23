@@ -11,6 +11,7 @@ OpenCode 免费档的 `{account}` 是出口代理账号，不是真正的上游�
 ## 决定
 
 - 403 与 429 都视为代理账号问题，但使用不同冷却时长：403 为 `ocProxyCooldown = 12h`，429 为 `ocProxyRateLimitedCooldown = 24h`。429 取 24 小时是显式业务口径，用一天量级阻止被限速出口继续参与当天轮换；不解析上游 `Retry-After`，也不累积延长。
+- 2026-10-24 起 403 与 429 统一冷却 24 小时，上述差异化时长与 `markOpencodeProxyForbidden` 已废止，见 [OpenCode 免费档 403 与 429 统一冷却 24 小时](2026-10-24-opencode-403-429-uniform-cooldown.md)。
 - 拒绝即入槽：冷却不再区分账号是否成功过（旧实现直接丢弃未验证账号），403/429 都写入冷却截止时间并落库，池内始终记得被拒过的出口。
 - 账号池每渠道上限 `ocProxyMaxAccounts = 2000`，内存与库同顶；库内淘汰只在满额且距上次淘汰超过 `ocPruneInterval = 10min` 时执行，避免每次落库都做全表排序。
 - 业务请求回填代理账号结果时，`proxyAccount != ""` 且状态码为 429 会调用 `markOpencodeProxyRateLimited`，复用 `SaveOpencodeProxyCooldown` 异步落库；403 仍调用 `markOpencodeProxyForbidden`。
