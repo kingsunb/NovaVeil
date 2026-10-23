@@ -41,6 +41,9 @@ type ChannelKeyTestResult struct {
 // KEY_TEST_CONCURRENCY 逐密钥测试的并发上限, 与面板批量模型测试的并发保持一致。
 const KEY_TEST_CONCURRENCY = 4
 
+// defaultTestMessage 是测试消息为空时的默认内容。
+const defaultTestMessage = "我要去洗汽车，洗车店离我家只有50m，走路去还是坐公交车去？回复最多五个字。"
+
 // keyTestRequestTimeout 单把密钥/分组成员测试的独立超时。
 const keyTestRequestTimeout = 60 * time.Second
 
@@ -184,7 +187,7 @@ func TestChannel(ctx context.Context, channelID int, modelName string, message s
 		return nil, fmt.Errorf("model is required")
 	}
 	if message == "" {
-		message = "ping"
+		message = defaultTestMessage
 	}
 
 	effective, keyIndex, key, err := effectiveTestChannel(channel, keyID)
@@ -214,7 +217,7 @@ func TestChannelKeyFailover(ctx context.Context, channelID int, modelName string
 		return nil, fmt.Errorf("model is required")
 	}
 	if message == "" {
-		message = "ping"
+		message = defaultTestMessage
 	}
 	candidates := channelKeyTestCandidates(channel)
 	if len(candidates) == 0 {
@@ -267,7 +270,7 @@ func testChannelKeysWithChannel(ctx context.Context, channel model.Channel, mode
 		return nil, fmt.Errorf("model is required")
 	}
 	if message == "" {
-		message = "ping"
+		message = defaultTestMessage
 	}
 	candidates := channelKeyTestCandidates(channel)
 	if len(candidates) == 0 {
@@ -658,7 +661,7 @@ const groupTestConcurrency = 3
 // TestGroup 对分组全体成员(含引用成员递归展开)各发起一次连通性测试,
 // 按成员顺序返回逐条结果, 供管理端一键核验分组可用性。
 // 引用成员按真实路由语义递归解析到目标分组的直接渠道成员; 每个直接成员按其渠道
-// 的原生协议测试(同协议透传, 异协议转换)。message 为空时默认 "ping"。
+// 的原生协议测试(同协议透传, 异协议转换)。message 为空时使用默认测试消息。
 // 分组不存在时返回错误; 单个成员的渠道/模型不存在时记一条 "fail" 结果并继续。
 func TestGroup(ctx context.Context, groupID int, message string) ([]GroupTestResult, error) {
 	var group model.Group
@@ -674,7 +677,7 @@ func TestGroup(ctx context.Context, groupID int, message string) ([]GroupTestRes
 		return nil, fmt.Errorf("group not found")
 	}
 	if message == "" {
-		message = "ping"
+		message = defaultTestMessage
 	}
 
 	members := collectGroupTestMembers(group, 0)
