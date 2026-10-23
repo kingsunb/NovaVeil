@@ -11,6 +11,7 @@ const TITLES: Record<string, string> = {
   "/groups": "分组",
   "/model-eval": "模型评估",
   "/context-probe": "上下文探测",
+  "/proxy-accounts": "账号体检",
   "/mask": "脱敏",
   "/chat": "对话",
   "/keys": "API 密钥",

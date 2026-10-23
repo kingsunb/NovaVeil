@@ -177,6 +177,17 @@ func parseRequestedOverflowTokens(detail string) (int64, bool) {
 
 // probeOnce 发送一次指定构造规模的探测请求并按状态码判定容量。
 func probeOnce(ctx context.Context, channel model.Channel, modelName string, tokens int) (*ContextProbeResult, error) {
+	result, err := probeOnceWithAccount(ctx, channel, modelName, tokens, "")
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// probeOnceWithAccount 在 probeOnce 基础上支持钉住代理账号:
+// account 为空时沿用池内选号(原行为), 非空时强制用该账号, 供批量账号体检复用。
+// 拿到 HTTP 响应时结论(Status/Detail/Latency)随 result 返回, error 仅表示未得出容量结论。
+func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName string, tokens int, account string) (*ContextProbeResult, error) {
 	candidates := channelKeyTestCandidates(channel)
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("渠道未配置任何密钥")
@@ -188,7 +199,10 @@ func probeOnce(ctx context.Context, channel model.Channel, modelName string, tok
 	// 免费档按出口 IP 轮换: 探测必须用池内账号, 否则永远撞同一个被标记的 IP。
 	proxyAccount := ""
 	if proxyNeedsOpencodeAccount(channel) {
-		candidate := pickOpencodeProxyAccount(ctx, channel.ID)
+		candidate := account
+		if candidate == "" {
+			candidate = pickOpencodeProxyAccount(ctx, channel.ID)
+		}
 		if resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate); resolveErr == nil {
 			addr := resolved.String()
 			effective.ChannelProxy = &addr
@@ -280,7 +294,7 @@ func probeOnce(ctx context.Context, channel model.Channel, modelName string, tok
 		}
 	}
 	if probeErr != nil {
-		return nil, probeErr
+		return result, probeErr
 	}
 	return result, nil
 }

@@ -805,6 +805,33 @@ export const api = {
     return raw?.points ?? [];
   },
 
+  // ----- OpenCode 账号体检 -----
+  /** 并发体检免费档渠道的代理账号: 健康→入池优先复用; 403/429→冷却 24h。 */
+  probeProxyAccounts: async (body: {
+    channel_id: number;
+    accounts?: string[];
+    count?: number;
+    concurrency?: number;
+    timeout_ms?: number;
+  }) => {
+    const raw = await http<unknown>("/channel/proxy-accounts/probe", {
+      method: "POST",
+      body,
+    });
+    return raw as {
+      channel_id: number;
+      model: string;
+      results: Array<{
+        account: string;
+        outcome: string;
+        status: number;
+        detail: string;
+        latency_ms: number;
+      }>;
+      summary: { total: number; healthy: number; rejected: number; failed: number };
+    };
+  },
+
   // ----- 渠道 -----
   listChannels: async () => {
     const raw = await http<unknown>("/channel/list");

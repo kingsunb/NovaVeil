@@ -64,6 +64,10 @@ func init() {
 		AddRoute(
 			router.NewRoute("/test_keys", http.MethodPost).
 				Handle(testChannelKeys),
+		).
+		AddRoute(
+			router.NewRoute("/proxy-accounts/probe", http.MethodPost).
+				Handle(probeProxyAccounts),
 		)
 	router.NewGroupRouter("/api/v1/channel").
 		Use(middleware.Auth()).
@@ -337,6 +341,38 @@ func testChannelKeys(c *gin.Context) {
 		return
 	}
 	resp.Success(c, results)
+}
+
+// proxyAccountProbeRequest 是一次批量代理账号体检请求:
+// accounts 为空时生成 count 个随机账号(默认 100), 均不填时按默认行为执行。
+type proxyAccountProbeRequest struct {
+	ChannelID   int      `json:"channel_id" binding:"required"`
+	Accounts    []string `json:"accounts"`
+	Count       int      `json:"count"`
+	Concurrency int      `json:"concurrency"`
+	TimeoutMS   int      `json:"timeout_ms"`
+}
+
+// probeProxyAccounts 并发体检免费档渠道的代理账号: 健康→入池优先复用,
+// 403/429→冷却 24h, 与转发路径同一套池状态。
+func probeProxyAccounts(c *gin.Context) {
+	var request proxyAccountProbeRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
+		return
+	}
+	report, err := relay.ProbeOpencodeAccounts(c.Request.Context(), request.ChannelID, request.Accounts, request.Count, request.Concurrency, request.TimeoutMS)
+	if err != nil {
+		resp.ErrorExposed(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	// 详情含上游响应片段, 抹掉渠道密钥明文再回显。
+	if channel, channelErr := op.ChannelGet(request.ChannelID); channelErr == nil {
+		for i := range report.Results {
+			report.Results[i].Detail = redactChannelCredentials(channel, report.Results[i].Detail)
+		}
+	}
+	resp.Success(c, report)
 }
 
 func syncChannel(c *gin.Context) {

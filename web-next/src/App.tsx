@@ -29,6 +29,7 @@ import {
   loadMaskPage,
   loadModelEvalPage,
   loadContextProbePage,
+  loadProxyAccountsPage,
   loadSettingsPage,
 } from "@/lib/route-loaders";
 import { apiForbiddenEvent, apiUnauthorizedEvent } from "@/lib/api";
@@ -47,6 +48,7 @@ const CustomModelsPage = lazy(loadCustomModelsPage);
 const GroupsPage = lazy(loadGroupsPage);
 const ModelEvalPage = lazy(loadModelEvalPage);
 const ContextProbePage = lazy(loadContextProbePage);
+const ProxyAccountsPage = lazy(loadProxyAccountsPage);
 const MaskPage = lazy(loadMaskPage);
 const KeysPage = lazy(loadKeysPage);
 const LogsPage = lazy(loadLogsPage);
@@ -237,6 +239,14 @@ export default function App() {
           element={
             <LazyPage fallback={<TableSkeleton />}>
               <ContextProbePage />
+            </LazyPage>
+          }
+        />
+        <Route
+          path="/proxy-accounts"
+          element={
+            <LazyPage fallback={<TableSkeleton />}>
+              <ProxyAccountsPage />
             </LazyPage>
           }
         />

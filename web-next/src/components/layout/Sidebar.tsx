@@ -5,6 +5,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   FlaskConical,
+  HeartPulse,
   Ruler,
   GaugeCircle,
   KeyRound,
@@ -32,6 +33,7 @@ const OPERATIONS: NavItem[] = [
   { to: "/groups", label: "分组", icon: UsersRound },
   { to: "/model-eval", label: "模型评估", icon: FlaskConical },
   { to: "/context-probe", label: "上下文探测", icon: Ruler },
+  { to: "/proxy-accounts", label: "账号体检", icon: HeartPulse },
   { to: "/mask", label: "脱敏", icon: ShieldCheck },
   { to: "/chat", label: "对话", icon: MessageSquare },
 ];

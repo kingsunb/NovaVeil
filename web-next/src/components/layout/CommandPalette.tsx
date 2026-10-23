@@ -13,6 +13,7 @@ import {
   loadMaskPage,
   loadModelEvalPage,
   loadContextProbePage,
+  loadProxyAccountsPage,
   loadSettingsPage,
 } from "@/lib/route-loaders";
 
@@ -44,6 +45,7 @@ export function CommandPalette({
       { label: "前往 分组", hint: "导航", run: () => navigate("/groups"), load: loadGroupsPage },
       { label: "前往 模型评估", hint: "导航", run: () => navigate("/model-eval"), load: loadModelEvalPage },
       { label: "前往 上下文探测", hint: "导航", run: () => navigate("/context-probe"), load: loadContextProbePage },
+      { label: "前往 账号体检", hint: "导航", run: () => navigate("/proxy-accounts"), load: loadProxyAccountsPage },
       { label: "前往 脱敏", hint: "导航", run: () => navigate("/mask"), load: loadMaskPage },
       { label: "前往 对话", hint: "导航", run: () => navigate("/chat"), load: loadChatPage },
       { label: "前往 API 密钥", hint: "导航", run: () => navigate("/keys"), load: loadKeysPage },

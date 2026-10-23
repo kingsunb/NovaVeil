@@ -16,6 +16,7 @@ export {
   loadGroupsPage,
   loadModelEvalPage,
   loadContextProbePage,
+  loadProxyAccountsPage,
   loadMaskPage,
   loadKeysPage,
   loadLogsPage,

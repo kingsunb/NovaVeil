@@ -24,6 +24,7 @@ export const loadCustomModelsPage = createPageLoader(() => import("@/pages/Custo
 export const loadGroupsPage = createPageLoader(() => import("@/pages/Groups"));
 export const loadModelEvalPage = createPageLoader(() => import("@/pages/ModelEval"));
 export const loadContextProbePage = createPageLoader(() => import("@/pages/ContextProbe"));
+export const loadProxyAccountsPage = createPageLoader(() => import("@/pages/ProxyAccounts"));
 export const loadMaskPage = createPageLoader(() => import("@/pages/Mask"));
 export const loadKeysPage = createPageLoader(() => import("@/pages/Keys"));
 export const loadLogsPage = createPageLoader(() => import("@/pages/Logs"));
@@ -38,6 +39,7 @@ const navigationLoaders = new Map([
   ["/groups", loadGroupsPage.preload],
   ["/model-eval", loadModelEvalPage.preload],
   ["/context-probe", loadContextProbePage.preload],
+  ["/proxy-accounts", loadProxyAccountsPage.preload],
   ["/mask", loadMaskPage.preload],
   ["/keys", loadKeysPage.preload],
   ["/logs", loadLogsPage.preload],
