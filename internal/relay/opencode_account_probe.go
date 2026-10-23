@@ -276,12 +276,15 @@ type OpencodeAccountLedger struct {
 	Usable    int                       `json:"usable"`
 	Untested  int                       `json:"untested"`
 	Unusable  int                       `json:"unusable"`
+	// ProbeError 是最近一次体检遇基础设施故障(网络/代理/上游 5xx)的账号数:
+	// 不代表账号被封, 单独筛选便于复测。
+	ProbeError int `json:"probe_error"`
 }
 
-// ListOpencodeAccountStates 返回渠道账号台账并按三态派生与筛选。
-// filter: all(默认)/usable/untested/unusable。派生口径:
+// ListOpencodeAccountStates 返回渠道账号台账并按状态派生与筛选。
+// filter: all(默认)/usable/untested/unusable/error。派生口径:
 // 可用 = 未冷却且(最近探测健康 或 7 天内有转发成功); 未测试 = 从未探测且从未成功;
-// 不可用 = 冷却中, 或最近一次探测被拒/失败且无在效成功记录。
+// 不可用 = 冷却中或最近探测被上游拒绝; 网络错误 = 最近探测遇基础设施故障且无在效成功。
 func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLedger, error) {
 	channel, err := op.ChannelGet(channelID)
 	if err != nil {
@@ -303,16 +306,12 @@ func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLe
 			ledger.Usable++
 		case "untested":
 			ledger.Untested++
+		case "error":
+			ledger.ProbeError++
 		default:
 			ledger.Unusable++
 		}
-		if filter == "usable" && state != "usable" {
-			continue
-		}
-		if filter == "untested" && state != "untested" {
-			continue
-		}
-		if filter == "unusable" && state != "unusable" {
+		if filter != "all" && filter != state {
 			continue
 		}
 		ledger.Items = append(ledger.Items, OpencodeAccountLedgerItem{
@@ -330,7 +329,7 @@ func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLe
 	return ledger, nil
 }
 
-// ocAccountLedgerState 派生台账条目的三态。
+// ocAccountLedgerState 派生台账条目的四态: usable/untested/unusable/error。
 func ocAccountLedgerState(row model.OpencodeProxyAccount, now time.Time) string {
 	if now.Before(row.CooldownUntil) {
 		return "unusable"
@@ -341,6 +340,10 @@ func ocAccountLedgerState(row model.OpencodeProxyAccount, now time.Time) string 
 	}
 	if row.LastProbeOutcome == "" && row.LastSuccessAt.IsZero() {
 		return "untested"
+	}
+	// 网络/代理/上游 5xx 故障与「被上游拒绝」区分开: 前者不代表账号被封, 可复测。
+	if row.LastProbeOutcome == model.OpencodeAccountOutcomeError {
+		return "error"
 	}
 	return "unusable"
 }

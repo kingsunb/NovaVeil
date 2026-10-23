@@ -111,11 +111,22 @@ const ledger = {
       cooldown_until: "0001-01-01T00:00:00Z",
       source: "generated",
     },
+    {
+      account: "opencode0d9e0f1a2",
+      state: "error",
+      outcome: "error",
+      last_probe_status: 502,
+      last_probe_at: "2026-10-24T12:00:00Z",
+      last_success_at: "0001-01-01T00:00:00Z",
+      cooldown_until: "0001-01-01T00:00:00Z",
+      source: "generated",
+    },
   ],
-  total: 3,
+  total: 4,
   usable: 1,
   untested: 1,
   unusable: 1,
+  probe_error: 1,
 };
 
 /** 按台账接口口径过滤, 供 fetch mock 复用。 */
@@ -260,17 +271,26 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     await waitFor(() => expect(probeBodies).toHaveLength(1));
     expect(probeBodies[0]).toEqual({
       channel_id: 7,
-      accounts: ["opencode0a1b2c3d", "opencode0e4f5a6b", "opencode0c7d8e9f"],
+      accounts: [
+        "opencode0a1b2c3d",
+        "opencode0e4f5a6b",
+        "opencode0c7d8e9f",
+        "opencode0d9e0f1a2",
+      ],
       concurrency: 10,
     });
     expect(await screen.findByText("健康 1")).toBeInTheDocument();
   });
 
-  it("台账三态筛选与开关自动体检", async () => {
+  it("台账四态筛选、勾选账号与开关自动体检", async () => {
     const probeBodies: Array<Record<string, unknown>> = [];
     let ledgerEnabled = true;
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes("/channel/proxy-accounts/probe")) {
+        probeBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return jsonResponse(report);
+      }
       if (url.includes("/channel/proxy-accounts?")) return ledgerFor(url);
       if (url.includes("/channel/proxy-accounts/auto-probe")) {
         if (init?.method === "POST") {
@@ -293,16 +313,30 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     expect(await screen.findByText("可用 1")).toBeInTheDocument();
     expect(screen.getByText("未测试 1")).toBeInTheDocument();
     expect(screen.getByText("不可用 1")).toBeInTheDocument();
+    expect(screen.getByText("网络错误 1")).toBeInTheDocument();
     expect(screen.getByText(/冷却至/)).toBeInTheDocument();
 
     const user = userEvent.setup();
-    await user.click(screen.getByText("未测试 1"));
-    expect(await screen.findByText("opencode0c7d8e9f")).toBeInTheDocument();
-    expect(screen.queryByText("opencode0a1b2c3d")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("switch"));
+    // 勾选不可用与网络错误两个账号 → 一键测试只测勾选的
+    await user.click(screen.getByLabelText(/选择账号 opencode0e4f5a6b/));
+    await user.click(screen.getByLabelText(/选择账号 opencode0d9e0f1a2/));
+    await user.click(screen.getByRole("button", { name: "测试已选 2 个账号" }));
     await waitFor(() => expect(probeBodies).toHaveLength(1));
-    expect(probeBodies[0]).toEqual({ enabled: false });
+    expect(probeBodies[0]).toEqual({
+      channel_id: 7,
+      accounts: ["opencode0e4f5a6b", "opencode0d9e0f1a2"],
+      concurrency: 10,
+    });
+
+    // 网络错误筛选: 台账只剩网络错误账号(结果表仍展示批量体检结果)
+    await user.click(screen.getByText("网络错误 1"));
+    expect(await screen.findByText("opencode0d9e0f1a2")).toBeInTheDocument();
+    expect(screen.getAllByText("opencode0a1b2c3d")).toHaveLength(1);
+
+    // 开关自动体检
+    await user.click(screen.getByRole("switch"));
+    await waitFor(() => expect(probeBodies.length).toBeGreaterThanOrEqual(2));
+    expect(probeBodies[probeBodies.length - 1]).toEqual({ enabled: false });
   });
 
   it("台账删除账号后刷新列表", async () => {

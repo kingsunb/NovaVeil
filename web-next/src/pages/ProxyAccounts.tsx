@@ -61,9 +61,10 @@ interface Ledger {
   usable: number;
   untested: number;
   unusable: number;
+  probe_error: number;
 }
 
-type LedgerFilter = "all" | "usable" | "untested" | "unusable";
+type LedgerFilter = "all" | "usable" | "untested" | "unusable" | "error";
 
 function fmtTime(value: string): string {
   if (!value || value.startsWith("0001-")) return "-";
@@ -87,12 +88,14 @@ function outcomeLabel(outcome: string): string {
 function ledgerStateLabel(state: string): string {
   if (state === "usable") return zhCN.proxyAccounts.stateUsable;
   if (state === "unusable") return zhCN.proxyAccounts.stateUnusable;
+  if (state === "error") return zhCN.proxyAccounts.stateError;
   return zhCN.proxyAccounts.stateUntested;
 }
 
-function ledgerStateTone(state: string): "success" | "danger" | "info" {
+function ledgerStateTone(state: string): "success" | "danger" | "warning" | "info" {
   if (state === "usable") return "success";
   if (state === "unusable") return "danger";
+  if (state === "error") return "warning";
   return "info";
 }
 
@@ -110,12 +113,15 @@ function ChannelSection({ channel }: { channel: Channel }) {
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<AccountProbeReport | null>(null);
   const [ledgerFilter, setLedgerFilter] = useState<LedgerFilter>("all");
+  const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set());
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
 
   const ledgerQuery = useQuery({
     queryKey: ["proxy-accounts", channel.id, ledgerFilter],
     queryFn: () => api.listProxyAccounts(channel.id, ledgerFilter),
   });
+  const ledgerItems = ledgerQuery.data?.items ?? [];
+  const visibleSelected = ledgerItems.filter((item) => selectedAccounts.has(item.account)).length;
 
   function parseInputs(): { count: number; concurrency: number } | null {
     const parsedCount = Math.floor(Number(count));
@@ -157,14 +163,18 @@ function ChannelSection({ channel }: { channel: Channel }) {
     }
   }
 
-  /** 一键测试台账全部账号: 按 200 个一批顺序体检, 结果累计展示。 */
+  /** 一键测试: 勾选了账号时只测勾选的, 否则测台账全部; 按 200 个一批顺序体检。 */
   async function runBulkTest() {
     const inputs = parseInputs();
     const concurrency = inputs?.concurrency ?? DEFAULT_CONCURRENCY;
     setBulk({ done: 0, total: 0 });
     try {
       const full = await api.listProxyAccounts(channel.id, "all");
-      const accounts = (full.items ?? []).map((item) => item.account);
+      const ledgerAccounts = (full.items ?? []).map((item) => item.account);
+      const accounts =
+        selectedAccounts.size > 0
+          ? ledgerAccounts.filter((account) => selectedAccounts.has(account))
+          : ledgerAccounts;
       if (accounts.length === 0) {
         toast.info(zhCN.proxyAccounts.emptyLedger);
         setBulk(null);
@@ -197,6 +207,7 @@ function ChannelSection({ channel }: { channel: Channel }) {
         summary: { total: results.length, healthy, rejected, failed },
       });
       await queryClient.invalidateQueries({ queryKey: ["proxy-accounts"] });
+      setSelectedAccounts(new Set());
       toast.success(zhCN.proxyAccounts.runDone(healthy, rejected, failed));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.requestFailed);
@@ -292,6 +303,7 @@ function ChannelSection({ channel }: { channel: Channel }) {
                 ["usable", zhCN.proxyAccounts.filterUsable, ledgerQuery.data?.usable ?? 0, "success"],
                 ["untested", zhCN.proxyAccounts.filterUntested, ledgerQuery.data?.untested ?? 0, "info"],
                 ["unusable", zhCN.proxyAccounts.filterUnusable, ledgerQuery.data?.unusable ?? 0, "danger"],
+                ["error", zhCN.proxyAccounts.filterError, ledgerQuery.data?.probe_error ?? 0, "warning"],
               ] as const
             ).map(([value, label, count, tone]) => (
               <button
@@ -314,7 +326,9 @@ function ChannelSection({ channel }: { channel: Channel }) {
             >
               {bulk
                 ? zhCN.proxyAccounts.bulkRunning(bulk.done, bulk.total)
-                : zhCN.proxyAccounts.bulkTest}
+                : selectedAccounts.size > 0
+                  ? zhCN.proxyAccounts.bulkTestSelected(selectedAccounts.size)
+                  : zhCN.proxyAccounts.bulkTest}
             </Button>
           </div>
           {(ledgerQuery.data?.items?.length ?? 0) === 0 ? (
@@ -324,6 +338,21 @@ function ChannelSection({ channel }: { channel: Channel }) {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-muted-foreground">
+                    <th className="px-2 py-2">
+                      <input
+                        type="checkbox"
+                        aria-label={zhCN.proxyAccounts.selectAllVisible}
+                        checked={ledgerItems.length > 0 && visibleSelected === ledgerItems.length}
+                        onChange={(event) => {
+                          const next = new Set(selectedAccounts);
+                          for (const item of ledgerItems) {
+                            if (event.target.checked) next.add(item.account);
+                            else next.delete(item.account);
+                          }
+                          setSelectedAccounts(next);
+                        }}
+                      />
+                    </th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnAccount}</th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnOutcome}</th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnLastSuccess}</th>
@@ -334,6 +363,19 @@ function ChannelSection({ channel }: { channel: Channel }) {
                 <tbody>
                   {(ledgerQuery.data?.items ?? []).map((item) => (
                     <tr key={item.account} className="border-b last:border-0">
+                      <td className="px-2 py-2">
+                        <input
+                          type="checkbox"
+                          aria-label={`${zhCN.proxyAccounts.selectAccount} ${item.account}`}
+                          checked={selectedAccounts.has(item.account)}
+                          onChange={(event) => {
+                            const next = new Set(selectedAccounts);
+                            if (event.target.checked) next.add(item.account);
+                            else next.delete(item.account);
+                            setSelectedAccounts(next);
+                          }}
+                        />
+                      </td>
                       <td className="px-2 py-2 font-mono">{item.account}</td>
                       <td className="px-2 py-2">
                         <Pill tone={ledgerStateTone(item.state)}>{ledgerStateLabel(item.state)}</Pill>
