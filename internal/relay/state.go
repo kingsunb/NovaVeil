@@ -731,6 +731,9 @@ func ClassifyError(err error) ErrClass {
 	if errors.Is(err, errChannelConcurrencyFull) || errors.Is(err, errAllChannelsBusy) {
 		return ErrClassChannelBusy
 	}
+	if errors.Is(err, errRequestTooLarge) || errors.Is(err, errContextWindowExceeded) {
+		return ErrClassUpstream4xx
+	}
 	if isInfrastructureError(err) {
 		return ErrClassUpstreamNetwork
 	}

@@ -102,7 +102,7 @@ describe("<ContextProbePage /> 窗口定义", () => {
     expect(await screen.findByText("model-a")).toBeInTheDocument();
     expect(screen.getByText("model-b")).toBeInTheDocument();
     // 同步目录值只展示, 人工值才标"已定义"。
-    expect(screen.getByText("同步 1M")).toBeInTheDocument();
+    expect(screen.getByText("同步（仅展示） 1M")).toBeInTheDocument();
     expect(screen.getByText("已定义 128K")).toBeInTheDocument();
 
     await user.click(screen.getByLabelText("选择渠道 OpenCode Free"));
@@ -240,12 +240,17 @@ describe("<ContextProbePage /> 精度与批量语义", () => {
     await user.click(screen.getByLabelText("展开渠道"));
 
     expect(await screen.findByText("已定义 131.072K")).toBeInTheDocument();
-    expect(screen.getByText("同步 1M")).toBeInTheDocument();
+    expect(screen.getByText("同步（仅展示） 1M")).toBeInTheDocument();
     expect(
-      screen.getByTitle("人工覆盖的上下文窗口：131,072 token；优先于同步目录值"),
+      screen.getByTitle("手动上下文窗口：131,072 token；参与路由过滤"),
     ).toBeInTheDocument();
     expect(
-      screen.getByTitle("同步目录值：1,000,000 token；无人工覆盖时参与路由跳过"),
+      screen.getByTitle("同步目录值：1,000,000 token；仅展示，不参与路由过滤"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "探测或手动保存写入的是手动窗口，会成为路由限制；同步目录值仅展示。",
+      ),
     ).toBeInTheDocument();
   });
 

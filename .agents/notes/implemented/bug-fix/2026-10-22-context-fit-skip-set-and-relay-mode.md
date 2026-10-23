@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> 现行窗口来源与请求级不可用跳过见 [仅手动窗口参与选路且请求级不可用成员不冷却](2026-10-23-manual-window-only-and-infeasible-skip.md)。
+
 > 现行未知窗口处理见 [窗口未知的分组成员照常尝试](2026-10-23-context-fit-unknown-window-attempt.md)。
 
 ## 问题

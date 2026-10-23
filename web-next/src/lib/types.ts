@@ -61,7 +61,7 @@ export interface ChannelModel {
    * 空或缺失表示按渠道类型转发；不要把缺省显示成错误。
    */
   upstream_protocol?: ChannelUpstreamProtocol;
-  /** 上下文窗口大小(token); 0 表示未知。来自 OpenCode 公开目录。 */
+  /** 同步目录窗口(token); 仅展示，不参与路由过滤。 */
   context_window?: number;
   /** 最大输出 token; 0 表示未知。来自 OpenCode 公开目录。 */
   max_output?: number;
@@ -78,7 +78,7 @@ export interface ChannelModel {
 export interface ChannelModelLimit {
   max_output?: number;
   thinking_level?: string;
-  /** 手动覆盖的上下文窗口；0/缺失时回落到同步目录值。 */
+  /** 手动上下文窗口；仅 >0 参与路由过滤，0/缺失表示未填。 */
   context_window?: number;
 }
 
@@ -280,7 +280,7 @@ export interface GroupRelayConfig {
   auto_match_models: boolean;
   /** 是否把响应里的模型名改写回客户端请求的分组名，避免聚合分组透传真实上游模型名，默认 false。 */
   echo_response_model: boolean;
-  /** 是否按请求估算跳过上下文窗口不足的成员，默认 false；窗口未知（0）时照常尝试。 */
+  /** 是否按手动窗口跳过装不下的成员，默认 false；同步窗口仅展示，未填手动窗口时照常尝试。 */
   context_fit_enabled: boolean;
 }
 

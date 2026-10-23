@@ -99,36 +99,52 @@ function nextDraftItemUid(prefix = "new") {
   return `${prefix}:${draftItemSeq}`;
 }
 
-/** 人工窗口优先，其次同步目录窗口。 */
+interface MemberWindowValues {
+  manual: number;
+  synced: number;
+}
+
+/** 仅手动窗口参与过滤；同步目录值只用于展示。 */
 function memberContextWindow(
   channel: Channel | undefined,
   modelName: string | undefined,
-): number {
-  if (!channel || !modelName) return 0;
-  const manual = channel.model_limits?.[modelName]?.context_window ?? 0;
-  if (manual > 0) return manual;
-  return channel.models?.find((model) => model.name === modelName)?.context_window ?? 0;
+): MemberWindowValues {
+  if (!channel || !modelName) return { manual: 0, synced: 0 };
+  return {
+    manual: channel.model_limits?.[modelName]?.context_window ?? 0,
+    synced: channel.models?.find((model) => model.name === modelName)?.context_window ?? 0,
+  };
 }
 
 /** 上下文过滤开启时才出现的成员窗口标注。 */
-function MemberContextWindow({ tokens }: { tokens: number }) {
-  if (tokens <= 0) {
+function MemberContextWindow({ windows }: { windows: MemberWindowValues }) {
+  if (windows.manual <= 0 && windows.synced > 0) {
+    return (
+      <span
+        className="shrink-0 text-[10px] tabular-nums text-ink-muted"
+        title={zhCN.groups.syncedWindowTitle(windows.synced.toLocaleString("en-US"))}
+      >
+        {zhCN.groups.syncedWindow(windows.synced.toLocaleString("en-US"))}
+      </span>
+    );
+  }
+  if (windows.manual <= 0) {
     return (
       <span
         className="shrink-0 text-[10px] text-ink-subtle"
-        title={zhCN.groups.undefinedWindowTitle}
+        title={zhCN.groups.manualWindowUnsetTitle}
       >
-        {zhCN.groups.undefinedWindow}
+        {zhCN.groups.manualWindowUnset}
       </span>
     );
   }
   return (
     <span
       className="shrink-0"
-      title={zhCN.groups.definedWindowTitle(formatExactTokens(tokens))}
+      title={zhCN.groups.definedWindowTitle(formatExactTokens(windows.manual))}
     >
       <Pill tone="neutral" dot={false} className="text-[10px]">
-        {formatWindowTokens(tokens)} {zhCN.groups.windowSuffix}
+        {formatWindowTokens(windows.manual)} {zhCN.groups.windowSuffix}
       </Pill>
     </span>
   );
@@ -445,7 +461,7 @@ export default function GroupsPage() {
                               g.relay_config?.context_fit_enabled &&
                               !it.ref_group_name && (
                                 <MemberContextWindow
-                                  tokens={memberContextWindow(
+                                  windows={memberContextWindow(
                                     channel,
                                     it.channel_model?.name,
                                   )}
@@ -1167,7 +1183,7 @@ function GroupEditor({
                             relayConfig.context_fit_enabled &&
                             !it.ref_group_name && (
                               <MemberContextWindow
-                                tokens={memberContextWindow(
+                                windows={memberContextWindow(
                                   channel,
                                   it.channel_model?.name,
                                 )}
@@ -1538,7 +1554,7 @@ function GroupEditor({
               />
               <Toggle
                 label="上下文窗口过滤"
-                description="按请求估算 token 跳过装不下请求的成员；人工窗口优先，其次同步目录窗口，仍未知则照常尝试"
+                description="按请求估算 token 跳过装不下请求的成员；只有手动填写的窗口参与过滤，同步目录值仅展示，未填则照常尝试"
                 checked={relayConfig.context_fit_enabled}
                 onChange={(v) => updateRelay("context_fit_enabled", v)}
               />

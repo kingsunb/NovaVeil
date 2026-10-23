@@ -70,7 +70,7 @@ type Channel struct {
 type ChannelModelLimit struct {
 	MaxOutput     *int   `json:"max_output,omitempty"`     // 注入上游请求的最大输出 token 数, 未配置表示不限制。
 	ThinkingLevel string `json:"thinking_level,omitempty"` // 思考等级: off/minimal/low/medium/high/xhigh/max, 未配置表示不注入。
-	ContextWindow *int   `json:"context_window,omitempty"` // 手动覆盖的上下文窗口; 空或 <=0 表示沿用同步来的元数据。
+	ContextWindow *int   `json:"context_window,omitempty"` // 手动上下文窗口; 仅 >0 参与路由过滤, 空或 <=0 表示未填。
 }
 
 // 渠道提供的单个上游模型。
@@ -80,7 +80,7 @@ type ChannelModel struct {
 	Name              string             `json:"name" gorm:"not null;index:idx_channel_model_name,unique"`       // 上游模型名称。
 	Source            ChannelModelSource `json:"source" gorm:"not null;default:auto"`                            // 模型来源。
 	UpstreamProtocol  string             `json:"upstream_protocol" gorm:"not null;default:''"`                   // 上游原生协议: chat/responses/anthropic; 空表示按渠道类型。
-	ContextWindow     int                `json:"context_window" gorm:"not null;default:0"`                       // 上下文窗口大小(token); 0 表示未知。
+	ContextWindow     int                `json:"context_window" gorm:"not null;default:0"`                       // 同步目录窗口(token); 仅供展示, 不参与路由过滤。
 	MaxOutput         int                `json:"max_output" gorm:"not null;default:0"`                           // 最大输出 token; 0 表示未知。
 	Reasoning         bool               `json:"reasoning" gorm:"not null;default:false"`                        // 是否支持推理(thinking/reasoning)。
 	ToolCall          bool               `json:"tool_call" gorm:"not null;default:false"`                        // 是否支持工具调用(function calling)。

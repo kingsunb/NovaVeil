@@ -232,17 +232,18 @@ func TestContextFitRefChainAllSkippedDoesNotPublish(t *testing.T) {
 	assertNoPublishedCurrent(t, snapshots, top.ID, refID)
 }
 
-func TestContextFitAttemptsUnknownWindowMember(t *testing.T) {
+func TestContextFitIgnoresSyncedWindowForFiltering(t *testing.T) {
 	setupFailoverTest(t)
-	var unknownHits, knownHits atomic.Int64
-	unknown := chatUpstream(t, &unknownHits, "unknown")
-	known := chatUpstream(t, &knownHits, "known")
-	unknownChannel := createIntegrationChannel(t, "ctx-unknown", model.ChannelProviderOpenAI, unknown.URL, "ctx-unknown-model")
-	knownChannel := createIntegrationChannel(t, "ctx-synced", model.ChannelProviderOpenAI, known.URL, "ctx-synced-model")
-	setIntegrationSyncedContextWindow(t, knownChannel, "ctx-synced-model", 1_000_000)
-	group := createIntegrationGroup(t, "ctx-unknown-and-synced", contextFitRouteConfig(),
-		integrationLeafItem(t, unknownChannel, "ctx-unknown-model"),
-		integrationLeafItem(t, knownChannel, "ctx-synced-model"))
+	var syncedHits, manualHits atomic.Int64
+	synced := chatUpstream(t, &syncedHits, "synced-window-ignored")
+	manual := chatUpstream(t, &manualHits, "manual-window-used")
+	syncedChannel := createIntegrationChannel(t, "ctx-synced-only", model.ChannelProviderOpenAI, synced.URL, "ctx-synced-only-model")
+	manualChannel := createIntegrationChannel(t, "ctx-manual-large", model.ChannelProviderOpenAI, manual.URL, "ctx-manual-large-model")
+	setIntegrationSyncedContextWindow(t, syncedChannel, "ctx-synced-only-model", 200_000)
+	setIntegrationContextWindow(t, manualChannel.ID, "ctx-manual-large-model", 1_000_000)
+	group := createIntegrationGroup(t, "ctx-synced-only-and-manual", contextFitRouteConfig(),
+		integrationLeafItem(t, syncedChannel, "ctx-synced-only-model"),
+		integrationLeafItem(t, manualChannel, "ctx-manual-large-model"))
 	if snapshot, err := op.GroupGetByName(group.Name); err != nil {
 		t.Fatalf("读取分组失败: %v", err)
 	} else if got := routableCandidateCount(snapshot); got != 2 {
@@ -252,13 +253,13 @@ func TestContextFitAttemptsUnknownWindowMember(t *testing.T) {
 	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
 	recorder := postRelayJSON(t, engine, path, contextFitBody(group.Name, 689_106), "", nil)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("未知窗口成员应照常尝试并成功, 实际 %d: %s", recorder.Code, recorder.Body.String())
+		t.Fatalf("仅同步窗口的成员应照常尝试并成功, 实际 %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if unknownHits.Load() != 1 {
-		t.Fatalf("未知窗口成员应由首个优先级承载一次, 实际 %d", unknownHits.Load())
+	if syncedHits.Load() != 1 {
+		t.Fatalf("同步 200K 不应参与过滤, 首成员应由上游判定, 实际 %d", syncedHits.Load())
 	}
-	if knownHits.Load() != 0 {
-		t.Fatalf("未知窗口成员成功后不应命中后续 1M 成员, 实际 %d", knownHits.Load())
+	if manualHits.Load() != 0 {
+		t.Fatalf("首成员成功后不应命中后续手动 1M 成员, 实际 %d", manualHits.Load())
 	}
 }
 

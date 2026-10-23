@@ -248,16 +248,13 @@ func maxReasoningEffortFor(channel model.Channel, modelName string) string {
 	return ""
 }
 
-// effectiveContextWindow 人工窗口优先, 否则回落到同步窗口。
+// effectiveContextWindow 仅手动窗口参与选路, 同步值仅供展示。
 func effectiveContextWindow(limits map[string]model.ChannelModelLimit, channelModel *model.ChannelModel) int {
 	if channelModel == nil {
 		return 0
 	}
 	if limit, ok := lookupModelLimit(limits, channelModel.Name); ok && limit.ContextWindow != nil && *limit.ContextWindow > 0 {
 		return *limit.ContextWindow
-	}
-	if channelModel.ContextWindow > 0 {
-		return channelModel.ContextWindow
 	}
 	return 0
 }

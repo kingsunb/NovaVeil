@@ -1451,10 +1451,10 @@ function ModelsTab({
     update("model_limits", limits);
   }
 
-  /** 上下文窗口：手动覆盖优先，否则沿用同步来的元数据。 */
-  function effectiveContextWindow(m: ChannelModel): number {
+  /** 仅手动窗口参与路由过滤。 */
+  function manualContextWindow(m: ChannelModel): number {
     const manual = draft.model_limits[m.name]?.context_window;
-    return manual && manual > 0 ? manual : (m.context_window ?? 0);
+    return manual && manual > 0 ? manual : 0;
   }
 
   const allChecked =
@@ -1718,10 +1718,19 @@ function ModelsTab({
                     {draft.opencode_compat ? (
                       <UpstreamProtocolLabel protocol={m.upstream_protocol} />
                     ) : null}
-                    {effectiveContextWindow(m) > 0 ? (
-                      <Pill tone="neutral" className="text-[10px]">
-                        {formatTokens(effectiveContextWindow(m))} ctx
-                      </Pill>
+                    {manualContextWindow(m) > 0 ? (
+                      <span title={zhCN.channelEditor.manualContextWindowTitle}>
+                        <Pill tone="neutral" className="text-[10px]">
+                          {formatTokens(manualContextWindow(m))} ctx
+                        </Pill>
+                      </span>
+                    ) : m.context_window && m.context_window > 0 ? (
+                      <span
+                        className="text-[10px] tabular-nums text-ink-muted"
+                        title={zhCN.channelEditor.syncedContextWindowTitle}
+                      >
+                        {zhCN.channelEditor.syncedContextWindow(formatTokens(m.context_window))}
+                      </span>
                     ) : null}
                     {m.max_output && m.max_output > 0 ? (
                       <Pill tone="neutral" className="text-[10px]">
@@ -1898,7 +1907,7 @@ function ModelsTab({
                   >
                     <Field
                       label="上下文窗口"
-                      hint="手动覆盖模型窗口；留空沿用同步来的上游值"
+                      hint={zhCN.channelEditor.contextWindowHint}
                     >
                       <Input
                         type="number"
@@ -1911,7 +1920,7 @@ function ModelsTab({
                             v ? { context_window: Math.max(0, Number(v)) } : { context_window: undefined },
                           );
                         }}
-                        placeholder="沿用上游"
+                        placeholder={zhCN.channelEditor.contextWindowPlaceholder}
                       />
                     </Field>
                     <Field
@@ -2398,4 +2407,3 @@ function AdvancedTab({
     </div>
   );
 }
-

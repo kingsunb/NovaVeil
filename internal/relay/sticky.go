@@ -153,7 +153,7 @@ func bindSessionSticky(group model.Group, sessionKey string, itemID int) {
 	}
 }
 
-// clearSessionStickyByItem 清除指向指定成员的全部会话粘合, 在该成员达到失败阈值进入冷却时调用。
+// clearSessionStickyByItem 清除指向指定成员的全部会话粘合, 用于冷却或请求级跳过。
 func clearSessionStickyByItem(groupID, itemID int) {
 	routeMu.Lock()
 	defer routeMu.Unlock()

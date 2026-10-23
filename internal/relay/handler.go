@@ -178,9 +178,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		exclude := 0                                   // 本请求已放弃的成员 ID, 重扫时跳过以免再次选中。
 		refSkips := 0                                  // 本请求内结构性跳过的引用计数, 超过成员总数说明全部引用均不可用。
 		nonRetryable := make(map[int]bool)             // 出现过确定性 4xx(400/404/422)的成员集合, 全部成员都出现时终止请求。
-		contextOverflowSeen := false                   // 本请求是否出现过上下文超限。
+		infeasibleForRequest := make(map[int]int)      // 本次请求对这些成员不可用(413/上下文超限), 不计失败也不冷却。
+		tooLargeContextHint := false                   // 413 正文是否同时指向上下文超限。
 		contextSkipped := make(map[int]bool)           // 上下文窗口装不下本请求而跳过的成员集合。
-		maxCandidateWindow := 0                        // 已知窗口候选的最大窗口值, 供拒绝消息给出量化提示。
+		maxCandidateWindow := 0                        // 手动窗口候选的最大窗口值, 供拒绝消息给出量化提示。
 		busyRejected := make(map[int]bool)             // 并发槽位满被本地准入拒绝的成员集合: 每成员满载一次即换下一优先级, 全部满载时终止请求。
 		rounds := 0                                    // 本请求已消耗的尝试轮次, 含引用链结构性跳过等一切循环路径。
 		startedAt := time.Now()                        // 请求进入转发循环的时刻, 用于整体安全截止时间判定。
@@ -258,6 +259,16 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					}
 				}
 			}
+			if len(infeasibleForRequest) > 0 {
+				combined := make(map[int]bool, len(selectionSkipped)+len(infeasibleForRequest))
+				for itemID := range selectionSkipped {
+					combined[itemID] = true
+				}
+				for itemID := range infeasibleForRequest {
+					combined[itemID] = true
+				}
+				selectionSkipped = combined
+			}
 
 			// 会话粘合仅在故障转移模式生效, 分组配置随时可改故每轮重新判断; 先在顶层选出本层成员。
 			item := model.GroupItem{}
@@ -275,7 +286,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				candidateCount := routableCandidateCount(group)
 				if allContextSkipped || (candidateCount > 0 && len(contextSkipped) >= candidateCount) {
 					detail := fmt.Errorf(
-						"%s（请求约 %d token，候选集最大窗口 %d token）",
+						"%s（请求约 %d token，手动窗口最大值 %d token）",
 						errContextWindowTooSmall.Error(),
 						estimateRequestTokens(raw.Body),
 						maxCandidateWindow,
@@ -432,9 +443,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				releaseRefChainHops(hops)
 				clearSessionStickyByItem(group.ID, item.ID)
 				if len(contextSkipped) >= routableCandidateCount(hops[0].group) {
-					// 报出请求规模与候选集最大窗口, 调用方可据此截断请求或换模型。
+					// 报出请求规模与最大手动窗口, 调用方可据此截断请求或换模型。
 					detail := fmt.Errorf(
-						"%s（请求约 %d token，候选集最大窗口 %d token）",
+						"%s（请求约 %d token，手动窗口最大值 %d token）",
 						errContextWindowTooSmall.Error(),
 						estimateModelTokens(raw.Body, channel.BaseURL, channelModel.Name),
 						maxCandidateWindow,
@@ -677,6 +688,26 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					releaseRefChainHops(hops)
 					continue
 				}
+				// 413 只说明本次请求体对当前成员过大, 不代表成员损坏:
+				// 请求内跳过并归还占用, 不写失败计数、不冷却健康成员。
+				if code, ok := UpstreamStatusCode(err); ok && code == http.StatusRequestEntityTooLarge {
+					infeasibleForRequest[item.ID] = code
+					if isContextOverflowRejection(err) {
+						tooLargeContextHint = true
+					}
+					request.releaseRoundLifecycle()
+					releaseRefChainHops(hops)
+					clearSessionStickyByItem(group.ID, item.ID)
+					if len(infeasibleForRequest) >= routableCandidateCount(hops[0].group) {
+						detail := requestInfeasibleError(infeasibleForRequest, tooLargeContextHint)
+						request.markFailed(detail, "", nil)
+						recordErrorLog(request)
+						rejectRequest(c, inbound, detail)
+						return
+					}
+					exclude = item.ID
+					continue
+				}
 				// 渠道并发槽位满载的本地准入拒绝: acquire 等待 1 秒后仍无空位, 未发起任何
 				// 上游调用。这不是上游故障, 不进入失败记账与成员冷却, 也不清会话粘合——
 				// 对齐请求体预算 413 的准入语义(bodylimit): 只拒绝本次准入, 不毒化成员健康度。
@@ -700,12 +731,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					exclude = item.ID
 					continue
 				}
-				// 出现过上下文超限时优先提示可行动原因。
-				if code, ok := UpstreamStatusCode(err); ok &&
-					(code == http.StatusBadRequest || code == http.StatusNotFound || code == http.StatusUnprocessableEntity) &&
-					isContextOverflowRejection(err) {
-					contextOverflowSeen = true
-				}
 				// 上游 400 先尝试清洗请求体;
 				// 确定性标记且无变化时直接排除该成员。
 				if code, ok := UpstreamStatusCode(err); ok && code == http.StatusBadRequest && !sanitizeRetried[item.ID] {
@@ -722,12 +747,25 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 				request.releaseRoundLifecycle()
 				// 其余确定性请求错误(400/404/422, 以及无密钥渠道的 401/403): 重试同一成员或等待冷却都不可能改变结果。
-				// 该成员照常计入失败并武装冷却, 立即换下一优先级; 当全部启用成员都各失败
+				// 上下文超限只请求级跳过; 其余该成员照常计入失败并武装冷却, 立即换下一优先级; 当全部启用成员都各失败
 				// 一次后终止请求, 把明确的错误交还下游——避免无意义的冷却-探测循环烧掉
 				// 轮次与时长预算(实测 Codex developer 角色被上游拒绝后空转 30 轮的案例)。
 				if code, ok := UpstreamStatusCode(err); ok && (code == http.StatusBadRequest || code == http.StatusNotFound || code == http.StatusUnprocessableEntity ||
 					(selectedKey.Key == "" && (code == http.StatusUnauthorized || code == http.StatusForbidden))) {
-					request.releaseRoundLifecycle()
+					if isContextOverflowRejection(err) {
+						infeasibleForRequest[item.ID] = code
+						releaseRefChainHops(hops)
+						clearSessionStickyByItem(group.ID, item.ID)
+						if len(infeasibleForRequest) >= routableCandidateCount(hops[0].group) {
+							detail := requestInfeasibleError(infeasibleForRequest, tooLargeContextHint)
+							request.markFailed(detail, "", nil)
+							recordErrorLog(request)
+							rejectRequest(c, inbound, detail)
+							return
+						}
+						exclude = item.ID
+						continue
+					}
 					releaseRefChainHops(hops[:len(hops)-1])
 					// 同一成员反复出现确定性 4xx 只记一次, 集合按成员去重后与可达叶子数比较:
 					// 分母复用 routableLeafCount 而非 len(group.Items), 与满载终止同口径——
@@ -735,11 +773,16 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					recordRouteFailureIfReal(group, item.ID, failureCounts, err)
 					clearSessionStickyByItem(group.ID, item.ID)
 					nonRetryable[item.ID] = true
-					if len(nonRetryable) >= routableCandidateCount(hops[0].group) {
-						request.markFailed(err, "", nil)
+					if len(nonRetryable)+len(infeasibleForRequest) >= routableCandidateCount(hops[0].group) {
+						infeasibleErr := requestInfeasibleError(infeasibleForRequest, tooLargeContextHint)
+						stateErr := infeasibleErr
+						if stateErr == nil {
+							stateErr = err
+						}
+						request.markFailed(stateErr, "", nil)
 						recordErrorLog(request)
-						if contextOverflowSeen {
-							rejectRequest(c, inbound, errContextWindowExceeded)
+						if infeasibleErr != nil {
+							rejectRequest(c, inbound, infeasibleErr)
 						} else {
 							rejectRequest(c, inbound, errNoAvailableChannels)
 						}
@@ -1311,6 +1354,25 @@ var errNoAvailableChannels = errors.New("暂无可用渠道")
 // errContextWindowExceeded 表示全组上下文超限。
 var errContextWindowExceeded = errors.New("请求上下文超出模型上限，请减少输入或提高模型窗口")
 
+// errRequestTooLarge 表示全部候选均拒绝当前请求体。
+var errRequestTooLarge = errors.New("请求体超过上游限制（413），请减小上下文后重试")
+
+// requestInfeasibleError 汇总本请求的成员级不可用原因, 413 优先。
+func requestInfeasibleError(seen map[int]int, tooLargeContextHint bool) error {
+	for _, code := range seen {
+		if code == http.StatusRequestEntityTooLarge {
+			if tooLargeContextHint {
+				return fmt.Errorf("%w（输入可能超出上游上下文窗口）", errRequestTooLarge)
+			}
+			return errRequestTooLarge
+		}
+	}
+	if len(seen) > 0 {
+		return errContextWindowExceeded
+	}
+	return nil
+}
+
 // errAllRequestsStopped 在管理端「一键停止所有请求」置位期间作为入口与在途的统一终止原因;
 // 使用与 errNoAvailableChannels 相同的 rejectRequest 路径返回 503, 避免对客户端协议层的额外协议变更。
 var errAllRequestsStopped = errors.New("服务器过载，请稍候")
@@ -1430,12 +1492,14 @@ func recordErrorLog(request *RequestState) {
 // rejectRequest 以客户端协议的错误格式返回请求级失败, 用于尚未登记状态因而无需定稿的请求。
 // 管理端「一键停止」属于瞬态不可用, 返回 503(+Retry-After) 让下游 SDK 按可重试处理;
 // 暂无可用渠道保持 400: 这是测试钉死的既有下游契约(客户端按确定性失败自行重试整个请求),
-// 其余请求级错误(协议/参数问题)同为 400, 下游按不可重试的确定性失败处理。
+// 请求体超过上游限制返回 413, 其余请求级错误(协议/参数问题)为 400。
 func rejectRequest(c *gin.Context, inbound transformer.Inbound, err error) {
 	status := http.StatusBadRequest
 	if errors.Is(err, errAllRequestsStopped) || errors.Is(err, errAllChannelsBusy) {
 		status = http.StatusServiceUnavailable
 		c.Header("Retry-After", "5")
+	} else if errors.Is(err, errRequestTooLarge) {
+		status = http.StatusRequestEntityTooLarge
 	}
 	response := inbound.TransformError(c.Request.Context(), &llm.ResponseError{
 		StatusCode: status,

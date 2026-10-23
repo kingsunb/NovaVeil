@@ -9,8 +9,8 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/model"
 )
 
-// errContextWindowTooSmall 表示全部候选成员的窗口都装不下本请求。
-var errContextWindowTooSmall = errors.New("没有候选模型的上下文窗口能容纳当前请求")
+// errContextWindowTooSmall 表示全部候选成员的手动窗口都装不下本请求。
+var errContextWindowTooSmall = errors.New("没有候选模型的手动上下文窗口能容纳当前请求")
 
 // estimateRequestTokens 按字符宽度粗估请求 token 数: 非 ASCII 字按 1, ASCII 每 4 字按 1。
 // 全渠道共用这一基准口径; 探测实测出的密度比统一在 estimateModelTokens 叠加。

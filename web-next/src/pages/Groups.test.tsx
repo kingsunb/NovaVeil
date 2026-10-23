@@ -1129,7 +1129,7 @@ describe("分组上下文窗口展示", () => {
     await waitFor(() => screen.getByText("gpt-4o-prod"));
 
     expect(screen.queryByText("131.072K 窗口")).not.toBeInTheDocument();
-    expect(screen.queryByText("未定义窗口")).not.toBeInTheDocument();
+    expect(screen.queryByText("未填（不参与过滤）")).not.toBeInTheDocument();
   });
 
   it("上下文过滤开启：显示人工定义窗口，未定义的显式标注", async () => {
@@ -1142,21 +1142,24 @@ describe("分组上下文窗口展示", () => {
     );
     expect(
       screen.getByTitle(
-        "生效的上下文窗口：131,072 token；请求估算超出即跳过该成员",
+        "手动上下文窗口：131,072 token；请求估算超出即跳过该成员",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText("未定义窗口")).toBeInTheDocument();
+    expect(screen.getByText("未填（不参与过滤）")).toBeInTheDocument();
   });
 
-  it("人工窗口缺失时两个成员都回落到同步目录窗口", async () => {
+  it("人工窗口缺失时同步目录窗口只展示不参与过滤", async () => {
     setupFetch(groupWithFitOn, channelWithSyncedWindow);
     render(<GroupsPage />, { wrapper: Wrapper });
     await waitFor(() => screen.getByText("gpt-4o-prod"));
 
-    expect(await screen.findByText("128K 窗口")).toBeInTheDocument();
-    expect(await screen.findByText("200K 窗口")).toBeInTheDocument();
+    expect(await screen.findByText("同步 128,000（仅展示）")).toBeInTheDocument();
+    expect(await screen.findByText("同步 200,000（仅展示）")).toBeInTheDocument();
+    expect(
+      screen.getByTitle("同步目录窗口：128,000；仅展示，不参与路由过滤"),
+    ).toBeInTheDocument();
     expect(screen.queryByText("131.072K 窗口")).not.toBeInTheDocument();
-    expect(screen.queryByText("未定义窗口")).not.toBeInTheDocument();
+    expect(screen.queryByText("未填（不参与过滤）")).not.toBeInTheDocument();
   });
 
   it("编辑页跟开关实时联动：关闭不显示，开启后显示", async () => {
@@ -1180,7 +1183,7 @@ describe("分组上下文窗口展示", () => {
     await waitFor(() =>
       expect(within(dialog).getByText("131.072K 窗口")).toBeInTheDocument(),
     );
-    expect(within(dialog).getByText("未定义窗口")).toBeInTheDocument();
+    expect(within(dialog).getByText("未填（不参与过滤）")).toBeInTheDocument();
   });
 });
 

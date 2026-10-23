@@ -3,6 +3,8 @@ package relay
 import (
 	"strings"
 	"testing"
+
+	"github.com/kingsunb/NovaVeil/internal/model"
 )
 
 func TestEstimateRequestTokens(t *testing.T) {
@@ -93,5 +95,20 @@ func TestContextFitsWindow(t *testing.T) {
 				t.Fatalf("contextFitsWindow(window=%d) = %v, want %v", tc.window, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestEffectiveContextWindowOnlyUsesManualValue(t *testing.T) {
+	channelModel := &model.ChannelModel{Name: "manual-only", ContextWindow: 200_000}
+	if got := effectiveContextWindow(nil, channelModel); got != 0 {
+		t.Fatalf("同步窗口不应参与过滤, got %d", got)
+	}
+
+	manual := 300_000
+	limits := map[string]model.ChannelModelLimit{
+		"manual-only": {ContextWindow: &manual},
+	}
+	if got := effectiveContextWindow(limits, channelModel); got != manual {
+		t.Fatalf("手动窗口 = %d, want %d", got, manual)
 	}
 }
