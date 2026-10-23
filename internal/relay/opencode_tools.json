@@ -253,6 +253,36 @@
       "type": "object"
     }
   },
+  "todowrite": {
+    "description": "Create and update a todo list for the current session. The user sees it as your working plan.\n\nUse it proactively when a task has 3 or more distinct steps, or when the user gives several tasks or asks for a todo list. Skip it for a single simple task or a purely conversational request. When in doubt, use it.\n\n- Send the full list on every call; it replaces the previous one.\n- Mark items `in_progress` when you start them and `completed` as soon as they're actually done.\n- Only call it when the list changes.",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "todos": {
+          "description": "The updated todo list",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "description": "Brief description of the task",
+                "type": "string"
+              },
+              "status": {
+                "description": "Current status of the task: pending, in_progress, completed, cancelled",
+                "enum": ["pending", "in_progress", "completed", "cancelled"],
+                "type": "string"
+              }
+            },
+            "required": ["content", "status"],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": ["todos"],
+      "type": "object"
+    }
+  },
   "webfetch": {
     "description": "Fetch content from an HTTP or HTTPS URL and return it as text, markdown, or HTML. Markdown is the default.\n\nUse a more targeted tool when one is available. This tool is read-only. Large text results may be replaced with a preview while the complete output is retained in managed storage.",
     "parameters": {

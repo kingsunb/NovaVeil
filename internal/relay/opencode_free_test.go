@@ -316,7 +316,7 @@ func TestOpencodeToolMatchesRequiresStrictFalse(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			function := map[string]any{
 				"name":        "shell",
-				"description": def.Description,
+				"description": opencodeToolDescription("shell", def.Description),
 				"parameters":  def.Parameters,
 			}
 			if tc.include {
@@ -363,7 +363,7 @@ func TestApplyOpencodeFreeLaneHeadersV2UserAgent(t *testing.T) {
 		Body:    []byte(`{"model":"chat-x"}`),
 	}
 	applyOpencodeFreeLaneHeaders(channel, request, "chat-x")
-	if got := request.Headers.Get("User-Agent"); got != "opencode/latest/2.1.3/cli" {
+	if got := request.Headers.Get("User-Agent"); got != "opencode/latest/2.1.4/cli" {
 		t.Fatalf("User-Agent = %q, 期望 v2 动态值", got)
 	}
 	if got := request.Headers.Get("Accept"); got != "*/*" {

@@ -86,7 +86,7 @@ var BuiltinFreeChannels = []model.Channel{
 		OpencodeCompat: true,
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "cli"},
-			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.3/cli"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.4/cli"},
 		},
 		Models: []model.ChannelModel{
 			// 协议来自 models.opencode.ai 的 opencode 提供方：这六个模型没有单独的
@@ -114,7 +114,7 @@ var BuiltinFreeChannels = []model.Channel{
 		OpencodeCompat: true,
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "cli"},
-			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.3/cli"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.4/cli"},
 		},
 		Models: []model.ChannelModel{
 			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
@@ -138,7 +138,7 @@ var BuiltinFreeChannels = []model.Channel{
 		OpencodeCompat: true,
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "cli"},
-			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.3/cli"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.4/cli"},
 		},
 		Models: []model.ChannelModel{
 			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
@@ -385,7 +385,7 @@ var BuiltinOfficialChannels = []model.Channel{
 		OpencodeCompat: true,
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "desktop"},
-			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.3/desktop"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.4/desktop"},
 		},
 	},
 	{

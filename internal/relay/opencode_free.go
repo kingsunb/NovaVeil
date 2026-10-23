@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -78,7 +79,7 @@ func opencodeToolMatches(def opencodeToolDef, tool gjson.Result, protocol string
 			return false
 		}
 	}
-	if tool.Get(descPath).String() != def.Description {
+	if tool.Get(descPath).String() != opencodeToolDescription(tool.Get(namePath).String(), def.Description) {
 		return false
 	}
 	if def.Parameters == nil {
@@ -102,6 +103,14 @@ func toolFieldPaths(protocol string) (namePath, descPath, paramPath string) {
 	}
 }
 
+// opencodeToolDescription 按平台调整 shell 工具描述。
+func opencodeToolDescription(name, description string) string {
+	if name == "shell" && runtime.GOOS == "windows" {
+		return strings.Replace(description, "on Linux using bash", "on Windows using powershell", 1)
+	}
+	return description
+}
+
 // isOpencodeFreeModel 判定该渠道上的模型是否落在 OpenCode Zen 免费档:
 // 渠道 BaseURL 是 /zen 或 /inference(见 model.OpenCodeTier 的档位识别), 并且
 // 渠道是内置免费渠道, 或模型名含 "free" 子串(不区分大小写, 对齐 opencode2api
@@ -120,7 +129,7 @@ func isOpencodeFreeModel(channel model.Channel, modelName string) bool {
 const (
 	opencodeV1ClientVersion   = "1.19.4"
 	opencodeV1BunVersion      = "1.4.4"
-	opencodeV2ClientVersion   = "2.1.3"
+	opencodeV2ClientVersion   = "2.1.4"
 	opencodeV2CompletionLimit = 32000
 )
 
@@ -223,7 +232,7 @@ func opencodeFreeLaneAccept(channel model.Channel) string {
 //   - v1 档(/zen): User-Agent 用协议相关的 opencode/1.19.4 ai-sdk/provider-utils/<ver>
 //     runtime/bun/1.4.4(<ver> 按出站协议), Accept 用 */*, 并发送 x-opencode-request
 //     (msg_ 升序 id);
-//   - v2 档(/inference): User-Agent 动态覆盖为 opencode/latest/2.1.3/cli,
+//   - v2 档(/inference): User-Agent 动态覆盖为 opencode/latest/2.1.4/cli,
 //     Accept 用 */*, 且不发送 x-opencode-request
 //     (v2 网关对此头 403); Anthropic 出站补 beta=true。
 //
@@ -602,6 +611,7 @@ func opencodeFreeTool(name, protocol string) string {
 			parameters = def.Parameters
 		}
 	}
+	description = opencodeToolDescription(name, description)
 	var tool any
 	switch protocol {
 	case model.UpstreamProtocolAnthropic:
