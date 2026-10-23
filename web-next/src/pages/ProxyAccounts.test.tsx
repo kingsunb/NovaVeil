@@ -118,13 +118,36 @@ const ledger = {
   unusable: 1,
 };
 
+/** 按台账接口口径过滤, 供 fetch mock 复用。 */
+function ledgerFor(url: string) {
+  const filter = /filter=(\w+)/.exec(url)?.[1] ?? "all";
+  const items = ledger.items.filter((item) => filter === "all" || item.state === filter);
+  return jsonResponse({
+    ...ledger,
+    items,
+    total: items.length,
+    usable: items.filter((item) => item.state === "usable").length,
+    untested: items.filter((item) => item.state === "untested").length,
+    unusable: items.filter((item) => item.state === "unusable").length,
+  });
+}
+
 describe("<ProxyAccountsPage /> 账号体检", () => {
-  it("仅渲染合格渠道的独立卡片，全部随机生成无自定义列表", async () => {
+  it("下拉切换渠道后展示所选渠道的台账", async () => {
+    const ledgerUrls: string[] = [];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/channel/list")) return jsonResponse([eligibleChannel({}), plainChannel]);
-      if (url.includes("/channel/proxy-accounts?")) return jsonResponse(ledger);
+      if (url.includes("/channel/proxy-accounts?")) {
+        ledgerUrls.push(url);
+        return ledgerFor(url);
+      }
       if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: true });
+      if (url.includes("/channel/list")) {
+        return jsonResponse([
+          eligibleChannel({}),
+          eligibleChannel({ id: 9, name: "OpenCode Free Old", base_url: "https://opencode.ai/zen" }),
+        ]);
+      }
       return jsonResponse(null);
     }));
 
@@ -134,16 +157,21 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
       </Wrapper>,
     );
 
-    expect(await screen.findByText("OpenCode Free")).toBeInTheDocument();
-    expect(screen.queryByText("Plain Channel")).not.toBeInTheDocument();
-    expect(screen.getByDisplayValue("100")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "开始体检" })).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText(/每行一个账号/)).not.toBeInTheDocument();
-    // 打开页面即有台账, 无需先体检
+    // 默认选第一个渠道, 台账立即展示
     expect(await screen.findByText("opencode0a1b2c3d")).toBeInTheDocument();
+    expect(screen.getByText("https://opencode.ai/inference")).toBeInTheDocument();
+    expect(screen.queryByText("Plain Channel")).not.toBeInTheDocument();
+
+    // 切到 Old → 展示 Old 的台账
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText("体检渠道"), "9");
+    expect(await screen.findByText("https://opencode.ai/zen")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(ledgerUrls.some((url) => url.includes("channel_id=9"))).toBe(true);
+    });
   });
 
-  it("Free 与 Old 各自独立记账号，互不混账", async () => {
+  it("点击开始体检后按默认参数请求并渲染逐账号结论", async () => {
     const probeBodies: Array<Record<string, unknown>> = [];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -151,44 +179,8 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
         probeBodies.push(JSON.parse(String(init?.body ?? "{}")));
         return jsonResponse(report);
       }
-      if (url.includes("/channel/list")) {
-        return jsonResponse([
-          eligibleChannel({}),
-          eligibleChannel({ id: 9, name: "OpenCode Free Old", base_url: "https://opencode.ai/zen" }),
-        ]);
-      }
-      if (url.includes("/channel/proxy-accounts?")) {
-        return jsonResponse({ ...ledger, items: [], total: 0, usable: 0, untested: 0, unusable: 0 });
-      }
-      if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
-      return jsonResponse(null);
-    }));
-
-    render(
-      <Wrapper>
-        <ProxyAccountsPage />
-      </Wrapper>,
-    );
-
-    expect(await screen.findByText("OpenCode Free")).toBeInTheDocument();
-    expect(screen.getByText("OpenCode Free Old")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "开始体检" })).toHaveLength(2);
-
-    const user = userEvent.setup();
-    const buttons = screen.getAllByRole("button", { name: "开始体检" });
-    await user.click(buttons[1]);
-    await waitFor(() => expect(probeBodies).toHaveLength(1));
-    expect(probeBodies[0].channel_id).toBe(9);
-  });
-
-  it("点击开始体检后按默认参数请求并渲染逐账号结论", async () => {
-    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/channel/proxy-accounts/probe")) {
-        return jsonResponse(report);
-      }
       if (url.includes("/channel/list")) return jsonResponse([eligibleChannel({})]);
-      if (url.includes("/channel/proxy-accounts?")) return jsonResponse(ledger);
+      if (url.includes("/channel/proxy-accounts?")) return ledgerFor(url);
       if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
       return jsonResponse(null);
     }));
@@ -199,7 +191,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
       </Wrapper>,
     );
 
-    await screen.findByText("OpenCode Free");
+    await screen.findAllByText("OpenCode Free");
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "开始体检" }));
 
@@ -208,26 +200,78 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     expect(screen.getByText("被拒 1")).toBeInTheDocument();
     expect(screen.getByText("失败 1")).toBeInTheDocument();
     expect(screen.getByText("FreeTierError: forbidden")).toBeInTheDocument();
-    expect(screen.getByText("探测模型：model-a")).toBeInTheDocument();
+    expect(probeBodies[0]).toEqual({ channel_id: 7, count: 100, concurrency: 10 });
   });
 
-  it("台账展示三态、筛选与开关自动体检", async () => {
+  it("生成数量上限 2000", async () => {
+    const probeBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/channel/proxy-accounts/probe")) {
+        probeBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return jsonResponse(report);
+      }
+      if (url.includes("/channel/list")) return jsonResponse([eligibleChannel({})]);
+      if (url.includes("/channel/proxy-accounts?")) return ledgerFor(url);
+      if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
+      return jsonResponse(null);
+    }));
+
+    render(
+      <Wrapper>
+        <ProxyAccountsPage />
+      </Wrapper>,
+    );
+
+    await screen.findAllByText("OpenCode Free");
+    const user = userEvent.setup();
+    await user.clear(screen.getByDisplayValue("100"));
+    await user.type(screen.getByDisplayValue(""), "2000");
+    await user.click(screen.getByRole("button", { name: "开始体检" }));
+
+    await waitFor(() => expect(probeBodies).toHaveLength(1));
+    expect(probeBodies[0]).toEqual({ channel_id: 7, count: 2000, concurrency: 10 });
+  });
+
+  it("一键测试台账全部账号并展示进度结果", async () => {
+    const probeBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/channel/proxy-accounts/probe")) {
+        probeBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return jsonResponse(report);
+      }
+      if (url.includes("/channel/list")) return jsonResponse([eligibleChannel({})]);
+      if (url.includes("/channel/proxy-accounts?")) return ledgerFor(url);
+      if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
+      return jsonResponse(null);
+    }));
+
+    render(
+      <Wrapper>
+        <ProxyAccountsPage />
+      </Wrapper>,
+    );
+
+    await screen.findByText("opencode0a1b2c3d");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "一键测试台账" }));
+
+    await waitFor(() => expect(probeBodies).toHaveLength(1));
+    expect(probeBodies[0]).toEqual({
+      channel_id: 7,
+      accounts: ["opencode0a1b2c3d", "opencode0e4f5a6b", "opencode0c7d8e9f"],
+      concurrency: 10,
+    });
+    expect(await screen.findByText("健康 1")).toBeInTheDocument();
+  });
+
+  it("台账三态筛选与开关自动体检", async () => {
     const probeBodies: Array<Record<string, unknown>> = [];
     let ledgerEnabled = true;
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/channel/proxy-accounts?")) {
-        const filter = /filter=(\w+)/.exec(url)?.[1] ?? "all";
-        const items = ledger.items.filter((item) => filter === "all" || item.state === filter);
-        return jsonResponse({
-          ...ledger,
-          items,
-          total: items.length,
-          usable: items.filter((item) => item.state === "usable").length,
-          untested: items.filter((item) => item.state === "untested").length,
-          unusable: items.filter((item) => item.state === "unusable").length,
-        });
-      }
+      if (url.includes("/channel/proxy-accounts?")) return ledgerFor(url);
       if (url.includes("/channel/proxy-accounts/auto-probe")) {
         if (init?.method === "POST") {
           probeBodies.push(JSON.parse(String(init.body ?? "{}")));
@@ -265,7 +309,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     const deleteBodies: Array<Record<string, unknown>> = [];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/channel/proxy-accounts?")) return jsonResponse(ledger);
+      if (url.includes("/channel/proxy-accounts?")) return ledgerFor(url);
       if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
       if (url.includes("/channel/proxy-accounts")) {
         deleteBodies.push(JSON.parse(String(init?.body ?? "{}")));

@@ -1,7 +1,7 @@
 /**
- * OpenCode 账号体检页：每个免费档渠道一块独立卡片（Free 与 Old 分开记账）。
- * 生成即落账长期保存：体检结果与转发流量实时更新台账状态，支持三态筛选与删除。
- * 可选开启每 24 小时自动体检：健康入池复用，被拒冷却 24 小时。
+ * OpenCode 账号体检页：下拉选择免费档渠道（Free 与 Old 分开记账），展示所选渠道的
+ * 体检控制与账号台账。生成即落账长期保存，台账随体检与转发流量实时更新，支持三态
+ * 筛选、逐账号删除与一键测试台账全部账号。可开启每 24 小时自动体检。
  */
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -21,10 +21,12 @@ import { Switch } from "@/components/ui/switch";
 import { zhCN } from "@/locales/zh-CN";
 
 /** 与后端 ocProbe* 常量对齐。 */
-const MAX_ACCOUNTS = 200;
+const MAX_ACCOUNTS = 2000;
 const MAX_CONCURRENCY = 20;
 const DEFAULT_COUNT = 100;
 const DEFAULT_CONCURRENCY = 10;
+/** 一键测试时分批调用体检接口的批大小。 */
+const BULK_CHUNK_SIZE = 200;
 
 interface AccountProbeResult {
   account: string;
@@ -100,7 +102,7 @@ function sourceLabel(source: string): string {
   return zhCN.proxyAccounts.sourceLegacy;
 }
 
-/** 单渠道卡片: 独立的生成/体检控制与台账, Free 与 Old 互不混账。 */
+/** 单渠道视图: 生成/体检控制、结果与台账, Free 与 Old 互不混账。 */
 function ChannelSection({ channel }: { channel: Channel }) {
   const queryClient = useQueryClient();
   const [count, setCount] = useState(String(DEFAULT_COUNT));
@@ -108,17 +110,18 @@ function ChannelSection({ channel }: { channel: Channel }) {
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<AccountProbeReport | null>(null);
   const [ledgerFilter, setLedgerFilter] = useState<LedgerFilter>("all");
+  const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
 
   const ledgerQuery = useQuery({
     queryKey: ["proxy-accounts", channel.id, ledgerFilter],
     queryFn: () => api.listProxyAccounts(channel.id, ledgerFilter),
   });
 
-  async function run() {
+  function parseInputs(): { count: number; concurrency: number } | null {
     const parsedCount = Math.floor(Number(count));
     if (!Number.isFinite(parsedCount) || parsedCount < 1 || parsedCount > MAX_ACCOUNTS) {
       toast.error(zhCN.proxyAccounts.countInvalid);
-      return;
+      return null;
     }
     const parsedConcurrency = Math.floor(Number(concurrency));
     if (
@@ -127,14 +130,20 @@ function ChannelSection({ channel }: { channel: Channel }) {
       parsedConcurrency > MAX_CONCURRENCY
     ) {
       toast.error(zhCN.proxyAccounts.concurrencyInvalid);
-      return;
+      return null;
     }
+    return { count: parsedCount, concurrency: parsedConcurrency };
+  }
+
+  async function run() {
+    const inputs = parseInputs();
+    if (!inputs) return;
     setRunning(true);
     try {
       const next = await api.probeProxyAccounts({
         channel_id: channel.id,
-        count: parsedCount,
-        concurrency: parsedConcurrency,
+        count: inputs.count,
+        concurrency: inputs.concurrency,
       });
       setReport(next);
       await queryClient.invalidateQueries({ queryKey: ["proxy-accounts"] });
@@ -145,6 +154,54 @@ function ChannelSection({ channel }: { channel: Channel }) {
       toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.requestFailed);
     } finally {
       setRunning(false);
+    }
+  }
+
+  /** 一键测试台账全部账号: 按 200 个一批顺序体检, 结果累计展示。 */
+  async function runBulkTest() {
+    const inputs = parseInputs();
+    const concurrency = inputs?.concurrency ?? DEFAULT_CONCURRENCY;
+    setBulk({ done: 0, total: 0 });
+    try {
+      const full = await api.listProxyAccounts(channel.id, "all");
+      const accounts = (full.items ?? []).map((item) => item.account);
+      if (accounts.length === 0) {
+        toast.info(zhCN.proxyAccounts.emptyLedger);
+        setBulk(null);
+        return;
+      }
+      setBulk({ done: 0, total: accounts.length });
+      let healthy = 0;
+      let rejected = 0;
+      let failed = 0;
+      let model = "";
+      const results: AccountProbeResult[] = [];
+      for (let index = 0; index < accounts.length; index += BULK_CHUNK_SIZE) {
+        const chunk = accounts.slice(index, index + BULK_CHUNK_SIZE);
+        const part = await api.probeProxyAccounts({
+          channel_id: channel.id,
+          accounts: chunk,
+          concurrency,
+        });
+        model = part.model;
+        healthy += part.summary.healthy;
+        rejected += part.summary.rejected;
+        failed += part.summary.failed;
+        results.push(...part.results);
+        setBulk({ done: results.length, total: accounts.length });
+      }
+      setReport({
+        channel_id: channel.id,
+        model,
+        results,
+        summary: { total: results.length, healthy, rejected, failed },
+      });
+      await queryClient.invalidateQueries({ queryKey: ["proxy-accounts"] });
+      toast.success(zhCN.proxyAccounts.runDone(healthy, rejected, failed));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.requestFailed);
+    } finally {
+      setBulk(null);
     }
   }
 
@@ -248,6 +305,17 @@ function ChannelSection({ channel }: { channel: Channel }) {
                 </Pill>
               </button>
             ))}
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              onClick={() => void runBulkTest()}
+              disabled={bulk !== null}
+            >
+              {bulk
+                ? zhCN.proxyAccounts.bulkRunning(bulk.done, bulk.total)
+                : zhCN.proxyAccounts.bulkTest}
+            </Button>
           </div>
           {(ledgerQuery.data?.items?.length ?? 0) === 0 ? (
             <EmptyState icon={<UsersRound className="size-8" />} title={zhCN.proxyAccounts.emptyLedger} />
@@ -313,6 +381,9 @@ export default function ProxyAccountsPage() {
       channel.channel_proxy.includes("{account}") &&
       (channel.base_url?.includes("/zen") || channel.base_url?.includes("/inference")),
   );
+  const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
+  const selectedChannel =
+    eligible.find((channel) => channel.id === selectedChannelId) ?? eligible[0] ?? null;
   const autoProbeQuery = useQuery({
     queryKey: ["proxy-accounts-auto-probe"],
     queryFn: () => api.getOpencodeAccountAutoProbe(),
@@ -340,26 +411,43 @@ export default function ProxyAccountsPage() {
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardHeader>
-            <CardTitle>{zhCN.proxyAccounts.autoProbeTitle}</CardTitle>
-            <CardDescription>{zhCN.proxyAccounts.autoProbeDescription}</CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-center gap-3">
-            <Switch
-              checked={autoProbeQuery.data ?? false}
-              onCheckedChange={(checked) => void toggleAutoProbe(checked)}
-              disabled={autoProbeQuery.isLoading}
-            />
-            <span className="text-sm">
-              {autoProbeQuery.data ? zhCN.proxyAccounts.autoProbeOn : zhCN.proxyAccounts.autoProbeOff}
-            </span>
-          </CardContent>
-        </Card>
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle>{zhCN.proxyAccounts.channel}</CardTitle>
+              <CardDescription>{zhCN.proxyAccounts.channelHint}</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap items-center gap-4">
+              <Field label={zhCN.proxyAccounts.channel}>
+                <select
+                  className="h-9 w-full min-w-56 rounded-md border bg-transparent px-3 text-sm"
+                  value={selectedChannel?.id ?? ""}
+                  onChange={(event) => setSelectedChannelId(Number(event.target.value))}
+                >
+                  {eligible.map((channel) => (
+                    <option key={channel.id} value={channel.id}>
+                      {channel.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <div className="flex items-center gap-3">
+                <Switch
+                  checked={autoProbeQuery.data ?? false}
+                  onCheckedChange={(checked) => void toggleAutoProbe(checked)}
+                  disabled={autoProbeQuery.isLoading}
+                />
+                <span className="text-sm">
+                  {autoProbeQuery.data
+                    ? zhCN.proxyAccounts.autoProbeOn
+                    : zhCN.proxyAccounts.autoProbeOff}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+          {selectedChannel && <ChannelSection key={selectedChannel.id} channel={selectedChannel} />}
+        </>
       )}
-      {eligible.map((channel) => (
-        <ChannelSection key={channel.id} channel={channel} />
-      ))}
     </div>
   );
 }

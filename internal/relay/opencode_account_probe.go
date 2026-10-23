@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"regexp"
 	"sort"
 	"strings"
@@ -12,21 +13,22 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
+	"github.com/looplj/axonhub/llm"
+	"github.com/looplj/axonhub/llm/httpclient"
+	"github.com/tidwall/sjson"
 )
 
 // 批量账号体检: 钉住账号并发打极小真实请求, 健康入池/被拒冷却, 供免费档直接复用。
 // 「账号」是渠道代理模板 {account} 占位符对应的 resin 出口会话, 不是登录凭据。
 const (
-	// ocProbeMaxAccounts 单次体检的账号数上限。
-	ocProbeMaxAccounts = 200
+	// ocProbeMaxAccounts 单次体检的账号数上限, 与台账容量对齐。
+	ocProbeMaxAccounts = 2000
 	// ocProbeMaxConcurrency 单次体检的并发上限。
 	ocProbeMaxConcurrency = 20
 	// ocProbeDefaultConcurrency 未指定时的并发数。
 	ocProbeDefaultConcurrency = 10
 	// ocProbeDefaultCount 未指定时的生成数量。
 	ocProbeDefaultCount = 100
-	// ocProbeTokens 是每次探测的标称输入规模, 判健康足够且几乎不耗额度。
-	ocProbeTokens = 16
 	// ocProbeMaxTimeoutMS 单账号探测超时上限。
 	ocProbeMaxTimeoutMS = 120_000
 	// ocProbeOutcome* 是体检结论枚举。
@@ -190,12 +192,40 @@ func ocProbeAccountList(accounts []string, count int) ([]string, error) {
 	return probing, nil
 }
 
+// ocProbeRawRequest 构造与下游 Chat 请求同构的极小探测请求: 只带 model 与统一测试
+// 消息, 不预设输出上限与流式——免费档整形会像真实下游一样注入 stream/tools/32000
+// 输出上限, 出站字节形态与真实转发一致。非 chat 协议回退面板构造器(免费档实际只走 chat)。
+func ocProbeRawRequest(format llm.APIFormat, modelName string) (*httpclient.Request, error) {
+	if format != llm.APIFormatOpenAIChatCompletion {
+		return newTestRequest(format, modelName, defaultTestMessage, 1)
+	}
+	body, err := sjson.SetBytes([]byte("{}"), "model", modelName)
+	if err != nil {
+		return nil, err
+	}
+	if body, err = sjson.SetBytes(body, "messages", []map[string]string{
+		{"role": "user", "content": defaultTestMessage},
+	}); err != nil {
+		return nil, err
+	}
+	headers := http.Header{"Content-Type": []string{"application/json"}}
+	return &httpclient.Request{
+		Method:    http.MethodPost,
+		Path:      "/v1" + upstreamPath(format),
+		Headers:   headers,
+		Body:      body,
+		APIFormat: format.String(),
+	}, nil
+}
+
 // ocProbeOne 钉住单个账号探测一次并归类结论, 结论同步写回台账。
 func ocProbeOne(ctx context.Context, channel model.Channel, modelName, account string, timeout time.Duration) AccountProbeResult {
 	result := AccountProbeResult{Account: account, Outcome: ocProbeOutcomeError}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	probe, err := probeOnceWithAccount(probeCtx, channel, modelName, ocProbeTokens, account)
+	probe, err := probeOnceWithAccount(probeCtx, channel, modelName, account, func(format llm.APIFormat) (*httpclient.Request, error) {
+		return ocProbeRawRequest(format, modelName)
+	}, false)
 	switch {
 	case err != nil && probe == nil:
 		result.Detail = err.Error()

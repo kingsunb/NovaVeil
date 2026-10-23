@@ -177,17 +177,22 @@ func parseRequestedOverflowTokens(detail string) (int64, bool) {
 
 // probeOnce 发送一次指定构造规模的探测请求并按状态码判定容量。
 func probeOnce(ctx context.Context, channel model.Channel, modelName string, tokens int) (*ContextProbeResult, error) {
-	result, err := probeOnceWithAccount(ctx, channel, modelName, tokens, "")
+	result, err := probeOnceWithAccount(ctx, channel, modelName, "", func(format llm.APIFormat) (*httpclient.Request, error) {
+		return newTestRequest(format, modelName, buildContextProbeText(tokens), 1)
+	}, true)
 	if err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
-// probeOnceWithAccount 在 probeOnce 基础上支持钉住代理账号:
-// account 为空时沿用池内选号(原行为), 非空时强制用该账号, 供批量账号体检复用。
+// probeOnceWithAccount 发送一次探测请求并按状态码判定容量:
+//   - account 为空时从池内选号(上下文探测原行为), 非空时钉住账号, 供批量账号体检复用;
+//   - buildRaw 按生效协议构造原始请求; clampOutput 为 true 时把输出预算收敛到 1
+//     (上下文探测只测输入容量), 账号体检传 false 以与下游请求出站形态完全一致。
+//
 // 拿到 HTTP 响应时结论(Status/Detail/Latency)随 result 返回, error 仅表示未得出容量结论。
-func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName string, tokens int, account string) (*ContextProbeResult, error) {
+func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName, account string, buildRaw func(llm.APIFormat) (*httpclient.Request, error), clampOutput bool) (*ContextProbeResult, error) {
 	candidates := channelKeyTestCandidates(channel)
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("渠道未配置任何密钥")
@@ -210,7 +215,7 @@ func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName 
 		}
 	}
 	format, _, target := testRequestTarget(effective, modelName, "")
-	raw, err := newTestRequest(format, modelName, buildContextProbeText(tokens), 1)
+	raw, err := buildRaw(format)
 	if err != nil {
 		return nil, fmt.Errorf("构造探测请求失败: %w", err)
 	}
@@ -228,8 +233,10 @@ func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName 
 			built.Body, _, _ = shapeOpencodeFreeBody(built.Body, isOpencodeV1Lane(effective), formatToProtocol(format))
 		}
 	}
-	// 收敛输出预算, 探测只测输入容量。
-	built.Body = clampProbeOutputBudget(built.Body, format)
+	// 上下文探测收敛输出预算只测输入容量; 账号体检不收敛, 与下游出站形态一致。
+	if clampOutput {
+		built.Body = clampProbeOutputBudget(built.Body, format)
+	}
 	if len(built.JSONBody) > 0 {
 		built.JSONBody = slices.Clone(built.Body)
 	}
@@ -252,8 +259,8 @@ func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName 
 	body, _ := io.ReadAll(io.LimitReader(response.Body, 256*1024))
 	latency := time.Since(started).Milliseconds()
 	usage, actual := parseProbeUsage(body, raw.Body)
+	// Tokens 由调用方回填: 上下文探测写标称规模, 账号体检不使用该字段。
 	result := &ContextProbeResult{
-		Tokens:    tokens,
 		Status:    response.StatusCode,
 		Detail:    truncateSnippet(string(body)),
 		LatencyMS: latency,
