@@ -73,7 +73,7 @@ func knownOpencodeTool(name string) (opencodeToolDef, bool) {
 
 // opencodeToolMatches 判定工具定义完全一致。
 func opencodeToolMatches(def opencodeToolDef, tool gjson.Result, protocol string) bool {
-	_, descPath, paramPath := toolFieldPaths(protocol)
+	namePath, descPath, paramPath := toolFieldPaths(protocol)
 	if protocol == model.UpstreamProtocolChat {
 		if tool.Get("function.strict").Type != gjson.False {
 			return false
