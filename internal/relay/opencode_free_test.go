@@ -202,7 +202,7 @@ func TestShapeOpencodeFreeBodyV1ChatKeyOrder(t *testing.T) {
 	}
 
 	out, _, _ = shapeOpencodeFreeBody([]byte(`{"model":"x-free","stream":true,"messages":[]}`), true, model.UpstreamProtocolChat)
-	want = []string{"model", "messages", "tools", "stream"}
+	want = []string{"model", "messages", "tools", "stream", "stream_options"}
 	if got := topLevelKeyOrder(t, out); !reflect.DeepEqual(got, want) {
 		t.Fatalf("v1 缺省键序 = %v, 期望 %v", got, want)
 	}
