@@ -100,6 +100,7 @@ func fetchOpenAIModels(client *http.Client, ctx context.Context, request model.C
 	req.Header.Set("Authorization", "Bearer "+request.Key)
 	applyCustomHeaders(req, request)
 	applyOpencodeCompatHeaders(req, request)
+	applyOpencodeLaneUserAgent(req, request)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -256,4 +257,18 @@ func applyOpencodeCompatHeaders(req *http.Request, channel model.Channel) {
 	session := opencodeid.GenerateSessionID()
 	req.Header.Set("x-opencode-session", session)
 	req.Header.Set("x-opencode-session-id", session)
+}
+
+// applyOpencodeLaneUserAgent 按 OpenCode 免费档档位覆盖同步请求的 User-Agent:
+// 存量渠道静态 custom_header 可能停留在旧版本号, 与 relay 转发路径的动态覆盖同口径。
+// 同步无模型上下文, v1 按 chat 协议回退, 与 relay 缺省分支一致。
+func applyOpencodeLaneUserAgent(req *http.Request, channel model.Channel) {
+	if !channel.OpencodeCompat || model.OpenCodeTier(channel.BaseURL) != "zen" {
+		return
+	}
+	if model.OpencodeV1Lane(channel.BaseURL) {
+		req.Header.Set("User-Agent", model.OpencodeV1UserAgent(model.UpstreamProtocolChat))
+		return
+	}
+	req.Header.Set("User-Agent", model.OpencodeV2UserAgent())
 }

@@ -237,3 +237,49 @@ func TestFetchOpenAIModelsSkipsOpencodeSessionWhenDisabled(t *testing.T) {
 		t.Fatalf("OpencodeCompat=false 时不应注入 x-opencode-session-id, 实际注入 %q", h.sessionID)
 	}
 }
+
+// TestFetchOpenAIModelsOverridesOpencodeLaneUserAgent 验证免费档同步请求动态覆盖 UA:
+// 存量渠道静态 custom_header 可能停留在旧版本号(如 2.0.32), 不得外泄到上游;
+// 非 zen 档与未开兼容开关的渠道保持原 UA 不动。
+func TestFetchOpenAIModelsOverridesOpencodeLaneUserAgent(t *testing.T) {
+	cases := []struct {
+		name     string
+		suffix   string
+		compat   bool
+		customUA string
+		want     string
+	}{
+		{"v2 档覆盖陈旧 UA", "/inference", true, "opencode/latest/2.0.32/cli", model.OpencodeV2UserAgent()},
+		{"v1 档补官方 UA", "/zen", true, "", model.OpencodeV1UserAgent(model.UpstreamProtocolChat)},
+		{"非 zen 档保留静态 UA", "/v1", true, "opencode/latest/2.0.32/cli", "opencode/latest/2.0.32/cli"},
+		{"未开兼容保留静态 UA", "/inference", false, "opencode/latest/2.0.32/cli", "opencode/latest/2.0.32/cli"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := make(chan string, 1)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got <- r.Header.Get("User-Agent")
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"data":[]}`))
+			}))
+			t.Cleanup(srv.Close)
+
+			channel := model.Channel{
+				Type:           model.ChannelProviderOpenAI,
+				BaseURL:        srv.URL + tc.suffix,
+				Key:            "sk-test",
+				OpencodeCompat: tc.compat,
+			}
+			if tc.customUA != "" {
+				channel.CustomHeader = []model.CustomHeader{{HeaderKey: "User-Agent", HeaderValue: tc.customUA}}
+			}
+			if _, err := fetchOpenAIModels(&http.Client{}, context.Background(), channel); err != nil {
+				t.Fatalf("fetchOpenAIModels: %v", err)
+			}
+			if ua := <-got; ua != tc.want {
+				t.Fatalf("User-Agent = %q, 期望 %q", ua, tc.want)
+			}
+		})
+	}
+}

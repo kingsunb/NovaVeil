@@ -49,5 +49,5 @@ NovaVeil 的 v2 免费档（`/inference`）按 OpenCode 2.x 客户端指纹伪�
 - `opencodeToolDescription("edit", "...")` 无论平台均原样返回。
 - `python3 -c "import json; print(sorted(json.load(open('internal/relay/opencode_tools.json')).keys()))"` 输出含 `todowrite`，共 14 个键。
 - `grep -rn '2\.1\.3' internal/` 无残留（排除 `error_log_mask.go` 与 `state.go` 中 design 章节引用）。
-- `grep -n 'opencodeV2ClientVersion' internal/relay/opencode_free.go` 值为 `"2.1.4"`。
+- `grep -n 'opencodeV2ClientVersion' internal/model/opencode_protocol.go` 值为 `"2.1.4"`（常量已由 [实抓校准笔记](./2026-10-24-opencode-fingerprint-recapture-alignment.md) 上移到 model）。
 - `go test ./internal/relay/ -run TestApplyOpencodeFreeLaneHeaders` 通过（UA 断言已更新为 2.1.4）。

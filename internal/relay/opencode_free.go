@@ -125,28 +125,12 @@ func isOpencodeFreeModel(channel model.Channel, modelName string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "free")
 }
 
-// 免费档客户端、Bun 版本与默认输出上限。
-const (
-	opencodeV1ClientVersion   = "1.19.4"
-	opencodeV1BunVersion      = "1.4.4"
-	opencodeV2ClientVersion   = "2.1.4"
-	opencodeV2CompletionLimit = 32000
-)
+// opencodeV2CompletionLimit 是 v2 档默认输出上限。
+const opencodeV2CompletionLimit = 32000
 
-// opencodeV1ProviderUtils 按出站协议返回 v1 模型请求 User-Agent 中的 provider-utils 版本。
-// 各 @ai-sdk 提供方包自带 provider-utils, 版本随协议不同; 空协议默认 chat。
-var opencodeV1ProviderUtils = map[string]string{
-	model.UpstreamProtocolChat:      "4.0.23",
-	model.UpstreamProtocolResponses: "4.0.40",
-	model.UpstreamProtocolAnthropic: "4.0.46",
-}
-
-// isOpencodeV1Lane 判定渠道是否为 OpenCode v1 免费档(/zen)。OpenCodeTier 对 /zen 与
-// /inference 均返回 "zen", 这里用 BaseURL 含 "/zen" 区分 v1(/zen) 与 v2(/inference)。
-// /zen/go 与 /zen/v1 是 "go" 档(付费), 已被 OpenCodeTier 排除。
+// isOpencodeV1Lane 判定渠道是否为 OpenCode v1 免费档(/zen)。
 func isOpencodeV1Lane(channel model.Channel) bool {
-	return model.OpenCodeTier(channel.BaseURL) == "zen" &&
-		strings.Contains(strings.ToLower(channel.BaseURL), "/zen")
+	return model.OpencodeV1Lane(channel.BaseURL)
 }
 
 // opencodeUpstreamFamily 返回 v2 family 段。
@@ -254,19 +238,14 @@ func applyOpencodeFreeLaneHeaders(channel model.Channel, request *httpclient.Req
 	}
 	if !isOpencodeV1Lane(channel) {
 		// 动态覆盖渠道静态 UA，存量库也生效。
-		request.Headers.Set("User-Agent", "opencode/latest/"+opencodeV2ClientVersion+"/cli")
+		request.Headers.Set("User-Agent", model.OpencodeV2UserAgent())
 		if isAnthropic {
 			applyAnthropicBetaQuery(request)
 			request.Headers.Set("anthropic-beta", "interleaved-thinking-2025-05-14")
 		}
 		return
 	}
-	ver := opencodeV1ProviderUtils[opencodeModelProtocol(channel, modelName)]
-	if ver == "" {
-		ver = opencodeV1ProviderUtils[model.UpstreamProtocolChat]
-	}
-	request.Headers.Set("User-Agent", "opencode/"+opencodeV1ClientVersion+
-		" ai-sdk/provider-utils/"+ver+" runtime/bun/"+opencodeV1BunVersion)
+	request.Headers.Set("User-Agent", model.OpencodeV1UserAgent(opencodeModelProtocol(channel, modelName)))
 	request.Headers.Set("x-opencode-request", opencodeid.UserMessageID(
 		request.Headers.Get("x-opencode-request"),
 		request.Body,
@@ -322,9 +301,14 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 	if v1Lane {
 		next, alias, injected := ensureV1ReadTool(out)
 		if injected {
-			return next, true, alias
+			out, changed = next, true
 		}
-		return out, changed, ""
+		if protocol == model.UpstreamProtocolChat {
+			if normalized := normalizeOpencodeChatBody(out, v1ChatKeyOrder); normalized != nil {
+				out = normalized
+			}
+		}
+		return out, changed, alias
 	}
 	if next, injected := ensureOpencodeFreeTools(out, protocol); injected {
 		out, changed = next, true
@@ -335,7 +319,7 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 		}
 	}
 	if protocol == model.UpstreamProtocolChat {
-		if normalized := normalizeOpencodeFreeChatBody(out); normalized != nil {
+		if normalized := normalizeOpencodeChatBody(out, v2ChatKeyOrder); normalized != nil {
 			out = normalized
 		}
 	}
@@ -656,9 +640,12 @@ func marshalOpencodeJSON(value any) ([]byte, error) {
 // v2ChatKeyOrder 是免费档 v2 Chat 正文的固定键序, 对齐官方客户端逐字节指纹。
 var v2ChatKeyOrder = []string{"model", "messages", "tools", "stream", "stream_options", "max_completion_tokens"}
 
-// normalizeOpencodeFreeChatBody 把 v2 Chat 正文重编码为固定键序且不转义 HTML,
-// 对齐上游逐字节门禁(#142)。仅在免费档 v2 Chat 路径调用。
-func normalizeOpencodeFreeChatBody(body []byte) []byte {
+// v1ChatKeyOrder 是 v1 档(/zen)官方 1.19.4 客户端的 Chat 键序, 由实抓核实。
+var v1ChatKeyOrder = []string{"model", "max_tokens", "messages", "tools", "tool_choice", "stream", "stream_options"}
+
+// normalizeOpencodeChatBody 把免费档 Chat 正文重编码为固定键序且不转义 HTML,
+// 对齐上游逐字节门禁(#142)。仅在免费档 Chat 路径调用, keyOrder 按档位传入。
+func normalizeOpencodeChatBody(body []byte, keyOrder []string) []byte {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil
@@ -681,7 +668,7 @@ func normalizeOpencodeFreeChatBody(body []byte) []byte {
 		buffer.Write(val)
 		written[key] = true
 	}
-	for _, key := range v2ChatKeyOrder {
+	for _, key := range keyOrder {
 		emit(key)
 	}
 	rest := make([]string, 0, len(raw))

@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -188,6 +189,47 @@ func TestShapeOpencodeFreeBodyV1ReadTool(t *testing.T) {
 			t.Fatalf("应存在 read 工具: %s", raw)
 		}
 	})
+}
+
+// TestShapeOpencodeFreeBodyV1ChatKeyOrder 对齐官方 1.19.4 实抓键序:
+// [model, max_tokens, messages, tools, tool_choice, stream, stream_options], 多余键按字母序殿后。
+func TestShapeOpencodeFreeBodyV1ChatKeyOrder(t *testing.T) {
+	body := []byte(`{"stream":true,"stream_options":{"include_usage":true},"model":"x-free","tools":[{"type":"function","function":{"name":"read","description":"client","parameters":{"type":"object","properties":{}}}}],"max_tokens":1024,"tool_choice":"auto","temperature":0.7}`)
+	out, _, _ := shapeOpencodeFreeBody(body, true, model.UpstreamProtocolChat)
+	want := []string{"model", "max_tokens", "messages", "tools", "tool_choice", "stream", "stream_options", "temperature"}
+	if got := topLevelKeys(t, out); !reflect.DeepEqual(got, want) {
+		t.Fatalf("v1 键序 = %v, 期望 %v", got, want)
+	}
+
+	out, _, _ = shapeOpencodeFreeBody([]byte(`{"model":"x-free","stream":true,"messages":[]}`), true, model.UpstreamProtocolChat)
+	want = []string{"model", "messages", "tools", "stream"}
+	if got := topLevelKeys(t, out); !reflect.DeepEqual(got, want) {
+		t.Fatalf("v1 缺省键序 = %v, 期望 %v", got, want)
+	}
+}
+
+// topLevelKeys 按出现顺序返回 JSON 顶层键。
+func topLevelKeys(t *testing.T, body []byte) []string {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if tok, err := dec.Token(); err != nil {
+		t.Fatalf("decode body: %v", err)
+	} else if delim, ok := tok.(json.Delim); !ok || delim != '{' {
+		t.Fatalf("body 非对象: %v", tok)
+	}
+	var keys []string
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			t.Fatalf("decode key: %v", err)
+		}
+		keys = append(keys, tok.(string))
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			t.Fatalf("decode value: %v", err)
+		}
+	}
+	return keys
 }
 
 func TestOpencodeToolsIncludePatchDefinition(t *testing.T) {

@@ -76,3 +76,39 @@ func OpencodeSeedProtocols(baseURL string) map[string]string {
 	}
 	return out
 }
+
+// OpenCode 免费档官方客户端指纹版本, 由 2026-10-23 官方 2.1.4 / 1.19.4 实抓核实。
+const (
+	opencodeV1ClientVersion = "1.19.4"
+	opencodeV1BunVersion    = "1.4.4"
+	opencodeV2ClientVersion = "2.1.4"
+)
+
+// opencodeV1ProviderUtils 按 v1 出站协议返回 UA 中 ai-sdk/provider-utils 的版本。
+// 各 @ai-sdk 提供方包自带 provider-utils, 版本随协议不同; 空协议按 chat 回退。
+var opencodeV1ProviderUtils = map[string]string{
+	UpstreamProtocolChat:      "4.0.23",
+	UpstreamProtocolResponses: "4.0.40",
+	UpstreamProtocolAnthropic: "4.0.46",
+}
+
+// OpencodeV1UserAgent 返回 v1 档(/zen)官方客户端的 User-Agent。
+func OpencodeV1UserAgent(protocol string) string {
+	ver := opencodeV1ProviderUtils[protocol]
+	if ver == "" {
+		ver = opencodeV1ProviderUtils[UpstreamProtocolChat]
+	}
+	return "opencode/" + opencodeV1ClientVersion +
+		" ai-sdk/provider-utils/" + ver + " runtime/bun/" + opencodeV1BunVersion
+}
+
+// OpencodeV2UserAgent 返回 v2 档(/inference)官方客户端的 User-Agent。
+func OpencodeV2UserAgent() string {
+	return "opencode/latest/" + opencodeV2ClientVersion + "/cli"
+}
+
+// OpencodeV1Lane 报告 baseURL 是否属于 v1 档(/zen)。
+// go 档(/zen/go、/zen/v1)已被 OpenCodeTier 排除, 命中即 v1。
+func OpencodeV1Lane(baseURL string) bool {
+	return OpenCodeTier(baseURL) == "zen" && strings.Contains(strings.ToLower(baseURL), "/zen")
+}

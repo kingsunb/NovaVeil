@@ -484,10 +484,11 @@ func newBunDecoder(encoding string, r io.Reader) (io.Reader, func(), error) {
 
 // bunCommonHeaders lists the request headers WebKit knows by name, in the
 // spelling and order Bun's fetch writes them: ahead of every other header,
-// alphabetically.
+// alphabetically. Content-Length is missing on purpose: fetch appends it
+// transport-side after Accept-Encoding, not in this block.
 var bunCommonHeaders = []string{
 	"Accept", "Accept-Charset", "Accept-Encoding", "Accept-Language", "Authorization", "Cache-Control",
-	"Connection", "Content-Encoding", "Content-Language", "Content-Length", "Content-Type", "Cookie", "DNT",
+	"Connection", "Content-Encoding", "Content-Language", "Content-Type", "Cookie", "DNT",
 	"Expect", "Host", "If-None-Match", "Keep-Alive", "Last-Event-Id", "Origin", "Pragma",
 	"Proxy-Authorization", "Range", "Referer", "Sec-Fetch-Mode", "TE", "Upgrade-Insecure-Requests",
 	"User-Agent",
@@ -537,14 +538,8 @@ func bunRequestHead(req *http.Request, body []byte) ([]byte, bool, error) {
 	}
 	var head strings.Builder
 	head.WriteString(method + " " + req.URL.RequestURI() + " HTTP/1.1\r\n")
-	wroteLength := false
 	for _, name := range bunCommonHeaders {
 		lower := strings.ToLower(name)
-		if lower == "content-length" && body != nil {
-			head.WriteString(name + ": " + strconv.Itoa(len(body)) + "\r\n")
-			wroteLength = true
-			continue
-		}
 		if value, ok := values[lower]; ok {
 			head.WriteString(name + ": " + value + "\r\n")
 			delete(values, lower)
@@ -574,7 +569,7 @@ func bunRequestHead(req *http.Request, body []byte) ([]byte, bool, error) {
 	if !hasEncoding {
 		head.WriteString("Accept-Encoding: gzip, deflate, br, zstd\r\n")
 	}
-	if body != nil && !wroteLength {
+	if body != nil {
 		head.WriteString("Content-Length: " + strconv.Itoa(len(body)) + "\r\n")
 	}
 	head.WriteString("\r\n")

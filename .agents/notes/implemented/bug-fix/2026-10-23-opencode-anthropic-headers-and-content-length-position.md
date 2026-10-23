@@ -34,6 +34,7 @@ applyOpencodeFreeLaneHeaders 在 Accept 之后统一注入 `x-opencode-client: c
 
 - **收益**: v1/v2 Anthropic 请求头与上游一致, 消除可被指纹检测的偏差; Content-Length 头序匹配 Bun fetch。
 - **代价与已知上限**: v1AnthropicBetas 派生依赖 body 的 JSON 结构, 若上游 AI SDK 新增 beta 派生规则需同步更新。anthropicSupportsStructuredOutput 的模型前缀列表需随 Claude 新版本维护。
+- **更新（2026-10-24）**: 对真实官方 2.1.4 客户端实抓证明 Content-Length 应由 fetch 在传输层追加于末尾, 本篇第 1 项决定被 [实抓校准笔记](./2026-10-24-opencode-fingerprint-recapture-alignment.md) 翻转; 第 2-4 项协议头注入不受影响。
 
 ## Verification
 
