@@ -211,7 +211,7 @@ func probeOnce(ctx context.Context, channel model.Channel, modelName string, tok
 	if isOpencodeFreeModel(effective, modelName) {
 		applyOpencodeFreeLaneHeaders(effective, built, modelName)
 		if isChatFormat(format) {
-			built.Body, _ = shapeOpencodeFreeBody(built.Body, isOpencodeV1Lane(effective))
+			built.Body, _, _ = shapeOpencodeFreeBody(built.Body, isOpencodeV1Lane(effective), formatToProtocol(format))
 		}
 	}
 	// 收敛输出预算, 探测只测输入容量。
@@ -276,7 +276,9 @@ func probeOnce(ctx context.Context, channel model.Channel, modelName string, tok
 		case result.Accepted:
 			markOpencodeProxySuccess(channel.ID, proxyAccount)
 		case response.StatusCode == http.StatusForbidden:
-			markOpencodeProxyForbidden(channel.ID, proxyAccount)
+			if isOpencodeNetworkAbuseText(result.Detail) {
+				markOpencodeProxyAbuseBlock(channel.ID, proxyAccount)
+			}
 		case response.StatusCode == http.StatusTooManyRequests:
 			markOpencodeProxyRateLimited(channel.ID, proxyAccount)
 		}

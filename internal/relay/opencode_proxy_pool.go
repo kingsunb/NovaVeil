@@ -20,6 +20,8 @@ const (
 	ocProxySuccessTTL = 7 * 24 * time.Hour
 	// 403 后的账号冷却时长。
 	ocProxyCooldown = 12 * time.Hour
+	// 网络滥用 403 后的账号冷却时长。
+	ocProxyAbuseCooldown = 15 * time.Minute
 	// 429 后的账号冷却时长。
 	ocProxyRateLimitedCooldown = 24 * time.Hour
 	// ocProxyMaxAccounts 是每渠道账号数上限, 库内按此淘汰。
@@ -201,6 +203,34 @@ func markOpencodeProxySuccess(channelID int, account string) {
 // 403 后冷却账号 12 小时。
 func markOpencodeProxyForbidden(channelID int, account string) {
 	markOpencodeProxyCooldown(channelID, account, ocProxyCooldown)
+}
+
+// 网络滥用 403 后冷却账号 15 分钟。
+func markOpencodeProxyAbuseBlock(channelID int, account string) {
+	markOpencodeProxyCooldown(channelID, account, ocProxyAbuseCooldown)
+}
+
+// isOpencodeNetworkAbuse 判定 403 是否为 IP/网络滥用封禁而非形状门禁。
+func isOpencodeNetworkAbuse(err error) bool {
+	if err == nil {
+		return false
+	}
+	return isOpencodeNetworkAbuseText(err.Error())
+}
+
+// isOpencodeNetworkAbuseText 判定错误文本是否包含网络滥用封禁特征。
+func isOpencodeNetworkAbuseText(text string) bool {
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "abusive traffic") ||
+		strings.Contains(lower, "abuse traffic") ||
+		strings.Contains(lower, "abuse of traffic") {
+		return true
+	}
+	if strings.Contains(lower, "free models aren't available") &&
+		strings.Contains(lower, "current network") {
+		return true
+	}
+	return false
 }
 
 // 429 后冷却账号 24 小时。

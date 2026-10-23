@@ -94,13 +94,14 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	// OpenCode 免费档的 Accept 由官方客户端决定(见 opencodeFreeLaneAccept), 需绕过流式透传
 	// 的默认 text/event-stream; 其余渠道留空, 行为与改动前完全一致。
 	opencodeAccept := ""
+	v1ReadAlias := ""
 	if isOpencodeFreeModel(channel, bodyModelName(request.Body)) {
 		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)补 Accept, Anthropic 另补 beta。
 		applyOpencodeFreeLaneHeaders(channel, request, bodyModelName(request.Body))
 		opencodeAccept = opencodeFreeLaneAccept(channel)
 		if isChatFormat(format) {
 			var shaped bool
-			request.Body, shaped = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(channel))
+			request.Body, shaped, v1ReadAlias = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(channel), formatToProtocol(format))
 			collapsed = shaped && !streaming
 		}
 	}
@@ -113,6 +114,9 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		// 槽位由返回值持有, 调用方在事件流耗尽或转发终止时调用 Close 释放;
 		// 失败路径已在 sendPassthroughStream 内部 close events 后返回, 此处无需再释放。
 		resp.release = releaseConcurrency
+		if v1ReadAlias != "" {
+			applyV1ReadAliasRestore(resp, v1ReadAlias)
+		}
 		return resp, nil
 	}
 	if collapsed {
@@ -129,6 +133,9 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		}
 		if err := validateCollapsedFreeBody(format, body, usage); err != nil {
 			return nil, err
+		}
+		if v1ReadAlias != "" {
+			body = restoreV1ReadAliasInBody(body, v1ReadAlias)
 		}
 		return &upstreamResponse{body: body, usage: usage, release: releaseConcurrency}, nil
 	}
@@ -172,8 +179,40 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		return nil, fmt.Errorf("%w: %s", err, errBodySnippet(response.Body))
 	}
 	// response.Body 是本请求的独立读取缓冲, 直接移交所有权, 不再整包克隆一份。
+	if v1ReadAlias != "" {
+		response.Body = restoreV1ReadAliasInBody(response.Body, v1ReadAlias)
+	}
 	return &upstreamResponse{body: response.Body, header: response.Headers.Clone(), usage: parsed.Usage, release: releaseConcurrency}, nil
 }
+
+// applyV1ReadAliasRestore 对流式响应做 v1 read 工具名还原。
+func applyV1ReadAliasRestore(resp *upstreamResponse, alias string) {
+	for _, ev := range resp.window {
+		if ev != nil && len(ev.Data) > 0 {
+			ev.Data = restoreV1ReadAliasInEvent(ev.Data, alias)
+		}
+	}
+	if resp.events != nil {
+		resp.events = &v1ReadAliasStream{inner: resp.events, alias: alias}
+	}
+}
+
+// v1ReadAliasStream 包装事件流, 逐事件还原 read 工具名。
+type v1ReadAliasStream struct {
+	inner streams.Stream[*httpclient.StreamEvent]
+	alias string
+}
+
+func (s *v1ReadAliasStream) Next() bool { return s.inner.Next() }
+func (s *v1ReadAliasStream) Current() *httpclient.StreamEvent {
+	ev := s.inner.Current()
+	if ev != nil && len(ev.Data) > 0 {
+		ev.Data = restoreV1ReadAliasInEvent(ev.Data, s.alias)
+	}
+	return ev
+}
+func (s *v1ReadAliasStream) Close() error { return s.inner.Close() }
+func (s *v1ReadAliasStream) Err() error   { return s.inner.Err() }
 
 // sendPassthroughStream 发起同协议流式请求并预读有效性窗口, 窗口通过验证才算本轮取得可提交响应。
 // accept 非空时用它作为出站 Accept(OpenCode 免费档的官方值), 否则用默认 text/event-stream。
@@ -291,8 +330,8 @@ func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *
 	if isOpencodeFreeModel(m.channel, bodyModelName(request.Body)) {
 		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)补 Accept, Anthropic 另补 beta。
 		applyOpencodeFreeLaneHeaders(m.channel, request, bodyModelName(request.Body))
-		if m.format == llm.APIFormatOpenAIChatCompletion {
-			request.Body, _ = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(m.channel))
+		if isChatFormat(m.format) {
+			request.Body, _, _ = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(m.channel), formatToProtocol(m.format))
 		}
 	}
 	// 角色归一与渠道参数覆盖之后再回写。Chat 归一会剥掉白名单外的顶层字段,
@@ -569,7 +608,7 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 	// OpenCode Zen 免费档非流式折叠: 客户端(Anthropic/Responses)请求非流式、且目标是免费档模型时,
 	// 把客户端正文置为流式, 让 pipeline 以流式驱动上游并返回事件流, 稍后聚合回非流式正文。
 	// 免费档只接受 Agent 形态的流式请求, 非流式直连必然 403 FreeTierError。
-	collapse := !streaming && outbound.APIFormat() == llm.APIFormatOpenAIChatCompletion && isOpencodeFreeModel(channel, bodyModelName(raw.Body))
+	collapse := !streaming && isChatFormat(outbound.APIFormat()) && isOpencodeFreeModel(channel, bodyModelName(raw.Body))
 	if collapse {
 		if next, err := sjson.SetBytes(raw.Body, "stream", true); err == nil {
 			raw.Body = next

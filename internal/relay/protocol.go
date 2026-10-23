@@ -63,6 +63,19 @@ func isChatFormat(format llm.APIFormat) bool {
 	}
 }
 
+func formatToProtocol(format llm.APIFormat) string {
+	switch format {
+	case llm.APIFormatOpenAIChatCompletion:
+		return model.UpstreamProtocolChat
+	case llm.APIFormatOpenAIResponse:
+		return model.UpstreamProtocolResponses
+	case llm.APIFormatAnthropicMessage:
+		return model.UpstreamProtocolAnthropic
+	default:
+		return model.UpstreamProtocolChat
+	}
+}
+
 // multipartFormField 从 multipart/form-data 请求体中提取指定表单字段的值。
 // 用于图片编辑/变体、语音转写/翻译等 multipart 接口的路由选组: 这些接口的 model
 // 字段在 form-data 中而非 JSON body。非 multipart 内容类型或字段不存在时返回空字符串。

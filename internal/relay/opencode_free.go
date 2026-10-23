@@ -71,21 +71,35 @@ func knownOpencodeTool(name string) (opencodeToolDef, bool) {
 }
 
 // opencodeToolMatches 判定工具定义完全一致。
-func opencodeToolMatches(def opencodeToolDef, tool gjson.Result) bool {
-	if tool.Get("function.strict").Type != gjson.False {
-		return false
+func opencodeToolMatches(def opencodeToolDef, tool gjson.Result, protocol string) bool {
+	_, descPath, paramPath := toolFieldPaths(protocol)
+	if protocol == model.UpstreamProtocolChat {
+		if tool.Get("function.strict").Type != gjson.False {
+			return false
+		}
 	}
-	if tool.Get("function.description").String() != def.Description {
+	if tool.Get(descPath).String() != def.Description {
 		return false
 	}
 	if def.Parameters == nil {
 		return true
 	}
 	var parameters map[string]any
-	if err := json.Unmarshal([]byte(tool.Get("function.parameters").Raw), &parameters); err != nil {
+	if err := json.Unmarshal([]byte(tool.Get(paramPath).Raw), &parameters); err != nil {
 		return false
 	}
 	return reflect.DeepEqual(parameters, def.Parameters)
+}
+
+func toolFieldPaths(protocol string) (namePath, descPath, paramPath string) {
+	switch protocol {
+	case model.UpstreamProtocolAnthropic:
+		return "name", "description", "input_schema"
+	case model.UpstreamProtocolResponses:
+		return "name", "description", "parameters"
+	default:
+		return "function.name", "function.description", "function.parameters"
+	}
 }
 
 // isOpencodeFreeModel 判定该渠道上的模型是否落在 OpenCode Zen 免费档:
@@ -280,7 +294,7 @@ func bodyModelName(body []byte) string {
 }
 
 // shapeOpencodeFreeBody 把免费档正文规范成 Agent 形态。
-func shapeOpencodeFreeBody(body []byte, v1Lane bool) ([]byte, bool) {
+func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, bool, string) {
 	out := body
 	changed := false
 
@@ -289,27 +303,45 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool) ([]byte, bool) {
 			out, changed = next, true
 		}
 	}
-	// OpenAI Chat 流式须显式声明 include_usage 才会在末尾带 usage 帧。
-	if !gjson.GetBytes(out, "stream_options.include_usage").Bool() {
-		if next, err := sjson.SetBytes(out, "stream_options.include_usage", true); err == nil {
-			out, changed = next, true
+	if protocol == model.UpstreamProtocolChat {
+		if !gjson.GetBytes(out, "stream_options.include_usage").Bool() {
+			if next, err := sjson.SetBytes(out, "stream_options.include_usage", true); err == nil {
+				out, changed = next, true
+			}
 		}
 	}
 	if v1Lane {
-		if next, injected := ensureV1ReadTool(out); injected {
-			return next, true
+		next, alias, injected := ensureV1ReadTool(out)
+		if injected {
+			return next, true, alias
 		}
-		return out, changed
+		return out, changed, ""
 	}
-	if next, injected := ensureOpencodeFreeTools(out); injected {
+	if next, injected := ensureOpencodeFreeTools(out, protocol); injected {
 		out, changed = next, true
 	}
-	if !gjson.GetBytes(out, "max_tokens").Exists() && !gjson.GetBytes(out, "max_completion_tokens").Exists() {
-		if next, err := sjson.SetBytes(out, "max_completion_tokens", opencodeV2CompletionLimit); err == nil {
+	if !gjson.GetBytes(out, "max_tokens").Exists() && !gjson.GetBytes(out, "max_completion_tokens").Exists() && !gjson.GetBytes(out, "max_output_tokens").Exists() {
+		if next, err := sjson.SetBytes(out, protocolTokenLimitField(protocol), opencodeV2CompletionLimit); err == nil {
 			out, changed = next, true
 		}
 	}
-	return out, changed
+	if protocol == model.UpstreamProtocolChat {
+		if normalized := normalizeOpencodeFreeChatBody(out); normalized != nil {
+			out = normalized
+		}
+	}
+	return out, changed, ""
+}
+
+func protocolTokenLimitField(protocol string) string {
+	switch protocol {
+	case model.UpstreamProtocolResponses:
+		return "max_output_tokens"
+	case model.UpstreamProtocolAnthropic:
+		return "max_tokens"
+	default:
+		return "max_completion_tokens"
+	}
 }
 
 // v1ReadToolName 是 v1 档(/zen)唯一要求的工具名, 该档不校验工具定义。
@@ -318,25 +350,171 @@ const v1ReadToolName = "read"
 // v1DeprecatedReadDescription 让模型忽略注入的占位 read 工具。
 const v1DeprecatedReadDescription = "DEPRECATED: This tool is deprecated and disabled. Do NOT call or reference this tool under any circumstances; ignore it completely."
 
-// ensureV1ReadTool 保证 v1 档存在单个 read 工具。
-func ensureV1ReadTool(body []byte) ([]byte, bool) {
+// isV1ReadToolCandidate 判定工具名是否为 read 的变体。
+func isV1ReadToolCandidate(name string) bool {
+	if strings.EqualFold(name, v1ReadToolName) {
+		return true
+	}
+	lower := strings.ToLower(name)
+	switch lower {
+	case "read_file", "readfile", "view_file", "viewfile", "read_text", "readtext":
+		return true
+	}
+	return false
+}
+
+// ensureV1ReadTool 保证 v1 档存在单个 read 工具。返回改写后的正文、
+// 被改名的原始工具名(空表示无需响应还原)和是否改写。
+func ensureV1ReadTool(body []byte) ([]byte, string, bool) {
 	tools := gjson.GetBytes(body, "tools")
 	if tools.Exists() && !tools.IsArray() {
-		return body, false
+		return body, "", false
 	}
+	alias := ""
 	items := make([]string, 0, len(tools.Array())+1)
 	for _, t := range tools.Array() {
-		if t.Get("function.name").String() == v1ReadToolName {
-			return body, false
+		name := t.Get("function.name").String()
+		if name == v1ReadToolName {
+			return body, "", false
+		}
+		if alias == "" && isV1ReadToolCandidate(name) {
+			alias = name
+			renamed := renameV1ToolDef(t.Raw, name)
+			items = append(items, renamed)
+			continue
 		}
 		items = append(items, t.Raw)
 	}
-	items = append(items, v1DeprecatedReadTool())
+	changed := true
+	if alias == "" {
+		items = append(items, v1DeprecatedReadTool())
+	} else {
+		items = append(items, v1DeprecatedReadTool())
+	}
 	next, err := sjson.SetRawBytes(body, "tools", []byte("["+strings.Join(items, ",")+"]"))
 	if err != nil {
-		return body, false
+		return body, "", false
 	}
-	return next, true
+	if alias != "" {
+		next = rewriteV1ToolReferences(next, alias)
+	}
+	return next, alias, changed
+}
+
+// renameV1ToolDef 把工具定义中的 name 改为 read。
+func renameV1ToolDef(raw, oldName string) string {
+	out, err := sjson.SetBytes([]byte(raw), "function.name", v1ReadToolName)
+	if err != nil {
+		return raw
+	}
+	return string(out)
+}
+
+// rewriteV1ToolReferences 把 tool_choice 和历史 tool_calls 中的 alias 改为 read。
+func rewriteV1ToolReferences(body []byte, alias string) []byte {
+	out := body
+	// tool_choice.function.name
+	tcName := gjson.GetBytes(out, "tool_choice.function.name").String()
+	if tcName == alias {
+		if next, err := sjson.SetBytes(out, "tool_choice.function.name", v1ReadToolName); err == nil {
+			out = next
+		}
+	}
+	// messages[].tool_calls[].function.name
+	messages := gjson.GetBytes(out, "messages")
+	if messages.IsArray() {
+		for i, msg := range messages.Array() {
+			calls := msg.Get("tool_calls")
+			if !calls.IsArray() {
+				continue
+			}
+			for j, call := range calls.Array() {
+				if call.Get("function.name").String() == alias {
+					path := fmt.Sprintf("messages.%d.tool_calls.%d.function.name", i, j)
+					if next, err := sjson.SetBytes(out, path, v1ReadToolName); err == nil {
+						out = next
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// restoreV1ReadAliasInBody 把响应正文中的 read 工具调用名还原为 alias。
+func restoreV1ReadAliasInBody(body []byte, alias string) []byte {
+	if alias == "" || alias == v1ReadToolName {
+		return body
+	}
+	out := body
+	// Chat: choices[].message.tool_calls[].function.name
+	choices := gjson.GetBytes(out, "choices")
+	if choices.IsArray() {
+		for i, choice := range choices.Array() {
+			calls := choice.Get("message.tool_calls")
+			if !calls.IsArray() {
+				continue
+			}
+			for j, call := range calls.Array() {
+				if call.Get("function.name").String() == v1ReadToolName {
+					path := fmt.Sprintf("choices.%d.message.tool_calls.%d.function.name", i, j)
+					if next, err := sjson.SetBytes(out, path, alias); err == nil {
+						out = next
+					}
+				}
+			}
+		}
+	}
+	// Anthropic: content[].name (tool_use blocks)
+	content := gjson.GetBytes(out, "content")
+	if content.IsArray() {
+		for i, block := range content.Array() {
+			if block.Get("type").String() == "tool_use" && block.Get("name").String() == v1ReadToolName {
+				path := fmt.Sprintf("content.%d.name", i)
+				if next, err := sjson.SetBytes(out, path, alias); err == nil {
+					out = next
+				}
+			}
+		}
+	}
+	return out
+}
+
+// restoreV1ReadAliasInEvent 把流式事件中的 read 工具调用名还原为 alias。
+func restoreV1ReadAliasInEvent(data []byte, alias string) []byte {
+	if alias == "" || alias == v1ReadToolName || len(data) == 0 {
+		return data
+	}
+	// Chat delta: choices[].delta.tool_calls[].function.name
+	choices := gjson.GetBytes(data, "choices")
+	if choices.IsArray() {
+		out := data
+		for i, choice := range choices.Array() {
+			calls := choice.Get("delta.tool_calls")
+			if !calls.IsArray() {
+				continue
+			}
+			for j, call := range calls.Array() {
+				if call.Get("function.name").String() == v1ReadToolName {
+					path := fmt.Sprintf("choices.%d.delta.tool_calls.%d.function.name", i, j)
+					if next, err := sjson.SetBytes(out, path, alias); err == nil {
+						out = next
+					}
+				}
+			}
+		}
+		if !bytes.Equal(out, data) {
+			return out
+		}
+	}
+	// Anthropic: content_block_delta with tool_use name
+	name := gjson.GetBytes(data, "name").String()
+	if name == v1ReadToolName {
+		if next, err := sjson.SetBytes(data, "name", alias); err == nil {
+			return next
+		}
+	}
+	return data
 }
 
 // v1DeprecatedReadTool 生成 v1 档的禁用 read 占位定义。
@@ -358,7 +536,7 @@ func v1DeprecatedReadTool() string {
 //   - 非核心工具原样保留。
 //
 // tools 字段存在但不是数组时视为客户端输入异常, 不改写。
-func ensureOpencodeFreeTools(body []byte) ([]byte, bool) {
+func ensureOpencodeFreeTools(body []byte, protocol string) ([]byte, bool) {
 	tools := gjson.GetBytes(body, "tools")
 	if tools.Exists() && !tools.IsArray() {
 		return body, false
@@ -367,9 +545,10 @@ func ensureOpencodeFreeTools(body []byte) ([]byte, bool) {
 	changed := false
 	present := make(map[string]bool, len(opencodeFreeCoreTools))
 	items := make([]string, 0, len(tools.Array())+len(opencodeFreeCoreTools))
+	namePath, _, _ := toolFieldPaths(protocol)
 
 	for _, t := range tools.Array() {
-		name := t.Get("function.name").String()
+		name := t.Get(namePath).String()
 		if name == "" {
 			items = append(items, t.Raw)
 			continue
@@ -379,8 +558,8 @@ func ensureOpencodeFreeTools(body []byte) ([]byte, bool) {
 		// description/parameters, 客户端自带的定义几乎不可能恰好匹配。已一致的
 		// 不替换, 保持幂等。
 		if def, known := knownOpencodeTool(name); known {
-			if !opencodeToolMatches(def, t) {
-				items = append(items, opencodeFreeChatTool(name))
+			if !opencodeToolMatches(def, t, protocol) {
+				items = append(items, opencodeFreeTool(name, protocol))
 				changed = true
 				continue
 			}
@@ -396,7 +575,7 @@ func ensureOpencodeFreeTools(body []byte) ([]byte, bool) {
 	}
 	if len(missing) > 0 {
 		for _, name := range missing {
-			items = append(items, opencodeFreeChatTool(name))
+			items = append(items, opencodeFreeTool(name, protocol))
 		}
 		changed = true
 	}
@@ -412,9 +591,9 @@ func ensureOpencodeFreeTools(body []byte) ([]byte, bool) {
 	return next, true
 }
 
-// opencodeFreeChatTool 生成 Chat 协议的工具定义。核心工具使用 embed 的真实定义
+// opencodeFreeTool 生成协议感知的工具定义。核心工具使用 embed 的真实定义
 // (description + parameters); 未知工具降级为占位(上游不识别, 不影响校验)。
-func opencodeFreeChatTool(name string) string {
+func opencodeFreeTool(name, protocol string) string {
 	description := "Agent tool " + name
 	parameters := map[string]any{"type": "object", "properties": map[string]any{}}
 	if def, ok := knownOpencodeTool(name); ok {
@@ -423,15 +602,33 @@ func opencodeFreeChatTool(name string) string {
 			parameters = def.Parameters
 		}
 	}
-	b, _ := marshalOpencodeJSON(map[string]any{
-		"type": "function",
-		"function": map[string]any{
+	var tool any
+	switch protocol {
+	case model.UpstreamProtocolAnthropic:
+		tool = map[string]any{
+			"name":         name,
+			"description":  description,
+			"input_schema": parameters,
+		}
+	case model.UpstreamProtocolResponses:
+		tool = map[string]any{
+			"type":        "function",
 			"name":        name,
 			"description": description,
 			"parameters":  parameters,
-			"strict":      false,
-		},
-	})
+		}
+	default:
+		tool = map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        name,
+				"description": description,
+				"parameters":  parameters,
+				"strict":      false,
+			},
+		}
+	}
+	b, _ := marshalOpencodeJSON(tool)
 	return string(b)
 }
 
@@ -444,6 +641,60 @@ func marshalOpencodeJSON(value any) ([]byte, error) {
 		return nil, err
 	}
 	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
+}
+
+// v2ChatKeyOrder 是免费档 v2 Chat 正文的固定键序, 对齐官方客户端逐字节指纹。
+var v2ChatKeyOrder = []string{"model", "messages", "tools", "stream", "stream_options", "max_completion_tokens"}
+
+// normalizeOpencodeFreeChatBody 把 v2 Chat 正文重编码为固定键序且不转义 HTML,
+// 对齐上游逐字节门禁(#142)。仅在免费档 v2 Chat 路径调用。
+func normalizeOpencodeFreeChatBody(body []byte) []byte {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil
+	}
+	var buffer bytes.Buffer
+	buffer.WriteByte('{')
+	first := true
+	written := make(map[string]bool, len(raw))
+	emit := func(key string) {
+		val, ok := raw[key]
+		if !ok {
+			return
+		}
+		if !first {
+			buffer.WriteByte(',')
+		}
+		first = false
+		buffer.WriteString(jsonEscapeString(key))
+		buffer.WriteByte(':')
+		buffer.Write(val)
+		written[key] = true
+	}
+	for _, key := range v2ChatKeyOrder {
+		emit(key)
+	}
+	rest := make([]string, 0, len(raw))
+	for key := range raw {
+		if !written[key] {
+			rest = append(rest, key)
+		}
+	}
+	slices.Sort(rest)
+	for _, key := range rest {
+		emit(key)
+	}
+	buffer.WriteByte('}')
+	out := buffer.Bytes()
+	if !json.Valid(out) {
+		return nil
+	}
+	return out
+}
+
+func jsonEscapeString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 // collapseOpencodeFreeStream 把免费档强制流式得到的完整 SSE 折叠成客户端协议的非流式正文。

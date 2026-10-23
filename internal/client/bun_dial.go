@@ -21,7 +21,7 @@ import (
 // bunHandshakeTimeout bounds the proxy negotiation and the TLS handshake of a
 // new connection, the TLSHandshakeTimeout the regular clients inherit from
 // http.DefaultTransport.
-const bunHandshakeTimeout = 10 * time.Second
+const bunHandshakeTimeout = 30 * time.Second
 
 // bunClientHello returns the ClientHello of Bun's fetch, captured from Bun
 // 1.4.3. Bun links its own BoringSSL, so the hello is the same on every

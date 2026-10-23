@@ -208,7 +208,7 @@ func TestOpencodeProxy403RetriesAnotherAccount(t *testing.T) {
 	setupFailoverTest(t)
 	probe := newOpencodeProxyProbe(t, func(account string) (int, []byte) {
 		if account == "bad-account" {
-			return http.StatusForbidden, nil
+			return http.StatusForbidden, []byte("abusive traffic")
 		}
 		return http.StatusOK, chatCompletionBody("chatcmpl-opencode-retry", "ok-from-good-account", 3, 5)
 	})
@@ -240,7 +240,7 @@ func TestOpencodeProxy403RetriesAnotherAccount(t *testing.T) {
 	if cooldown != 1 {
 		t.Fatalf("账号池应恰有 1 个冷却账号, 实际 %d: %+v", cooldown, pool)
 	}
-	assertOpencodeProxyCooldownDuration(t, pool["bad-account"].cooldownUntil, ocProxyCooldown)
+	assertOpencodeProxyCooldownDuration(t, pool["bad-account"].cooldownUntil, ocProxyAbuseCooldown)
 
 	itemID := group.Items[0].ID
 	route := routeSnapshot(t, group.ID)
@@ -339,17 +339,12 @@ func TestOpencodeProxy429StopsAtRetryLimit(t *testing.T) {
 	if len(seen) < ocProxyMaxRetries+1 {
 		t.Fatalf("应至少完成 %d 次换号尝试, 实际 %d: %v", ocProxyMaxRetries+1, len(seen), seen)
 	}
-	unique := make(map[string]struct{}, ocProxyMaxRetries+1)
+	unique := make(map[string]struct{}, len(seen))
 	for _, account := range seen {
 		unique[account] = struct{}{}
 	}
-	if len(unique) != ocProxyMaxRetries+1 {
-		t.Fatalf("换号耗尽后不应再新建账号, 实际 %d 个: %v", len(unique), seen)
-	}
-	for _, account := range seen[ocProxyMaxRetries:] {
-		if account != seen[ocProxyMaxRetries] {
-			t.Fatalf("耗尽后应固定复用最后一个账号, 实际 %v", seen)
-		}
+	if len(unique) != len(seen) {
+		t.Fatalf("429 冷却账号不应被复用, 实际 %v", seen)
 	}
 	pool := opencodeProxyPoolSnapshot(t, channel.ID)
 	if len(pool) != len(unique) {
@@ -433,7 +428,7 @@ func TestOpencodeProxy403MultiKeySwitchesAccountWithoutKeyCooldown(t *testing.T)
 	t.Cleanup(resetChannelKeyHealth)
 	probe := newOpencodeProxyProbe(t, func(account string) (int, []byte) {
 		if account == "bad-account" {
-			return http.StatusForbidden, nil
+			return http.StatusForbidden, []byte("abusive traffic")
 		}
 		return http.StatusOK, chatCompletionBody("chatcmpl-opencode-multikey", "ok-multikey-account-switch", 3, 5)
 	})
@@ -494,7 +489,7 @@ func TestOpencodeProxy403MultiKeySwitchesAccountWithoutKeyCooldown(t *testing.T)
 func TestOpencodeProxy403StopsAtRetryLimit(t *testing.T) {
 	setupFailoverTest(t)
 	probe := newOpencodeProxyProbe(t, func(string) (int, []byte) {
-		return http.StatusForbidden, nil
+		return http.StatusForbidden, []byte("abusive traffic")
 	})
 	channel := createOpencodeProxyTestChannel(t, probe.template)
 	t.Cleanup(func() { ocProxyPools.Delete(channel.ID) })
@@ -513,17 +508,12 @@ func TestOpencodeProxy403StopsAtRetryLimit(t *testing.T) {
 	if len(seen) < ocProxyMaxRetries+1 {
 		t.Fatalf("应至少完成 %d 次换号尝试, 实际 %d: %v", ocProxyMaxRetries+1, len(seen), seen)
 	}
-	unique := make(map[string]struct{}, ocProxyMaxRetries+1)
+	unique := make(map[string]struct{}, len(seen))
 	for _, account := range seen {
 		unique[account] = struct{}{}
 	}
-	if len(unique) != ocProxyMaxRetries+1 {
-		t.Fatalf("换号耗尽后不应再新建账号, 实际 %d 个: %v", len(unique), seen)
-	}
-	for _, account := range seen[ocProxyMaxRetries:] {
-		if account != seen[ocProxyMaxRetries] {
-			t.Fatalf("耗尽后应固定复用最后一个账号, 实际 %v", seen)
-		}
+	if len(unique) != len(seen) {
+		t.Fatalf("403 冷却账号不应被复用, 实际 %v", seen)
 	}
 	pool := opencodeProxyPoolSnapshot(t, channel.ID)
 	if len(pool) != len(unique) {
@@ -555,7 +545,7 @@ func TestOpencodeProxy403MultiKeyStopsAtRetryLimitWithoutKeyCooldown(t *testing.
 	resetChannelKeyHealth()
 	t.Cleanup(resetChannelKeyHealth)
 	probe := newOpencodeProxyProbe(t, func(string) (int, []byte) {
-		return http.StatusForbidden, nil
+		return http.StatusForbidden, []byte("abusive traffic")
 	})
 	channel := createOpencodeProxyTestChannel(t, probe.template,
 		model.ChannelKey{Key: "multikey-alpha", Remark: "alpha"},
@@ -574,20 +564,15 @@ func TestOpencodeProxy403MultiKeyStopsAtRetryLimitWithoutKeyCooldown(t *testing.
 		t.Fatalf("持续 403 不应泄漏响应体, 实际 %s", recorder.Body.String())
 	}
 	seen := probe.seenAccounts()
-	if len(seen) < ocProxyMaxRetries+2 {
-		t.Fatalf("应完成换号及复用最后账号, 实际 %d 次: %v", len(seen), seen)
+	if len(seen) < ocProxyMaxRetries+1 {
+		t.Fatalf("应至少完成 %d 次换号尝试, 实际 %d: %v", ocProxyMaxRetries+1, len(seen), seen)
 	}
-	unique := make(map[string]struct{}, ocProxyMaxRetries+1)
+	unique := make(map[string]struct{}, len(seen))
 	for _, account := range seen {
 		unique[account] = struct{}{}
 	}
-	if len(unique) != ocProxyMaxRetries+1 {
-		t.Fatalf("换号耗尽后不应再新建账号, 实际 %d 个: %v", len(unique), seen)
-	}
-	for _, account := range seen[ocProxyMaxRetries:] {
-		if account != seen[ocProxyMaxRetries] {
-			t.Fatalf("耗尽后应固定复用最后一个账号, 实际 %v", seen)
-		}
+	if len(unique) != len(seen) {
+		t.Fatalf("403 冷却账号不应被复用, 实际 %v", seen)
 	}
 	pool := opencodeProxyPoolSnapshot(t, channel.ID)
 	if len(pool) != len(unique) {
@@ -619,7 +604,7 @@ func TestOpencodeProxy403ConcurrentRetry(t *testing.T) {
 	setupFailoverTest(t)
 	probe := newOpencodeProxyProbe(t, func(account string) (int, []byte) {
 		if account == "bad-account" {
-			return http.StatusForbidden, nil
+			return http.StatusForbidden, []byte("abusive traffic")
 		}
 		return http.StatusOK, chatCompletionBody("chatcmpl-opencode-concurrent", "ok-concurrent", 2, 3)
 	})

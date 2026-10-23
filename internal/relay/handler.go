@@ -21,10 +21,10 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/client"
 	"github.com/kingsunb/NovaVeil/internal/helper"
 	"github.com/kingsunb/NovaVeil/internal/model"
-	"github.com/kingsunb/NovaVeil/internal/utils/opencodeid"
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/kingsunb/NovaVeil/internal/relay/mask"
 	"github.com/kingsunb/NovaVeil/internal/server/resp"
+	"github.com/kingsunb/NovaVeil/internal/utils/opencodeid"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/looplj/axonhub/llm/transformer"
@@ -190,7 +190,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		earlyEofRetried := make(map[int]bool)          // 已享受过提前 EOF 免费重试的成员 ID: 每个成员每请求仅免记账重试一次。
 		sanitizeRetried := make(map[int]bool)          // 已享受过 400 清洗重试的成员 ID: 每个成员每请求仅一次。
 		opencodeAccountRetries := make(map[int]int)    // 各成员本请求已换号次数。
-		opencodeAccountPinned := make(map[int]string)  // 换号耗尽后固定使用的账号。
 		allCooldownClears := 0                         // 全冷却自动清除并重试的累计次数, 用于线性退避间隔计算。
 		var failedIdx int                              // 引用链解析失败跳下标(仅当轮有效), 与 hops 一起提升以便用普通赋值接收。
 
@@ -476,10 +475,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// OpenCode 免费档按出口 IP 轮换代理账号。
 			proxyAccount := ""
 			if dispatchErr == nil && proxyNeedsOpencodeAccount(channel) {
-				candidate, pinned := opencodeAccountPinned[item.ID]
-				if !pinned {
-					candidate = pickOpencodeProxyAccount(ctx, channel.ID)
-				}
+				candidate := pickOpencodeProxyAccount(ctx, channel.ID)
 				if resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate); resolveErr == nil {
 					addr := resolved.String()
 					effective.ChannelProxy = &addr
@@ -607,7 +603,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					proxyAccountRejection = code == http.StatusForbidden || code == http.StatusTooManyRequests
 					switch code {
 					case http.StatusForbidden:
-						markOpencodeProxyForbidden(channel.ID, proxyAccount)
+						if isOpencodeNetworkAbuse(err) {
+							markOpencodeProxyAbuseBlock(channel.ID, proxyAccount)
+						}
 					case http.StatusTooManyRequests:
 						markOpencodeProxyRateLimited(channel.ID, proxyAccount)
 					}
@@ -670,15 +668,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					continue
 				}
 				// 403/429 不惩罚成员, 换号同成员。
-				if proxyAccountRejection {
-					if opencodeAccountRetries[item.ID] >= ocProxyMaxRetries {
-						opencodeAccountPinned[item.ID] = proxyAccount
-					} else {
-						opencodeAccountRetries[item.ID]++
-						request.releaseRoundLifecycle()
-						releaseRefChainHops(hops)
-						continue
-					}
+				if proxyAccountRejection && opencodeAccountRetries[item.ID] < ocProxyMaxRetries {
+					opencodeAccountRetries[item.ID]++
+					request.releaseRoundLifecycle()
+					releaseRefChainHops(hops)
+					continue
 				}
 				// 上游在任何内容到达前提前关闭流(提前 EOF): 多为瞬时抖动, 首次发生时对同成员
 				// 给予一次免记账的立即重试——旁路 failures 计数, 不记路由失败也不计渠道故障;
