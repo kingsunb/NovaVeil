@@ -537,8 +537,14 @@ func bunRequestHead(req *http.Request, body []byte) ([]byte, bool, error) {
 	}
 	var head strings.Builder
 	head.WriteString(method + " " + req.URL.RequestURI() + " HTTP/1.1\r\n")
+	wroteLength := false
 	for _, name := range bunCommonHeaders {
 		lower := strings.ToLower(name)
+		if lower == "content-length" && body != nil {
+			head.WriteString(name + ": " + strconv.Itoa(len(body)) + "\r\n")
+			wroteLength = true
+			continue
+		}
 		if value, ok := values[lower]; ok {
 			head.WriteString(name + ": " + value + "\r\n")
 			delete(values, lower)
@@ -568,7 +574,7 @@ func bunRequestHead(req *http.Request, body []byte) ([]byte, bool, error) {
 	if !hasEncoding {
 		head.WriteString("Accept-Encoding: gzip, deflate, br, zstd\r\n")
 	}
-	if body != nil {
+	if body != nil && !wroteLength {
 		head.WriteString("Content-Length: " + strconv.Itoa(len(body)) + "\r\n")
 	}
 	head.WriteString("\r\n")

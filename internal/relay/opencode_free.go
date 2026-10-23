@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -222,11 +224,17 @@ func applyOpencodeFreeLaneHeaders(channel model.Channel, request *httpclient.Req
 		request.Headers = make(http.Header)
 	}
 	request.Headers.Set("Accept", accept)
+	request.Headers.Set("x-opencode-client", "cli")
+	isAnthropic := opencodeModelProtocol(channel, modelName) == model.UpstreamProtocolAnthropic
+	if isAnthropic {
+		request.Headers.Set("anthropic-version", "2023-06-01")
+	}
 	if !isOpencodeV1Lane(channel) {
 		// 动态覆盖渠道静态 UA，存量库也生效。
 		request.Headers.Set("User-Agent", "opencode/latest/"+opencodeV2ClientVersion+"/cli")
-		if opencodeModelProtocol(channel, modelName) == model.UpstreamProtocolAnthropic {
+		if isAnthropic {
 			applyAnthropicBetaQuery(request)
+			request.Headers.Set("anthropic-beta", "interleaved-thinking-2025-05-14")
 		}
 		return
 	}
@@ -236,7 +244,16 @@ func applyOpencodeFreeLaneHeaders(channel model.Channel, request *httpclient.Req
 	}
 	request.Headers.Set("User-Agent", "opencode/"+opencodeV1ClientVersion+
 		" ai-sdk/provider-utils/"+ver+" runtime/bun/"+opencodeV1BunVersion)
-	request.Headers.Set("x-opencode-request", opencodeid.GenerateMessageID())
+	request.Headers.Set("x-opencode-request", opencodeid.UserMessageID(
+		request.Headers.Get("x-opencode-request"),
+		request.Body,
+		request.Headers.Get(opencodeSessionHeader),
+	))
+	if isAnthropic {
+		if beta := v1AnthropicBetas(request.Body); beta != "" {
+			request.Headers.Set("anthropic-beta", beta)
+		}
+	}
 }
 
 // v2 Anthropic 补 beta, 保留原 query。
@@ -469,4 +486,128 @@ func validateCollapsedFreeBody(format llm.APIFormat, body []byte, usage *llm.Usa
 		return fmt.Errorf("%w: %q", errAbnormalFinish, terminal)
 	}
 	return nil
+}
+
+type v1AnthropicBetaRequest struct {
+	Model             string            `json:"model"`
+	MCPServers        []json.RawMessage `json:"mcp_servers"`
+	ContextManagement *struct {
+		Edits []struct {
+			Type string `json:"type"`
+		} `json:"edits"`
+	} `json:"context_management"`
+	Container    json.RawMessage `json:"container"`
+	OutputConfig struct {
+		TaskBudget json.RawMessage `json:"task_budget"`
+	} `json:"output_config"`
+	Speed     json.RawMessage `json:"speed"`
+	Fallbacks json.RawMessage `json:"fallbacks"`
+	Thinking  struct {
+		BlockBinding json.RawMessage `json:"block_binding"`
+	} `json:"thinking"`
+	Tools []struct {
+		Type           string          `json:"type"`
+		InputExamples  json.RawMessage `json:"input_examples"`
+		AllowedCallers json.RawMessage `json:"allowed_callers"`
+	} `json:"tools"`
+}
+
+var v1AnthropicToolBetas = map[string]string{
+	"code_execution_20250522": "code-execution-2025-05-22",
+	"code_execution_20250825": "code-execution-2025-08-25",
+	"computer_20241022":       "computer-use-2024-10-22",
+	"computer_20250124":       "computer-use-2025-01-24",
+	"computer_20251124":       "computer-use-2025-11-24",
+	"text_editor_20241022":    "computer-use-2024-10-22",
+	"text_editor_20250124":    "computer-use-2025-01-24",
+	"text_editor_20250429":    "computer-use-2025-01-24",
+	"bash_20241022":           "computer-use-2024-10-22",
+	"bash_20250124":           "computer-use-2025-01-24",
+	"memory_20250818":         "context-management-2025-06-27",
+	"web_fetch_20250910":      "web-fetch-2025-09-10",
+	"web_fetch_20260209":      "code-execution-web-tools-2026-02-09",
+	"web_search_20260209":     "code-execution-web-tools-2026-02-09",
+	"advisor_20260301":        "advisor-tool-2026-03-01",
+}
+
+var claude3OrOlderPattern = regexp.MustCompile(`claude-(?:instant(?:-|$)|v?2(?:$|[-.:])|3(?:$|[-.]))`)
+
+// v1AnthropicBetas 从 body 派生 anthropic-beta
+func v1AnthropicBetas(body []byte) string {
+	var request v1AnthropicBetaRequest
+	_ = json.Unmarshal(body, &request)
+	var betas []string
+	add := func(beta string) {
+		if !slices.Contains(betas, beta) {
+			betas = append(betas, beta)
+		}
+	}
+	if len(request.MCPServers) > 0 {
+		add("mcp-client-2025-04-04")
+	}
+	if request.ContextManagement != nil {
+		add("context-management-2025-06-27")
+		for _, edit := range request.ContextManagement.Edits {
+			if edit.Type == "compact_20260112" {
+				add("compact-2026-01-12")
+			}
+		}
+	}
+	var container struct {
+		Skills []json.RawMessage `json:"skills"`
+	}
+	if json.Unmarshal(request.Container, &container) == nil && len(container.Skills) > 0 {
+		add("code-execution-2025-08-25")
+		add("skills-2025-10-02")
+		add("files-api-2025-04-14")
+	}
+	if isPresentJSON(request.OutputConfig.TaskBudget) {
+		add("task-budgets-2026-03-13")
+	}
+	if string(request.Speed) == `"fast"` {
+		add("fast-mode-2026-02-01")
+	}
+	var fallbacks []json.RawMessage
+	if string(request.Fallbacks) == `"default"` {
+		add("server-side-fallback-2026-07-01")
+	} else if json.Unmarshal(request.Fallbacks, &fallbacks) == nil && len(fallbacks) > 0 {
+		add("server-side-fallback-2026-06-01")
+	}
+	if isPresentJSON(request.Thinking.BlockBinding) {
+		add("thinking-binding-controls-2026-08-01")
+	}
+	for _, tool := range request.Tools {
+		if tool.Type == "" || tool.Type == "custom" {
+			if anthropicSupportsStructuredOutput(request.Model) {
+				add("structured-outputs-2025-11-13")
+			}
+			if isPresentJSON(tool.InputExamples) || isPresentJSON(tool.AllowedCallers) {
+				add("advanced-tool-use-2025-11-20")
+			}
+		} else if beta := v1AnthropicToolBetas[tool.Type]; beta != "" {
+			add(beta)
+		}
+	}
+	return strings.Join(betas, ",")
+}
+
+func isPresentJSON(raw json.RawMessage) bool {
+	return len(raw) > 0 && string(raw) != "null"
+}
+
+func anthropicSupportsStructuredOutput(model string) bool {
+	for _, supported := range []string{
+		"claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-fable-5", "claude-sonnet-5",
+		"claude-sonnet-4-6", "claude-opus-4-6", "claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5",
+		"claude-opus-4-1",
+	} {
+		if strings.Contains(model, supported) {
+			return true
+		}
+	}
+	if strings.Contains(model, "claude-sonnet-4-") || strings.Contains(model, "claude-opus-4-") ||
+		strings.Contains(model, "claude-3-haiku") || claude3OrOlderPattern.MatchString(model) {
+		return false
+	}
+	return strings.Contains(model, "claude-")
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/client"
 	"github.com/kingsunb/NovaVeil/internal/helper"
 	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/utils/opencodeid"
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/kingsunb/NovaVeil/internal/relay/mask"
 	"github.com/kingsunb/NovaVeil/internal/server/resp"
@@ -569,11 +570,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 请求级随机头值在首次发起上游前一次性解析, 之后所有重试复用同一值, 不在每次重试重新生成。
 			if !requestRandomValueResolved {
 				requestRandomValue = resolveRequestRandomValue(scopeKey, channel.ID, selectedKey.ID)
-				requestOpencodeSession = resolveOpencodeSessionHeader(
-					c.GetHeader(opencodeSessionHeader),
-					c.GetHeader("X-Session-Id"),
-					requestRandomValue,
-				)
+				callerScope := "console"
+				if apiKeyID > 0 {
+					callerScope = strconv.Itoa(apiKeyID)
+				}
+				requestOpencodeSession = opencodeid.DeriveSessionID(raw.Headers, raw.Body, callerScope)
 				requestRandomValueResolved = true
 			}
 			var result *upstreamResponse
