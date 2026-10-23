@@ -832,7 +832,7 @@ export const api = {
     };
   },
 
-  /** 账号台账: 三态筛选 all/usable/untested/unusable。 */
+  /** 账号台账: 四态筛选 all/usable/untested/unusable/error。 */
   listProxyAccounts: async (channelId: number, filter: string) =>
     (await http<unknown>(
       `/channel/proxy-accounts?channel_id=${channelId}&filter=${encodeURIComponent(filter)}`,
@@ -852,6 +852,7 @@ export const api = {
       usable: number;
       untested: number;
       unusable: number;
+      probe_error: number;
     },
   /** 从台账删除指定账号并同步清理进程内池。 */
   deleteProxyAccounts: (channelId: number, accounts: string[]) =>
