@@ -41,11 +41,12 @@ NovaVeil 的 v2 免费档（`/inference`）按 OpenCode 2.x 客户端指纹伪�
 
 - **收益**：Windows 网关上 shell 工具描述与官方 2.x 客户端逐字节一致；embed 工具表覆盖 v2.x 全部 14 个注册工具（含 experimental 的 todowrite）；v2 UA 版本串对齐最新 tag。
 - **代价与已知上限**：新增一个 `opencodeToolDescription` 函数与 `runtime` 导入；`opencodeToolMatches` 多一次函数调用（仅 shell + Windows 有实际开销）。todowrite 的 parameters 从源码 Schema 推导而非捕获真实请求，若 AI SDK 的 Schema-to-JSON-Schema 转换有额外注解字段则可能与真实客户端存在细微差异——重访信号：用户开启 experimental.todo 后上游对 todowrite 工具 403。
+- **更新（2026-10-24 晚）**：Windows 实抓证明 shell 描述平台措辞应为 "on Windows using **bash**"（powershell 结论系沿用 opencode2api 的错误参照），本篇的平台措辞决定被 [实抓修正笔记](./2026-10-24-opencode-shell-desc-platform-word.md) 翻转；本篇其余决定（embed 表、版本串）不受影响。
 - 重访信号：opencode 发布 v2.1.5+ 且改变头集合/工具集/UA 格式。
 
 ## 验证
 
-- `opencodeToolDescription("shell", "...on Linux using bash...")` 在 `runtime.GOOS == "windows"` 时返回含 "on Windows using powershell" 的描述；在 Linux/macOS 原样返回。
+- `opencodeToolDescription("shell", "...on Linux using bash...")` 在 `runtime.GOOS == "windows"` 时返回含 "on Windows using bash" 的描述（措辞已由 [实抓修正笔记](./2026-10-24-opencode-shell-desc-platform-word.md) 修正）；在 Linux/macOS 原样返回。
 - `opencodeToolDescription("edit", "...")` 无论平台均原样返回。
 - `python3 -c "import json; print(sorted(json.load(open('internal/relay/opencode_tools.json')).keys()))"` 输出含 `todowrite`，共 14 个键。
 - `grep -rn '2\.1\.3' internal/` 无残留（排除 `error_log_mask.go` 与 `state.go` 中 design 章节引用）。

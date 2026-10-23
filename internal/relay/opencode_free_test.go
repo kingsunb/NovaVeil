@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -252,6 +253,26 @@ func TestOpencodeToolsIncludePatchDefinition(t *testing.T) {
 		if core == "patch" {
 			t.Fatal("patch 不应加入 opencodeFreeCoreTools")
 		}
+	}
+}
+
+// TestOpencodeToolDescriptionPlatform 用 2026-10-23 Windows 官方实抓固定平台措辞:
+// shell 描述只换平台词, shell 词恒为 bash; 非 shell 工具与非 Windows 平台原样返回。
+func TestOpencodeToolDescriptionPlatform(t *testing.T) {
+	const linuxDesc = "Execute a shell command and return its output. Commands run on Linux using bash."
+	if got := opencodeToolDescription("edit", linuxDesc); got != linuxDesc {
+		t.Fatalf("非 shell 工具应原样返回, 实际 %q", got)
+	}
+	got := opencodeToolDescription("shell", linuxDesc)
+	if runtime.GOOS == "windows" {
+		want := "Execute a shell command and return its output. Commands run on Windows using bash."
+		if got != want {
+			t.Fatalf("Windows 平台应替换为官方实抓措辞, 实际 %q", got)
+		}
+		return
+	}
+	if got != linuxDesc {
+		t.Fatalf("非 Windows 平台应原样返回, 实际 %q", got)
 	}
 }
 

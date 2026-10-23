@@ -104,9 +104,11 @@ func toolFieldPaths(protocol string) (namePath, descPath, paramPath string) {
 }
 
 // opencodeToolDescription 按平台调整 shell 工具描述。
+// 官方 Windows 客户端实抓(2026-10-23, Git Bash 与 PowerShell 两种启动环境一致)
+// 发的是 "on Windows using bash": 平台词随 GOOS 变, shell 词恒为 bash。
 func opencodeToolDescription(name, description string) string {
 	if name == "shell" && runtime.GOOS == "windows" {
-		return strings.Replace(description, "on Linux using bash", "on Windows using powershell", 1)
+		return strings.Replace(description, "on Linux using bash", "on Windows using bash", 1)
 	}
 	return description
 }
