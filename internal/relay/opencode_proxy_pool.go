@@ -69,11 +69,13 @@ func loadOpencodeProxyPool(pool *ocProxyPool, channelID int) {
 		return
 	}
 	for _, row := range rows {
+		// 台账里存在未探测的生成账号(探测前即落账), 不能整行视为已验证:
+		// 只有真实成功过(含冷却行的历史成功)才可信, 未探测项降级为普通候选。
 		pool.accounts[row.Account] = &ocProxyAccount{
 			account:       row.Account,
 			lastSuccessAt: row.LastSuccessAt,
 			cooldownUntil: row.CooldownUntil,
-			verified:      true,
+			verified:      !row.LastSuccessAt.IsZero(),
 		}
 	}
 }
@@ -205,6 +207,8 @@ func markOpencodeProxyRejected(channelID int, account string) {
 func markOpencodeProxyCooldown(channelID int, account string, cooldown time.Duration) {
 	pool := ocProxyPoolFor(channelID)
 	pool.mu.Lock()
+	// 与成功回填同口径: 先确保首载完成, 避免后到的首载用库内旧行覆盖本冷却。
+	loadOpencodeProxyPool(pool, channelID)
 	state, ok := pool.accounts[account]
 	if !ok {
 		state = &ocProxyAccount{account: account}

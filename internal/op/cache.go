@@ -25,6 +25,10 @@ func InitCache() error {
 	if err := ErrorLogEnsureRetentionSetting(ctx); err != nil {
 		return fmt.Errorf("初始化错误保留设置失败: %w", err)
 	}
+	// OpenCode 账号自动体检开关同样惰性补种, 默认开启(台账为空时任务空转)。
+	if err := EnsureOpencodeAccountAutoProbeSetting(ctx); err != nil {
+		return fmt.Errorf("初始化账号自动体检开关失败: %w", err)
+	}
 	// 客户端统计从数据库加载到内存缓存。
 	if err := ClientStatLoad(ctx); err != nil {
 		return fmt.Errorf("加载调用方统计失败: %w", err)

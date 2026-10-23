@@ -8,6 +8,46 @@ import ProxyAccountsPage from "./ProxyAccounts";
 import { sampleChannel } from "@/test/fixtures/channels";
 import type { Channel } from "@/lib/types";
 
+const ledger = {
+  channel_id: 7,
+  items: [
+    {
+      account: "opencode0a1b2c3d",
+      state: "usable",
+      outcome: "healthy",
+      last_probe_status: 200,
+      last_probe_at: "2026-10-24T12:00:00Z",
+      last_success_at: "2026-10-24T12:00:00Z",
+      cooldown_until: "0001-01-01T00:00:00Z",
+      source: "generated",
+    },
+    {
+      account: "opencode0e4f5a6b",
+      state: "unusable",
+      outcome: "rejected",
+      last_probe_status: 403,
+      last_probe_at: "2026-10-24T12:00:00Z",
+      last_success_at: "0001-01-01T00:00:00Z",
+      cooldown_until: "2026-10-25T12:00:00Z",
+      source: "generated",
+    },
+    {
+      account: "opencode0c7d8e9f",
+      state: "untested",
+      outcome: "",
+      last_probe_status: 0,
+      last_probe_at: "0001-01-01T00:00:00Z",
+      last_success_at: "0001-01-01T00:00:00Z",
+      cooldown_until: "0001-01-01T00:00:00Z",
+      source: "generated",
+    },
+  ],
+  total: 3,
+  usable: 1,
+  untested: 1,
+  unusable: 1,
+};
+
 function Wrapper({ children }: { children: React.ReactNode }) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -178,5 +218,75 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
 
     expect(await screen.findByText(/没有可体检的渠道/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "开始体检" })).not.toBeInTheDocument();
+  });
+
+  it("台账展示三态、筛选与开关自动体检", async () => {
+    const probeBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/channel/proxy-accounts?")) return jsonResponse(ledger);
+      if (url.includes("/channel/proxy-accounts/auto-probe")) {
+        if (init?.method === "POST") {
+          probeBodies.push(JSON.parse(String(init.body ?? "{}")));
+          return jsonResponse({ enabled: !ledgerEnabled });
+        }
+        return jsonResponse({ enabled: ledgerEnabled });
+      }
+      if (url.includes("/channel/list")) return jsonResponse([eligibleChannel]);
+      return jsonResponse(null);
+    }));
+    let ledgerEnabled = true;
+
+    render(
+      <Wrapper>
+        <ProxyAccountsPage />
+      </Wrapper>,
+    );
+
+    await screen.findByText("OpenCode Free");
+    expect(await screen.findByText("可用 1")).toBeInTheDocument();
+    expect(screen.getByText("未测试 1")).toBeInTheDocument();
+    expect(screen.getByText("不可用 1")).toBeInTheDocument();
+    expect(screen.getByText("opencode0a1b2c3d")).toBeInTheDocument();
+    expect(screen.getByText(/冷却至/)).toBeInTheDocument();
+
+    // 点击「未测试」筛选 → 仅剩未测试账号
+    const user = userEvent.setup();
+    await user.click(screen.getByText("未测试 1"));
+    expect(await screen.findByText("opencode0c7d8e9f")).toBeInTheDocument();
+    expect(screen.queryByText("opencode0a1b2c3d")).not.toBeInTheDocument();
+
+    // 切换自动体检开关
+    await user.click(screen.getByRole("switch"));
+    await waitFor(() => expect(probeBodies).toHaveLength(1));
+    expect(probeBodies[0]).toEqual({ enabled: false });
+  });
+
+  it("台账删除账号后刷新列表", async () => {
+    const deleteBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/channel/proxy-accounts?")) return jsonResponse(ledger);
+      if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
+      if (url.includes("/channel/proxy-accounts")) {
+        deleteBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return jsonResponse({ deleted: 1 });
+      }
+      if (url.includes("/channel/list")) return jsonResponse([eligibleChannel]);
+      return jsonResponse(null);
+    }));
+
+    render(
+      <Wrapper>
+        <ProxyAccountsPage />
+      </Wrapper>,
+    );
+
+    await screen.findByText("opencode0a1b2c3d");
+    const user = userEvent.setup();
+    await user.click(screen.getAllByRole("button", { name: "删除" })[0]);
+    await user.click(screen.getByRole("button", { name: /再次点击确认/ }));
+    await waitFor(() => expect(deleteBodies).toHaveLength(1));
+    expect(deleteBodies[0]).toEqual({ channel_id: 7, accounts: ["opencode0a1b2c3d"] });
   });
 });

@@ -4,17 +4,19 @@
  * 403/429→冷却 24 小时；其余状态为失败（基础设施问题，不冷却）。
  */
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { UsersRound } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmButton } from "@/components/ui/confirm-button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Pill } from "@/components/ui/pill";
+import { Switch } from "@/components/ui/switch";
 import { zhCN } from "@/locales/zh-CN";
 
 /** 与后端 ocProbe* 常量对齐。 */
@@ -38,6 +40,33 @@ interface AccountProbeReport {
   summary: { total: number; healthy: number; rejected: number; failed: number };
 }
 
+interface LedgerItem {
+  account: string;
+  state: string;
+  outcome: string;
+  last_probe_status: number;
+  last_probe_at: string;
+  last_success_at: string;
+  cooldown_until: string;
+  source: string;
+}
+
+interface Ledger {
+  channel_id: number;
+  items: LedgerItem[];
+  total: number;
+  usable: number;
+  untested: number;
+  unusable: number;
+}
+
+type LedgerFilter = "all" | "usable" | "untested" | "unusable";
+
+function fmtTime(value: string): string {
+  if (!value || value.startsWith("0001-")) return "-";
+  return new Date(value).toLocaleString();
+}
+
 function outcomeTone(outcome: string): "success" | "danger" | "warning" | "neutral" {
   if (outcome === "healthy") return "success";
   if (outcome === "rejected") return "danger";
@@ -53,6 +82,7 @@ function outcomeLabel(outcome: string): string {
 }
 
 export default function ProxyAccountsPage() {
+  const queryClient = useQueryClient();
   const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: () => api.listChannels() });
   const eligible = useMemo(
     () =>
@@ -73,6 +103,38 @@ export default function ProxyAccountsPage() {
   const [customAccounts, setCustomAccounts] = useState("");
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<AccountProbeReport | null>(null);
+  const [ledgerFilter, setLedgerFilter] = useState<LedgerFilter>("all");
+
+  const ledgerQuery = useQuery({
+    queryKey: ["proxy-accounts", selectedChannelId, ledgerFilter],
+    queryFn: () => api.listProxyAccounts(selectedChannelId!, ledgerFilter),
+    enabled: !!selectedChannelId,
+  });
+  const autoProbeQuery = useQuery({
+    queryKey: ["proxy-accounts-auto-probe"],
+    queryFn: () => api.getOpencodeAccountAutoProbe(),
+  });
+
+  async function toggleAutoProbe(enabled: boolean) {
+    try {
+      await api.setOpencodeAccountAutoProbe(enabled);
+      await queryClient.invalidateQueries({ queryKey: ["proxy-accounts-auto-probe"] });
+      toast.success(zhCN.proxyAccounts.autoProbeSaved(enabled));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.autoProbeFailed);
+    }
+  }
+
+  async function deleteAccounts(accounts: string[]) {
+    if (!selectedChannelId) return;
+    try {
+      const result = await api.deleteProxyAccounts(selectedChannelId, accounts);
+      await queryClient.invalidateQueries({ queryKey: ["proxy-accounts"] });
+      toast.success(zhCN.proxyAccounts.deleteDone(result.deleted));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.deleteFailed);
+    }
+  }
 
   const selectedChannelId = channelId ?? eligible[0]?.id ?? null;
   const selectedChannel = eligible.find((channel) => channel.id === selectedChannelId) ?? null;
@@ -106,6 +168,7 @@ export default function ProxyAccountsPage() {
         concurrency: parsedConcurrency,
       });
       setReport(next);
+      await queryClient.invalidateQueries({ queryKey: ["proxy-accounts"] });
       toast.success(
         zhCN.proxyAccounts.runDone(
           next.summary.healthy,
@@ -226,6 +289,112 @@ export default function ProxyAccountsPage() {
                 </tbody>
               </table>
             </div>
+          </CardContent>
+        </Card>
+      )}
+      {selectedChannelId && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{zhCN.proxyAccounts.autoProbeTitle}</CardTitle>
+            <CardDescription>{zhCN.proxyAccounts.autoProbeDescription}</CardDescription>
+          </CardHeader>
+          <CardContent className="flex items-center gap-3">
+            <Switch
+              checked={autoProbeQuery.data ?? false}
+              onCheckedChange={(checked) => void toggleAutoProbe(checked)}
+              disabled={autoProbeQuery.isLoading}
+            />
+            <span className="text-sm">
+              {autoProbeQuery.data ? zhCN.proxyAccounts.autoProbeOn : zhCN.proxyAccounts.autoProbeOff}
+            </span>
+          </CardContent>
+        </Card>
+      )}
+
+      {selectedChannelId && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{zhCN.proxyAccounts.ledgerTitle}</CardTitle>
+            <CardDescription>{zhCN.proxyAccounts.ledgerDescription}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  ["all", zhCN.proxyAccounts.filterAll, ledgerQuery.data?.total ?? 0, "neutral"],
+                  ["usable", zhCN.proxyAccounts.filterUsable, ledgerQuery.data?.usable ?? 0, "success"],
+                  ["untested", zhCN.proxyAccounts.filterUntested, ledgerQuery.data?.untested ?? 0, "info"],
+                  ["unusable", zhCN.proxyAccounts.filterUnusable, ledgerQuery.data?.unusable ?? 0, "danger"],
+                ] as const
+              ).map(([value, label, count, tone]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setLedgerFilter(value)}
+                  className="focus-visible:outline-none"
+                >
+                  <Pill tone={ledgerFilter === value ? tone : "neutral"} dot={false}>
+                    {label} {count}
+                  </Pill>
+                </button>
+              ))}
+            </div>
+            {(ledgerQuery.data?.items?.length ?? 0) === 0 ? (
+              <EmptyState icon={<UsersRound className="size-8" />} title={zhCN.proxyAccounts.emptyLedger} />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left text-muted-foreground">
+                      <th className="px-2 py-2">{zhCN.proxyAccounts.columnAccount}</th>
+                      <th className="px-2 py-2">{zhCN.proxyAccounts.columnOutcome}</th>
+                      <th className="px-2 py-2">{zhCN.proxyAccounts.filterAll}</th>
+                      <th className="px-2 py-2">{zhCN.proxyAccounts.columnLastSuccess}</th>
+                      <th className="px-2 py-2">{zhCN.proxyAccounts.columnSource}</th>
+                      <th className="px-2 py-2" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(ledgerQuery.data?.items ?? []).map((item) => (
+                      <tr key={item.account} className="border-b last:border-0">
+                        <td className="px-2 py-2 font-mono">{item.account}</td>
+                        <td className="px-2 py-2">
+                          <Pill tone={item.state === "usable" ? "success" : item.state === "unusable" ? "danger" : "info"}>
+                            {item.state === "usable"
+                              ? zhCN.proxyAccounts.stateUsable
+                              : item.state === "unusable"
+                                ? zhCN.proxyAccounts.stateUnusable
+                                : zhCN.proxyAccounts.stateUntested}
+                          </Pill>
+                          {item.cooldown_until && !item.cooldown_until.startsWith("0001-") && (
+                            <span className="ml-1 text-xs text-muted-foreground">
+                              {zhCN.proxyAccounts.cooldownUntil(fmtTime(item.cooldown_until))}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-2 py-2">
+                          {item.outcome
+                            ? `${outcomeLabel(item.outcome)}·${item.last_probe_status || "-"}`
+                            : zhCN.proxyAccounts.neverProbed}
+                          <span className="ml-1 text-xs text-muted-foreground">{fmtTime(item.last_probe_at)}</span>
+                        </td>
+                        <td className="px-2 py-2">{fmtTime(item.last_success_at)}</td>
+                        <td className="px-2 py-2">
+                          {item.source === "generated"
+                            ? zhCN.proxyAccounts.sourceGenerated
+                            : item.source === "traffic"
+                              ? zhCN.proxyAccounts.sourceTraffic
+                              : zhCN.proxyAccounts.sourceLegacy}
+                        </td>
+                        <td className="px-2 py-2 text-right">
+                          <ConfirmButton onConfirm={() => void deleteAccounts([item.account])} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

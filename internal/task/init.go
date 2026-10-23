@@ -18,6 +18,9 @@ const (
 	TaskSyncLLM           = "sync_llm"
 	TaskCleanErrorLogs    = "clean_error_logs"
 	TaskCleanUsageBuckets = "clean_usage_buckets"
+	// TaskOpencodeAccountAutoProbe 是 OpenCode 账号台账的定时体检任务:
+	// 每 24 小时一轮, 是否执行由 opencode_account_auto_probe 设置决定。
+	TaskOpencodeAccountAutoProbe = "opencode_account_auto_probe"
 )
 
 func Init() {
@@ -62,6 +65,15 @@ func Init() {
 		}
 		if removed > 0 {
 			log.Infof("cleaned %d expired usage buckets", removed)
+		}
+	})
+
+	// OpenCode 账号台账每 24 小时自动体检一次; 开关关闭或台账为空时空转返回。
+	Register(TaskOpencodeAccountAutoProbe, 24*time.Hour, false, func() {
+		ctx, cancel := context.WithTimeout(LifecycleContext(), 30*time.Minute)
+		defer cancel()
+		if err := relay.AutoProbeOpencodeAccounts(ctx); err != nil {
+			log.Warnf("opencode account auto probe: %v", err)
 		}
 	})
 

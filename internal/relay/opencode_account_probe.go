@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
 )
@@ -79,6 +81,10 @@ func ProbeOpencodeAccounts(ctx context.Context, channelID int, accounts []string
 	}
 	probing, err := ocProbeAccountList(accounts, count)
 	if err != nil {
+		return nil, err
+	}
+	// 生成即落账: 台账长期保存, 探测结论随后回填, 未探测项供页面筛选。
+	if err := op.UpsertOpencodeGeneratedAccounts(channelID, probing); err != nil {
 		return nil, err
 	}
 	if concurrency <= 0 {
@@ -184,11 +190,11 @@ func ocProbeAccountList(accounts []string, count int) ([]string, error) {
 	return probing, nil
 }
 
-// ocProbeOne 钉住单个账号探测一次并归类结论。
+// ocProbeOne 钉住单个账号探测一次并归类结论, 结论同步写回台账。
 func ocProbeOne(ctx context.Context, channel model.Channel, modelName, account string, timeout time.Duration) AccountProbeResult {
+	result := AccountProbeResult{Account: account, Outcome: ocProbeOutcomeError}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	result := AccountProbeResult{Account: account, Outcome: ocProbeOutcomeError}
 	probe, err := probeOnceWithAccount(probeCtx, channel, modelName, ocProbeTokens, account)
 	switch {
 	case err != nil && probe == nil:
@@ -208,5 +214,184 @@ func ocProbeOne(ctx context.Context, channel model.Channel, modelName, account s
 		result.Detail = probe.Detail
 		result.LatencyMS = probe.LatencyMS
 	}
+	if saveErr := op.SaveOpencodeProbeResult(channel.ID, account, result.Outcome, result.Status, time.Now()); saveErr != nil {
+		log.Warnf("账号体检结论落账失败: %v", saveErr)
+	}
 	return result
+}
+
+// ocAutoProbeInterval 自动体检周期: 每 24 小时一次。
+const ocAutoProbeInterval = 24 * time.Hour
+
+// ocAutoProbeMaxPerChannel 单轮单渠道最多体检的到期账号数, 与单次体检上限对齐。
+const ocAutoProbeMaxPerChannel = ocProbeMaxAccounts
+
+// OpencodeAccountLedgerItem 是台账中单个账号的展示条目。
+type OpencodeAccountLedgerItem struct {
+	Account       string    `json:"account"`
+	State         string    `json:"state"`
+	Outcome       string    `json:"outcome"`
+	LastProbeStatus int     `json:"last_probe_status"`
+	LastProbeAt   time.Time `json:"last_probe_at"`
+	LastSuccessAt time.Time `json:"last_success_at"`
+	CooldownUntil time.Time `json:"cooldown_until"`
+	Source        string    `json:"source"`
+}
+
+// OpencodeAccountLedger 是某渠道账号台账的筛选视图。
+type OpencodeAccountLedger struct {
+	ChannelID int                       `json:"channel_id"`
+	Items     []OpencodeAccountLedgerItem `json:"items"`
+	Total     int                       `json:"total"`
+	Usable    int                       `json:"usable"`
+	Untested  int                       `json:"untested"`
+	Unusable  int                       `json:"unusable"`
+}
+
+// ListOpencodeAccountStates 返回渠道账号台账并按三态派生与筛选。
+// filter: all(默认)/usable/untested/unusable。派生口径:
+// 可用 = 未冷却且(最近探测健康 或 7 天内有转发成功); 未测试 = 从未探测且从未成功;
+// 不可用 = 冷却中, 或最近一次探测被拒/失败且无在效成功记录。
+func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLedger, error) {
+	channel, err := op.ChannelGet(channelID)
+	if err != nil {
+		return nil, err
+	}
+	if !proxyNeedsOpencodeAccount(channel) {
+		return nil, fmt.Errorf("渠道不是含 {account} 代理的 OpenCode 免费档, 无账号台账")
+	}
+	rows, err := op.LoadOpencodeProxyAccounts(channelID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	ledger := &OpencodeAccountLedger{ChannelID: channelID}
+	for _, row := range rows {
+		state := ocAccountLedgerState(row, now)
+		switch state {
+		case "usable":
+			ledger.Usable++
+		case "untested":
+			ledger.Untested++
+		default:
+			ledger.Unusable++
+		}
+		if filter == "usable" && state != "usable" {
+			continue
+		}
+		if filter == "untested" && state != "untested" {
+			continue
+		}
+		if filter == "unusable" && state != "unusable" {
+			continue
+		}
+		ledger.Items = append(ledger.Items, OpencodeAccountLedgerItem{
+			Account:         row.Account,
+			State:           state,
+			Outcome:         row.LastProbeOutcome,
+			LastProbeStatus: row.LastProbeStatus,
+			LastProbeAt:     row.LastProbeAt,
+			LastSuccessAt:   row.LastSuccessAt,
+			CooldownUntil:   row.CooldownUntil,
+			Source:          row.Source,
+		})
+	}
+	ledger.Total = len(rows)
+	return ledger, nil
+}
+
+// ocAccountLedgerState 派生台账条目的三态。
+func ocAccountLedgerState(row model.OpencodeProxyAccount, now time.Time) string {
+	if now.Before(row.CooldownUntil) {
+		return "unusable"
+	}
+	usedInTTL := !row.LastSuccessAt.IsZero() && now.Sub(row.LastSuccessAt) <= ocProxySuccessTTL
+	if row.LastProbeOutcome == model.OpencodeAccountOutcomeHealthy || usedInTTL {
+		return "usable"
+	}
+	if row.LastProbeOutcome == "" && row.LastSuccessAt.IsZero() {
+		return "untested"
+	}
+	return "unusable"
+}
+
+// DeleteOpencodeAccountsFromLedger 从台账删除指定账号。
+func DeleteOpencodeAccountsFromLedger(channelID int, accounts []string) (int64, error) {
+	if len(accounts) == 0 {
+		return 0, nil
+	}
+	cleaned := make([]string, 0, len(accounts))
+	for _, account := range accounts {
+		account = strings.TrimSpace(account)
+		if account != "" {
+			cleaned = append(cleaned, account)
+		}
+	}
+	deleted, err := op.DeleteOpencodeProxyAccounts(channelID, cleaned)
+	if err != nil {
+		return 0, err
+	}
+	// 同步清理进程内池, 避免被删账号在本轮继续被选中。
+	if poolValue, ok := ocProxyPools.Load(channelID); ok {
+		pool := poolValue.(*ocProxyPool)
+		pool.mu.Lock()
+		for _, account := range cleaned {
+			delete(pool.accounts, account)
+		}
+		pool.mu.Unlock()
+	}
+	return deleted, nil
+}
+
+// AutoProbeOpencodeAccounts 对启用 {account} 代理的免费档渠道执行到期账号体检。
+// 由后台任务每 24 小时调用; 开关(opencode_account_auto_probe)关闭时直接返回。
+// 到期 = 距上次体检超过周期(未探测的生成账号立即到期), 单渠道单轮最多 200 个。
+func AutoProbeOpencodeAccounts(ctx context.Context) error {
+	enabled, err := op.SettingGetBool(model.SettingKeyOpencodeAccountAutoProbe)
+	if err != nil {
+		return fmt.Errorf("读取自动体检开关失败: %w", err)
+	}
+	if !enabled {
+		return nil
+	}
+	for _, channel := range op.ChannelList() {
+		if !channel.Enabled || !proxyNeedsOpencodeAccount(channel) {
+			continue
+		}
+		rows, err := op.LoadOpencodeProxyAccounts(channel.ID)
+		if err != nil {
+			log.Warnf("渠道 %d 账号台账读取失败, 跳过自动体检: %v", channel.ID, err)
+			continue
+		}
+		due := ocAutoProbeDueAccounts(rows, time.Now(), ocAutoProbeInterval)
+		if len(due) == 0 {
+			continue
+		}
+		if _, err := ProbeOpencodeAccounts(ctx, channel.ID, due, 0, ocProbeDefaultConcurrency, 0); err != nil {
+			log.Warnf("渠道 %d 自动体检失败: %v", channel.ID, err)
+			continue
+		}
+		log.Infof("渠道 %d 自动体检完成: %d 个账号", channel.ID, len(due))
+	}
+	return nil
+}
+
+// ocAutoProbeDueAccounts 选出到期账号: 距上次体检超过周期即到期, 最早未体检的优先。
+func ocAutoProbeDueAccounts(rows []model.OpencodeProxyAccount, now time.Time, interval time.Duration) []string {
+	sorted := make([]model.OpencodeProxyAccount, len(rows))
+	copy(sorted, rows)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].LastProbeAt.Before(sorted[j].LastProbeAt)
+	})
+	due := make([]string, 0, len(sorted))
+	for _, row := range sorted {
+		if !row.LastProbeAt.IsZero() && now.Sub(row.LastProbeAt) < interval {
+			break
+		}
+		due = append(due, row.Account)
+		if len(due) >= ocAutoProbeMaxPerChannel {
+			break
+		}
+	}
+	return due
 }

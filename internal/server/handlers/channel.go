@@ -68,6 +68,14 @@ func init() {
 		AddRoute(
 			router.NewRoute("/proxy-accounts/probe", http.MethodPost).
 				Handle(probeProxyAccounts),
+		).
+		AddRoute(
+			router.NewRoute("/proxy-accounts", http.MethodDelete).
+				Handle(deleteProxyAccounts),
+		).
+		AddRoute(
+			router.NewRoute("/proxy-accounts/auto-probe", http.MethodPost).
+				Handle(setOpencodeAccountAutoProbe),
 		)
 	router.NewGroupRouter("/api/v1/channel").
 		Use(middleware.Auth()).
@@ -82,6 +90,14 @@ func init() {
 		AddRoute(
 			router.NewRoute("/last-sync-time", http.MethodGet).
 				Handle(getLastSyncTime),
+		).
+		AddRoute(
+			router.NewRoute("/proxy-accounts", http.MethodGet).
+				Handle(listProxyAccounts),
+		).
+		AddRoute(
+			router.NewRoute("/proxy-accounts/auto-probe", http.MethodGet).
+				Handle(getOpencodeAccountAutoProbe),
 		)
 }
 
@@ -373,6 +389,77 @@ func probeProxyAccounts(c *gin.Context) {
 		}
 	}
 	resp.Success(c, report)
+}
+
+// listProxyAccounts 返回渠道账号台账, filter 取 all/usable/untested/unusable。
+func listProxyAccounts(c *gin.Context) {
+	channelID, err := strconv.Atoi(c.Query("channel_id"))
+	if err != nil || channelID <= 0 {
+		resp.Error(c, http.StatusBadRequest, "channel_id 必须为正整数")
+		return
+	}
+	filter := strings.TrimSpace(c.DefaultQuery("filter", "all"))
+	ledger, err := relay.ListOpencodeAccountStates(channelID, filter)
+	if err != nil {
+		resp.ErrorExposed(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp.Success(c, ledger)
+}
+
+// proxyAccountDeleteRequest 是台账账号删除请求。
+type proxyAccountDeleteRequest struct {
+	ChannelID int      `json:"channel_id" binding:"required"`
+	Accounts  []string `json:"accounts" binding:"required"`
+}
+
+// deleteProxyAccounts 从台账删除指定账号并同步清理进程内池。
+func deleteProxyAccounts(c *gin.Context) {
+	var request proxyAccountDeleteRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
+		return
+	}
+	deleted, err := relay.DeleteOpencodeAccountsFromLedger(request.ChannelID, request.Accounts)
+	if err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp.Success(c, gin.H{"deleted": deleted})
+}
+
+// getOpencodeAccountAutoProbe 返回 24h 自动体检开关状态。
+func getOpencodeAccountAutoProbe(c *gin.Context) {
+	enabled, err := op.SettingGetBool(model.SettingKeyOpencodeAccountAutoProbe)
+	if err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp.Success(c, gin.H{"enabled": enabled})
+}
+
+// setOpencodeAccountAutoProbe 设置 24h 自动体检开关; 任务每 24 小时读取一次最新值。
+func setOpencodeAccountAutoProbe(c *gin.Context) {
+	var request struct {
+		Enabled *bool `json:"enabled" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
+		return
+	}
+	if err := op.EnsureOpencodeAccountAutoProbeSetting(c.Request.Context()); err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	value := "0"
+	if *request.Enabled {
+		value = "1"
+	}
+	if err := op.SettingSetString(model.SettingKeyOpencodeAccountAutoProbe, value); err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp.Success(c, gin.H{"enabled": *request.Enabled})
 }
 
 func syncChannel(c *gin.Context) {

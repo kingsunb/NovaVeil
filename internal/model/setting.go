@@ -29,6 +29,7 @@ const (
 	SettingKeyClientStatMaxCount        SettingKey = "client_stat_max_count"       // 调用客户端统计最大保留条数, 默认 10000, 0=不限制
 	SettingKeyProxyPool                 SettingKey = "proxy_pool"                  // 代理池(JSON 数组), 供设置页管理与测试多个可选代理
 	SettingKeyConvTrace                 SettingKey = "conv_trace_enabled"          // 协议转换追踪开关: "1"开启后对跨协议转换记录耗时/大小/降级诊断等 Debug 日志, "0"(默认)关闭, 关闭时仅一次缓存查询零开销
+	SettingKeyOpencodeAccountAutoProbe  SettingKey = "opencode_account_auto_probe" // OpenCode 账号 24h 自动体检开关: "1"开启(默认)由后台任务每天体检一次台账内到期账号, "0"关闭。不进 DefaultSettings, 由 op 层惰性补种
 )
 
 // 用量数据保留时间设置项的默认值与下限。

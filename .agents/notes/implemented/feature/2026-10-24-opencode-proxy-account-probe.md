@@ -20,6 +20,12 @@ Status: implemented
 
 `POST /api/v1/channel/proxy-accounts/probe`（channel.go，同步返回）。前端新增「账号体检」页（`/proxy-accounts`）：渠道选择只列启用中且代理含占位符的免费档渠道；数量/并发输入 + 可选自定义账号列表（粘贴即按列表探测，数量输入失效）；结果表逐账号展示结论/HTTP/延迟/响应摘要（密钥已脱敏）。
 
+### 账号台账与自动体检（同日追加）
+
+生成/粘贴的账号**探测前即落账**（`op.UpsertOpencodeGeneratedAccounts`，source=generated），探测结论同步回写（`SaveOpencodeProbeResult`），台账长期保存。`GET /channel/proxy-accounts?filter=` 返回三态派生视图：可用=未冷却且（最近探测健康或 7 天内有转发成功）；未测试=从未探测且从未成功；不可用=冷却中或最近探测被拒且无在效成功。`DELETE /channel/proxy-accounts` 删除台账账号并同步清理进程内池。自动体检：设置键 `opencode_account_auto_probe`（默认开启，台账为空时空转；不进 DefaultSettings，随缓存初始化惰性补种），后台任务每 24 小时跑一轮，只测距上次体检超过周期的账号（最早优先，单渠道单轮 200 个上限），健康探测会清除既有冷却（复用成功回填）。
+
+配套修复两处由「未探测账号落账」暴露的池语义问题：`loadOpencodeProxyPool` 不再整行视为 verified（按 last_success_at 判定），`markOpencodeProxyCooldown` 补做首次加载（原首载竞态会用库内旧行覆盖内存冷却）。
+
 ## Alternatives considered
 
 - **只测代理连通性（GET /models 或 TCP 连通）** — 不打真实对话请求就测不出出口被 ban/限流，而账号健康度恰恰取决于此；否掉。
@@ -39,6 +45,8 @@ go build ./... && go vet ./... && go test ./internal/relay/ -run TestProbeOpenco
 cd web-next && pnpm typecheck && pnpm lint && pnpm test -- ProxyAccounts
 ```
 
-- `TestProbeOpencodeAccountsClassifiesAndSeedsPool`：假 CONNECT 代理按账号返回 200/403/502，断言三分类与池状态（verified / 冷却 / 不入池）。
+- `TestProbeOpencodeAccountsClassifiesAndSeedsPool`：假 CONNECT 代理按账号返回 200/403/502，断言三分类与池状态（verified / 冷却 / 失败仅普通候选）。
 - `TestProbeOpencodeAccountsGenerateAndValidate`：生成模式（去重、`opencode` 前缀格式）、非法字符拒绝、超上限拒绝、非 `{account}` 渠道拒绝。
-- 前端四用例：渠道过滤、默认参数与结果表、自定义账号列表、空态。
+- `TestOpencodeAccountLedgerStates`：三态派生（健康/冷却/未测试/被拒无在效成功）、筛选与删除。
+- `TestOpencodeAutoProbeDueAccounts`：到期选择（未探测立即到期、周期内跳过、上限截断）。
+- 前端六用例：渠道过滤、默认参数与结果表、自定义账号列表、空态、台账三态/筛选/开关、台账删除。

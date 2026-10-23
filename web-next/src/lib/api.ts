@@ -832,6 +832,47 @@ export const api = {
     };
   },
 
+  /** 账号台账: 三态筛选 all/usable/untested/unusable。 */
+  listProxyAccounts: async (channelId: number, filter: string) =>
+    (await http<unknown>(
+      `/channel/proxy-accounts?channel_id=${channelId}&filter=${encodeURIComponent(filter)}`,
+    )) as {
+      channel_id: number;
+      items: Array<{
+        account: string;
+        state: string;
+        outcome: string;
+        last_probe_status: number;
+        last_probe_at: string;
+        last_success_at: string;
+        cooldown_until: string;
+        source: string;
+      }>;
+      total: number;
+      usable: number;
+      untested: number;
+      unusable: number;
+    },
+  /** 从台账删除指定账号并同步清理进程内池。 */
+  deleteProxyAccounts: (channelId: number, accounts: string[]) =>
+    http<{ deleted: number }>("/channel/proxy-accounts", {
+      method: "DELETE",
+      body: { channel_id: channelId, accounts },
+    }),
+  /** 读取 24h 自动体检开关。 */
+  getOpencodeAccountAutoProbe: async () => {
+    const raw = (await http<unknown>("/channel/proxy-accounts/auto-probe")) as {
+      enabled?: boolean;
+    };
+    return raw?.enabled ?? false;
+  },
+  /** 设置 24h 自动体检开关。 */
+  setOpencodeAccountAutoProbe: (enabled: boolean) =>
+    http<{ enabled: boolean }>("/channel/proxy-accounts/auto-probe", {
+      method: "POST",
+      body: { enabled },
+    }),
+
   // ----- 渠道 -----
   listChannels: async () => {
     const raw = await http<unknown>("/channel/list");
