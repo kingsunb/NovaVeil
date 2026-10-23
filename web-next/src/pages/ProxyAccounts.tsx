@@ -1,14 +1,15 @@
 /**
- * OpenCode 账号体检页：对免费档渠道的代理账号池并发体检。
- * 每个账号是一次与转发同构的极小真实请求：200→健康入池优先复用；
- * 403/429→冷却 24 小时；其余状态为失败（基础设施问题，不冷却）。
+ * OpenCode 账号体检页：每个免费档渠道一块独立卡片（Free 与 Old 分开记账）。
+ * 生成即落账长期保存：体检结果与转发流量实时更新台账状态，支持三态筛选与删除。
+ * 可选开启每 24 小时自动体检：健康入池复用，被拒冷却 24 小时。
  */
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { UsersRound } from "lucide-react";
 
 import { api } from "@/lib/api";
+import type { Channel } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmButton } from "@/components/ui/confirm-button";
@@ -81,100 +82,64 @@ function outcomeLabel(outcome: string): string {
   return outcome;
 }
 
-export default function ProxyAccountsPage() {
-  const queryClient = useQueryClient();
-  const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: () => api.listChannels() });
-  const eligible = useMemo(
-    () =>
-      (channelsQuery.data ?? []).filter(
-        (channel) =>
-          channel.enabled &&
-          channel.opencode_compat &&
-          !!channel.channel_proxy &&
-          channel.channel_proxy.includes("{account}") &&
-          (channel.base_url?.includes("/zen") || channel.base_url?.includes("/inference")),
-      ),
-    [channelsQuery.data],
-  );
+function ledgerStateLabel(state: string): string {
+  if (state === "usable") return zhCN.proxyAccounts.stateUsable;
+  if (state === "unusable") return zhCN.proxyAccounts.stateUnusable;
+  return zhCN.proxyAccounts.stateUntested;
+}
 
-  const [channelId, setChannelId] = useState<number | null>(null);
+function ledgerStateTone(state: string): "success" | "danger" | "info" {
+  if (state === "usable") return "success";
+  if (state === "unusable") return "danger";
+  return "info";
+}
+
+function sourceLabel(source: string): string {
+  if (source === "generated") return zhCN.proxyAccounts.sourceGenerated;
+  if (source === "traffic") return zhCN.proxyAccounts.sourceTraffic;
+  return zhCN.proxyAccounts.sourceLegacy;
+}
+
+/** 单渠道卡片: 独立的生成/体检控制与台账, Free 与 Old 互不混账。 */
+function ChannelSection({ channel }: { channel: Channel }) {
+  const queryClient = useQueryClient();
   const [count, setCount] = useState(String(DEFAULT_COUNT));
   const [concurrency, setConcurrency] = useState(String(DEFAULT_CONCURRENCY));
-  const [customAccounts, setCustomAccounts] = useState("");
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<AccountProbeReport | null>(null);
   const [ledgerFilter, setLedgerFilter] = useState<LedgerFilter>("all");
 
   const ledgerQuery = useQuery({
-    queryKey: ["proxy-accounts", selectedChannelId, ledgerFilter],
-    queryFn: () => api.listProxyAccounts(selectedChannelId!, ledgerFilter),
-    enabled: !!selectedChannelId,
+    queryKey: ["proxy-accounts", channel.id, ledgerFilter],
+    queryFn: () => api.listProxyAccounts(channel.id, ledgerFilter),
   });
-  const autoProbeQuery = useQuery({
-    queryKey: ["proxy-accounts-auto-probe"],
-    queryFn: () => api.getOpencodeAccountAutoProbe(),
-  });
-
-  async function toggleAutoProbe(enabled: boolean) {
-    try {
-      await api.setOpencodeAccountAutoProbe(enabled);
-      await queryClient.invalidateQueries({ queryKey: ["proxy-accounts-auto-probe"] });
-      toast.success(zhCN.proxyAccounts.autoProbeSaved(enabled));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.autoProbeFailed);
-    }
-  }
-
-  async function deleteAccounts(accounts: string[]) {
-    if (!selectedChannelId) return;
-    try {
-      const result = await api.deleteProxyAccounts(selectedChannelId, accounts);
-      await queryClient.invalidateQueries({ queryKey: ["proxy-accounts"] });
-      toast.success(zhCN.proxyAccounts.deleteDone(result.deleted));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.deleteFailed);
-    }
-  }
-
-  const selectedChannelId = channelId ?? eligible[0]?.id ?? null;
-  const selectedChannel = eligible.find((channel) => channel.id === selectedChannelId) ?? null;
 
   async function run() {
-    if (!selectedChannelId) {
-      toast.error(zhCN.proxyAccounts.eligibleEmpty);
-      return;
-    }
     const parsedCount = Math.floor(Number(count));
     if (!Number.isFinite(parsedCount) || parsedCount < 1 || parsedCount > MAX_ACCOUNTS) {
       toast.error(zhCN.proxyAccounts.countInvalid);
       return;
     }
     const parsedConcurrency = Math.floor(Number(concurrency));
-    if (!Number.isFinite(parsedConcurrency) || parsedConcurrency < 1 || parsedConcurrency > MAX_CONCURRENCY) {
+    if (
+      !Number.isFinite(parsedConcurrency) ||
+      parsedConcurrency < 1 ||
+      parsedConcurrency > MAX_CONCURRENCY
+    ) {
       toast.error(zhCN.proxyAccounts.concurrencyInvalid);
       return;
     }
-    const accounts = customAccounts
-      .split(/[\s,;，；]+/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-
     setRunning(true);
     try {
       const next = await api.probeProxyAccounts({
-        channel_id: selectedChannelId,
-        accounts: accounts.length > 0 ? accounts : undefined,
-        count: accounts.length > 0 ? undefined : parsedCount,
+        channel_id: channel.id,
+        count: parsedCount,
         concurrency: parsedConcurrency,
       });
       setReport(next);
       await queryClient.invalidateQueries({ queryKey: ["proxy-accounts"] });
       toast.success(
-        zhCN.proxyAccounts.runDone(
-          next.summary.healthy,
-          next.summary.rejected,
-          next.summary.failed,
-        ),
+        zhCN.proxyAccounts.runDone(next.summary.healthy, next.summary.rejected, next.summary.failed),
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.requestFailed);
@@ -183,76 +148,45 @@ export default function ProxyAccountsPage() {
     }
   }
 
+  async function deleteAccounts(accounts: string[]) {
+    try {
+      const result = await api.deleteProxyAccounts(channel.id, accounts);
+      await queryClient.invalidateQueries({ queryKey: ["proxy-accounts"] });
+      toast.success(zhCN.proxyAccounts.deleteDone(result.deleted));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.deleteFailed);
+    }
+  }
+
   return (
-    <div className="space-y-4 p-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>{zhCN.proxyAccounts.title}</CardTitle>
-          <CardDescription>{zhCN.proxyAccounts.description}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {eligible.length === 0 ? (
-            <EmptyState
-              icon={<UsersRound className="size-8" />}
-              title={zhCN.proxyAccounts.eligibleEmpty}
+    <Card>
+      <CardHeader>
+        <CardTitle>{channel.name}</CardTitle>
+        <CardDescription>
+          {report ? zhCN.proxyAccounts.modelLabel(report.model) : channel.base_url}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-4 md:grid-cols-3">
+          <Field label={zhCN.proxyAccounts.count}>
+            <Input value={count} onChange={(event) => setCount(event.target.value)} inputMode="numeric" />
+          </Field>
+          <Field label={zhCN.proxyAccounts.concurrency} hint={zhCN.proxyAccounts.concurrencyHint}>
+            <Input
+              value={concurrency}
+              onChange={(event) => setConcurrency(event.target.value)}
+              inputMode="numeric"
             />
-          ) : (
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label={zhCN.proxyAccounts.channel} hint={zhCN.proxyAccounts.channelHint}>
-                <select
-                  className="h-9 w-full rounded-md border bg-transparent px-3 text-sm"
-                  value={selectedChannelId ?? ""}
-                  onChange={(event) => setChannelId(Number(event.target.value))}
-                >
-                  {eligible.map((channel) => (
-                    <option key={channel.id} value={channel.id}>
-                      {channel.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label={zhCN.proxyAccounts.concurrency} hint={zhCN.proxyAccounts.concurrencyHint}>
-                <Input
-                  value={concurrency}
-                  onChange={(event) => setConcurrency(event.target.value)}
-                  inputMode="numeric"
-                />
-              </Field>
-              <Field label={zhCN.proxyAccounts.count}>
-                <Input
-                  value={count}
-                  onChange={(event) => setCount(event.target.value)}
-                  inputMode="numeric"
-                  disabled={customAccounts.trim().length > 0}
-                />
-              </Field>
-              <Field label={zhCN.proxyAccounts.customAccounts}>
-                <textarea
-                  className="min-h-20 w-full rounded-md border bg-transparent px-3 py-2 text-sm"
-                  placeholder={zhCN.proxyAccounts.customAccountsPlaceholder}
-                  value={customAccounts}
-                  onChange={(event) => setCustomAccounts(event.target.value)}
-                />
-              </Field>
-            </div>
-          )}
-          {eligible.length > 0 && (
+          </Field>
+          <div className="flex items-end">
             <Button onClick={() => void run()} disabled={running}>
               {running ? zhCN.proxyAccounts.running : zhCN.proxyAccounts.run}
             </Button>
-          )}
-        </CardContent>
-      </Card>
+          </div>
+        </div>
 
-      {report && (
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              {zhCN.proxyAccounts.summaryTotal} {report.summary.total}
-            </CardTitle>
-            <CardDescription>{zhCN.proxyAccounts.modelLabel(report.model)}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
+        {report && (
+          <div className="space-y-3">
             <div className="flex flex-wrap gap-2">
               <Pill tone="success">{zhCN.proxyAccounts.summaryHealthy} {report.summary.healthy}</Pill>
               <Pill tone="danger">{zhCN.proxyAccounts.summaryRejected} {report.summary.rejected}</Pill>
@@ -289,10 +223,123 @@ export default function ProxyAccountsPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        <div className="space-y-3 border-t pt-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">{zhCN.proxyAccounts.ledgerTitle}</span>
+            {(
+              [
+                ["all", zhCN.proxyAccounts.filterAll, ledgerQuery.data?.total ?? 0, "neutral"],
+                ["usable", zhCN.proxyAccounts.filterUsable, ledgerQuery.data?.usable ?? 0, "success"],
+                ["untested", zhCN.proxyAccounts.filterUntested, ledgerQuery.data?.untested ?? 0, "info"],
+                ["unusable", zhCN.proxyAccounts.filterUnusable, ledgerQuery.data?.unusable ?? 0, "danger"],
+              ] as const
+            ).map(([value, label, count, tone]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setLedgerFilter(value)}
+                className="focus-visible:outline-none"
+              >
+                <Pill tone={ledgerFilter === value ? tone : "neutral"} dot={false}>
+                  {label} {count}
+                </Pill>
+              </button>
+            ))}
+          </div>
+          {(ledgerQuery.data?.items?.length ?? 0) === 0 ? (
+            <EmptyState icon={<UsersRound className="size-8" />} title={zhCN.proxyAccounts.emptyLedger} />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-muted-foreground">
+                    <th className="px-2 py-2">{zhCN.proxyAccounts.columnAccount}</th>
+                    <th className="px-2 py-2">{zhCN.proxyAccounts.columnOutcome}</th>
+                    <th className="px-2 py-2">{zhCN.proxyAccounts.columnLastSuccess}</th>
+                    <th className="px-2 py-2">{zhCN.proxyAccounts.columnSource}</th>
+                    <th className="px-2 py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {(ledgerQuery.data?.items ?? []).map((item) => (
+                    <tr key={item.account} className="border-b last:border-0">
+                      <td className="px-2 py-2 font-mono">{item.account}</td>
+                      <td className="px-2 py-2">
+                        <Pill tone={ledgerStateTone(item.state)}>{ledgerStateLabel(item.state)}</Pill>
+                        {item.outcome ? (
+                          <span className="ml-1 text-xs text-muted-foreground">
+                            {outcomeLabel(item.outcome)}·{item.last_probe_status || "-"}{" "}
+                            {fmtTime(item.last_probe_at)}
+                          </span>
+                        ) : (
+                          <span className="ml-1 text-xs text-muted-foreground">
+                            {zhCN.proxyAccounts.neverProbed}
+                          </span>
+                        )}
+                        {item.cooldown_until && !item.cooldown_until.startsWith("0001-") && (
+                          <span className="ml-1 text-xs text-muted-foreground">
+                            {zhCN.proxyAccounts.cooldownUntil(fmtTime(item.cooldown_until))}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2">{fmtTime(item.last_success_at)}</td>
+                      <td className="px-2 py-2">{sourceLabel(item.source)}</td>
+                      <td className="px-2 py-2 text-right">
+                        <ConfirmButton onConfirm={() => void deleteAccounts([item.account])} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function ProxyAccountsPage() {
+  const queryClient = useQueryClient();
+  const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: () => api.listChannels() });
+  const eligible = (channelsQuery.data ?? []).filter(
+    (channel) =>
+      channel.enabled &&
+      channel.opencode_compat &&
+      !!channel.channel_proxy &&
+      channel.channel_proxy.includes("{account}") &&
+      (channel.base_url?.includes("/zen") || channel.base_url?.includes("/inference")),
+  );
+  const autoProbeQuery = useQuery({
+    queryKey: ["proxy-accounts-auto-probe"],
+    queryFn: () => api.getOpencodeAccountAutoProbe(),
+  });
+
+  async function toggleAutoProbe(enabled: boolean) {
+    try {
+      await api.setOpencodeAccountAutoProbe(enabled);
+      await queryClient.invalidateQueries({ queryKey: ["proxy-accounts-auto-probe"] });
+      toast.success(zhCN.proxyAccounts.autoProbeSaved(enabled));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.autoProbeFailed);
+    }
+  }
+
+  return (
+    <div className="space-y-4 p-4">
+      {eligible.length === 0 ? (
+        <Card>
+          <CardContent>
+            <EmptyState
+              icon={<UsersRound className="size-8" />}
+              title={zhCN.proxyAccounts.eligibleEmpty}
+            />
           </CardContent>
         </Card>
-      )}
-      {selectedChannelId && (
+      ) : (
         <Card>
           <CardHeader>
             <CardTitle>{zhCN.proxyAccounts.autoProbeTitle}</CardTitle>
@@ -310,94 +357,9 @@ export default function ProxyAccountsPage() {
           </CardContent>
         </Card>
       )}
-
-      {selectedChannelId && (
-        <Card>
-          <CardHeader>
-            <CardTitle>{zhCN.proxyAccounts.ledgerTitle}</CardTitle>
-            <CardDescription>{zhCN.proxyAccounts.ledgerDescription}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-wrap gap-2">
-              {(
-                [
-                  ["all", zhCN.proxyAccounts.filterAll, ledgerQuery.data?.total ?? 0, "neutral"],
-                  ["usable", zhCN.proxyAccounts.filterUsable, ledgerQuery.data?.usable ?? 0, "success"],
-                  ["untested", zhCN.proxyAccounts.filterUntested, ledgerQuery.data?.untested ?? 0, "info"],
-                  ["unusable", zhCN.proxyAccounts.filterUnusable, ledgerQuery.data?.unusable ?? 0, "danger"],
-                ] as const
-              ).map(([value, label, count, tone]) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setLedgerFilter(value)}
-                  className="focus-visible:outline-none"
-                >
-                  <Pill tone={ledgerFilter === value ? tone : "neutral"} dot={false}>
-                    {label} {count}
-                  </Pill>
-                </button>
-              ))}
-            </div>
-            {(ledgerQuery.data?.items?.length ?? 0) === 0 ? (
-              <EmptyState icon={<UsersRound className="size-8" />} title={zhCN.proxyAccounts.emptyLedger} />
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left text-muted-foreground">
-                      <th className="px-2 py-2">{zhCN.proxyAccounts.columnAccount}</th>
-                      <th className="px-2 py-2">{zhCN.proxyAccounts.columnOutcome}</th>
-                      <th className="px-2 py-2">{zhCN.proxyAccounts.filterAll}</th>
-                      <th className="px-2 py-2">{zhCN.proxyAccounts.columnLastSuccess}</th>
-                      <th className="px-2 py-2">{zhCN.proxyAccounts.columnSource}</th>
-                      <th className="px-2 py-2" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(ledgerQuery.data?.items ?? []).map((item) => (
-                      <tr key={item.account} className="border-b last:border-0">
-                        <td className="px-2 py-2 font-mono">{item.account}</td>
-                        <td className="px-2 py-2">
-                          <Pill tone={item.state === "usable" ? "success" : item.state === "unusable" ? "danger" : "info"}>
-                            {item.state === "usable"
-                              ? zhCN.proxyAccounts.stateUsable
-                              : item.state === "unusable"
-                                ? zhCN.proxyAccounts.stateUnusable
-                                : zhCN.proxyAccounts.stateUntested}
-                          </Pill>
-                          {item.cooldown_until && !item.cooldown_until.startsWith("0001-") && (
-                            <span className="ml-1 text-xs text-muted-foreground">
-                              {zhCN.proxyAccounts.cooldownUntil(fmtTime(item.cooldown_until))}
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-2 py-2">
-                          {item.outcome
-                            ? `${outcomeLabel(item.outcome)}·${item.last_probe_status || "-"}`
-                            : zhCN.proxyAccounts.neverProbed}
-                          <span className="ml-1 text-xs text-muted-foreground">{fmtTime(item.last_probe_at)}</span>
-                        </td>
-                        <td className="px-2 py-2">{fmtTime(item.last_success_at)}</td>
-                        <td className="px-2 py-2">
-                          {item.source === "generated"
-                            ? zhCN.proxyAccounts.sourceGenerated
-                            : item.source === "traffic"
-                              ? zhCN.proxyAccounts.sourceTraffic
-                              : zhCN.proxyAccounts.sourceLegacy}
-                        </td>
-                        <td className="px-2 py-2 text-right">
-                          <ConfirmButton onConfirm={() => void deleteAccounts([item.account])} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
+      {eligible.map((channel) => (
+        <ChannelSection key={channel.id} channel={channel} />
+      ))}
     </div>
   );
 }

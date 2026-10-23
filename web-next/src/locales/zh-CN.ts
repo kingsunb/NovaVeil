@@ -50,13 +50,9 @@ export const zhCN = {
     description:
       "对免费档渠道的代理账号池并发体检：每个账号发一次极小真实请求。健康账号自动入池供转发优先复用；403/429 自动冷却 24 小时。",
     eligibleEmpty: "没有可体检的渠道：需要启用中的 OpenCode 免费档渠道，且渠道代理包含 {account} 占位符",
-    channel: "体检渠道",
-    channelHint: "仅列出启用中且代理含 {account} 占位符的免费档渠道",
     count: "生成数量",
     concurrency: "并发数",
     concurrencyHint: "1-20；同一时刻在途的体检请求数",
-    customAccounts: "自定义账号列表（可选）",
-    customAccountsPlaceholder: "每行一个账号；留空则按「生成数量」随机生成",
     run: "开始体检",
     running: "体检中…",
     runDone: (healthy: number, rejected: number, failed: number) =>
