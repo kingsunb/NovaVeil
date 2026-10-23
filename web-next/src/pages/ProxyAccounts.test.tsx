@@ -90,6 +90,8 @@ const ledger = {
       last_success_at: "2026-10-24T12:00:00Z",
       cooldown_until: "0001-01-01T00:00:00Z",
       source: "generated",
+      success_count: 12,
+      success_days: 3,
     },
     {
       account: "opencode0e4f5a6b",
@@ -100,6 +102,8 @@ const ledger = {
       last_success_at: "0001-01-01T00:00:00Z",
       cooldown_until: "2026-10-25T12:00:00Z",
       source: "generated",
+      success_count: 0,
+      success_days: 0,
     },
     {
       account: "opencode0c7d8e9f",
@@ -110,6 +114,8 @@ const ledger = {
       last_success_at: "0001-01-01T00:00:00Z",
       cooldown_until: "0001-01-01T00:00:00Z",
       source: "generated",
+      success_count: 0,
+      success_days: 0,
     },
     {
       account: "opencode0d9e0f1a2",
@@ -120,6 +126,8 @@ const ledger = {
       last_success_at: "0001-01-01T00:00:00Z",
       cooldown_until: "0001-01-01T00:00:00Z",
       source: "generated",
+      success_count: 0,
+      success_days: 0,
     },
   ],
   total: 4,
@@ -211,7 +219,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     expect(screen.getByText("被拒 1")).toBeInTheDocument();
     expect(screen.getByText("失败 1")).toBeInTheDocument();
     expect(screen.getByText("FreeTierError: forbidden")).toBeInTheDocument();
-    expect(probeBodies[0]).toEqual({ channel_id: 7, count: 100, concurrency: 10 });
+    expect(probeBodies[0]).toEqual({ channel_id: 7, count: 100, concurrency: 10, model: "model-a" });
   });
 
   it("生成数量上限 2000", async () => {
@@ -241,7 +249,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     await user.click(screen.getByRole("button", { name: "开始体检" }));
 
     await waitFor(() => expect(probeBodies).toHaveLength(1));
-    expect(probeBodies[0]).toEqual({ channel_id: 7, count: 2000, concurrency: 10 });
+    expect(probeBodies[0]).toEqual({ channel_id: 7, count: 2000, concurrency: 10, model: "model-a" });
   });
 
   it("一键测试台账全部账号并展示进度结果", async () => {
@@ -278,6 +286,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
         "opencode0d9e0f1a2",
       ],
       concurrency: 10,
+      model: "model-a",
     });
     expect(await screen.findByText("健康 1")).toBeInTheDocument();
   });
@@ -326,6 +335,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
       channel_id: 7,
       accounts: ["opencode0e4f5a6b", "opencode0d9e0f1a2"],
       concurrency: 10,
+      model: "model-a",
     });
 
     // 网络错误筛选: 台账只剩网络错误账号(结果表仍展示批量体检结果)
@@ -382,5 +392,62 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
 
     expect(await screen.findByText(/没有可体检的渠道/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "开始体检" })).not.toBeInTheDocument();
+  });
+
+  it("台账分页: 默认 100 条一页, 可翻页并调整每页条数", async () => {
+    const bigLedger = {
+      channel_id: 7,
+      items: Array.from({ length: 250 }, (_, index) => ({
+        account: `opencode${String(index).padStart(12, "0")}`,
+        state: index % 4 === 0 ? "usable" : index % 4 === 1 ? "untested" : index % 4 === 2 ? "unusable" : "error",
+        outcome: index % 4 === 1 ? "" : "healthy",
+        last_probe_status: index % 4 === 1 ? 0 : 200,
+        last_probe_at: "2026-10-24T12:00:00Z",
+        last_success_at: "0001-01-01T00:00:00Z",
+        cooldown_until: "0001-01-01T00:00:00Z",
+        source: "generated",
+        success_count: index,
+        success_days: index % 5,
+      })),
+      total: 250,
+      usable: 63,
+      untested: 63,
+      unusable: 62,
+      probe_error: 62,
+    };
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/channel/proxy-accounts?")) return jsonResponse(bigLedger);
+      if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
+      if (url.includes("/channel/list")) return jsonResponse([eligibleChannel({})]);
+      return jsonResponse(null);
+    }));
+
+    render(
+      <Wrapper>
+        <ProxyAccountsPage />
+      </Wrapper>,
+    );
+
+    // 首页 100 条, 第 1/3 页
+    expect((await screen.findAllByLabelText(/选择账号 opencode/))).toHaveLength(100);
+    expect(await screen.findByText("第 1 / 3 页")).toBeInTheDocument();
+
+    // 下一页 → 101-200 条
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(await screen.findByText("第 2 / 3 页")).toBeInTheDocument();
+    expect(screen.getByText("opencode000000000100")).toBeInTheDocument();
+    expect(screen.queryByText("opencode000000000000")).not.toBeInTheDocument();
+
+    // 每页条数调到 5000 → 一页放下全部 250 条
+    await user.selectOptions(screen.getByLabelText("每页条数"), "5000");
+    expect(await screen.findByText("第 1 / 1 页")).toBeInTheDocument();
+    expect(screen.getAllByLabelText(/选择账号 opencode/)).toHaveLength(250);
+    expect(screen.getByText("opencode000000000000")).toBeInTheDocument();
+
+    // 全选只作用于当前页
+    await user.click(screen.getByLabelText("全选当前筛选结果"));
+    expect(screen.getByRole("button", { name: "测试已选 250 个账号" })).toBeInTheDocument();
   });
 });

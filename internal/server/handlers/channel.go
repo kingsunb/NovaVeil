@@ -360,13 +360,15 @@ func testChannelKeys(c *gin.Context) {
 }
 
 // proxyAccountProbeRequest 是一次批量代理账号体检请求:
-// accounts 为空时生成 count 个随机账号(默认 100), 均不填时按默认行为执行。
+// accounts 为空时生成 count 个随机账号(默认 100), 均不填时按默认行为执行;
+// model 为空时由后端自动选择渠道首个 chat 协议模型。
 type proxyAccountProbeRequest struct {
 	ChannelID   int      `json:"channel_id" binding:"required"`
 	Accounts    []string `json:"accounts"`
 	Count       int      `json:"count"`
 	Concurrency int      `json:"concurrency"`
 	TimeoutMS   int      `json:"timeout_ms"`
+	Model       string   `json:"model"`
 }
 
 // probeProxyAccounts 并发体检免费档渠道的代理账号: 健康→入池优先复用,
@@ -377,7 +379,7 @@ func probeProxyAccounts(c *gin.Context) {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
 	}
-	report, err := relay.ProbeOpencodeAccounts(c.Request.Context(), request.ChannelID, request.Accounts, request.Count, request.Concurrency, request.TimeoutMS)
+	report, err := relay.ProbeOpencodeAccounts(c.Request.Context(), request.ChannelID, request.Accounts, request.Count, request.Concurrency, request.TimeoutMS, request.Model)
 	if err != nil {
 		resp.ErrorExposed(c, http.StatusBadRequest, err.Error())
 		return

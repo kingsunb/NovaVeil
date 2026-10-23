@@ -33,7 +33,7 @@ func TestProbeOpencodeAccountsClassifiesAndSeedsPool(t *testing.T) {
 	channel := createOpencodeProxyTestChannel(t, probe.template)
 
 	report, err := ProbeOpencodeAccounts(context.Background(), channel.ID,
-		[]string{"user_good", "user_good", "user_bad", "user_down"}, 0, 4, 0)
+		[]string{"user_good", "user_good", "user_bad", "user_down"}, 0, 4, 0, "")
 	if err != nil {
 		t.Fatalf("批量体检失败: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestProbeOpencodeAccountsGenerateAndValidate(t *testing.T) {
 	})
 	channel := createOpencodeProxyTestChannel(t, probe.template)
 
-	report, err := ProbeOpencodeAccounts(context.Background(), channel.ID, nil, 3, 3, 0)
+	report, err := ProbeOpencodeAccounts(context.Background(), channel.ID, nil, 3, 3, 0, "")
 	if err != nil {
 		t.Fatalf("生成模式体检失败: %v", err)
 	}
@@ -102,15 +102,15 @@ func TestProbeOpencodeAccountsGenerateAndValidate(t *testing.T) {
 		seen[result.Account] = true
 	}
 
-	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, []string{"bad account!"}, 0, 0, 0); err == nil {
+	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, []string{"bad account!"}, 0, 0, 0, ""); err == nil {
 		t.Fatal("含空格账号应被拒绝")
 	}
-	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, make([]string, ocProbeMaxAccounts+1), 0, 0, 0); err == nil {
+	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, make([]string, ocProbeMaxAccounts+1), 0, 0, 0, ""); err == nil {
 		t.Fatal("超过单次上限应被拒绝")
 	}
 
 	bare := createIntegrationChannel(t, "account-probe-no-proxy", model.ChannelProviderOpenAI, "http://opencode.test/v1", "plain-model")
-	if _, err := ProbeOpencodeAccounts(context.Background(), bare.ID, nil, 0, 0, 0); err == nil {
+	if _, err := ProbeOpencodeAccounts(context.Background(), bare.ID, nil, 0, 0, 0, ""); err == nil {
 		t.Fatal("非 {account} 代理渠道应被拒绝")
 	}
 }
@@ -172,6 +172,29 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 	}
 	if ledger2, _ := ListOpencodeAccountStates(channel.ID, "all"); ledger2.Total != 4 {
 		t.Fatalf("删除后台账应剩 4 行: %d", ledger2.Total)
+	}
+
+	// 成功统计: 同一自然日多次成功只累计次数不增天数, 跨自然日天数 +1。
+	if err := op.SaveOpencodeProxySuccess(channel.ID, "acct_ok", now); err != nil {
+		t.Fatalf("写成功记录失败: %v", err)
+	}
+	if err := op.SaveOpencodeProxySuccess(channel.ID, "acct_ok", now.Add(time.Minute)); err != nil {
+		t.Fatalf("写成功记录失败: %v", err)
+	}
+	if err := op.SaveOpencodeProxySuccess(channel.ID, "acct_ok", now.Add(25*time.Hour)); err != nil {
+		t.Fatalf("写跨天成功记录失败: %v", err)
+	}
+	rows, err := op.LoadOpencodeProxyAccounts(channel.ID)
+	if err != nil {
+		t.Fatalf("读台账失败: %v", err)
+	}
+	for _, row := range rows {
+		if row.Account != "acct_ok" {
+			continue
+		}
+		if row.SuccessCount != 3 || row.SuccessDays != 2 {
+			t.Fatalf("成功统计异常: count=%d days=%d", row.SuccessCount, row.SuccessDays)
+		}
 	}
 }
 

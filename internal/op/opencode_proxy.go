@@ -25,21 +25,32 @@ func LoadOpencodeProxyAccounts(channelID int) ([]model.OpencodeProxyAccount, err
 	return rows, nil
 }
 
-// SaveOpencodeProxySuccess 记录账号最近一次成功时间, 不存在则插入。
+// SaveOpencodeProxySuccess 记录账号最近一次成功, 累计成功次数并按自然日(0 点到 24 点)
+// 去重累计成功天数; 不存在则插入。
 func SaveOpencodeProxySuccess(channelID int, account string, at time.Time) error {
 	conn := db.GetDB()
 	if conn == nil {
 		return nil
 	}
+	day := at.Format("2006-01-02")
 	row := model.OpencodeProxyAccount{
-		ChannelID:     channelID,
-		Account:       account,
-		LastSuccessAt: at,
-		Source:        model.OpencodeAccountSourceTraffic,
+		ChannelID:      channelID,
+		Account:        account,
+		LastSuccessAt:  at,
+		Source:         model.OpencodeAccountSourceTraffic,
+		SuccessCount:   1,
+		SuccessDays:    1,
+		LastSuccessDay: day,
 	}
 	result := conn.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "channel_id"}, {Name: "account"}},
-		DoUpdates: clause.AssignmentColumns([]string{"last_success_at", "updated_at"}),
+		Columns: []clause.Column{{Name: "channel_id"}, {Name: "account"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"last_success_at":  at,
+			"updated_at":       time.Now(),
+			"success_count":    gorm.Expr("success_count + 1"),
+			"success_days":     gorm.Expr("CASE WHEN last_success_day = ? THEN success_days ELSE success_days + 1 END", day),
+			"last_success_day": day,
+		}),
 	}).Create(&row)
 	if result.Error != nil {
 		return fmt.Errorf("保存代理账号成功记录失败: %w", result.Error)
@@ -48,6 +59,7 @@ func SaveOpencodeProxySuccess(channelID int, account string, at time.Time) error
 }
 
 // SaveOpencodeProxyCooldown 记录账号冷却截止时间, 不存在则插入。
+// 不伪造最近成功时间: 未成功过的账号冷却行保持零值, 由冷却字段本身驱动可用性。
 func SaveOpencodeProxyCooldown(channelID int, account string, until time.Time) error {
 	conn := db.GetDB()
 	if conn == nil {
@@ -56,7 +68,6 @@ func SaveOpencodeProxyCooldown(channelID int, account string, until time.Time) e
 	row := model.OpencodeProxyAccount{
 		ChannelID:     channelID,
 		Account:       account,
-		LastSuccessAt: until.Add(-7 * 24 * time.Hour),
 		Source:        model.OpencodeAccountSourceTraffic,
 		CooldownUntil: until,
 	}
@@ -137,6 +148,7 @@ func DeleteOpencodeProxyAccounts(channelID int, accounts []string) (int64, error
 }
 
 // PruneOpencodeProxyAccounts 删除某渠道最旧的记录直到不超过 keep 条。
+// 淘汰序按最近活跃时间(成功/冷却/体检三者取最大)排序, 冷却中的记录不会被提前清掉。
 func PruneOpencodeProxyAccounts(channelID int, keep int) error {
 	conn := db.GetDB()
 	if conn == nil || keep <= 0 {
@@ -145,7 +157,7 @@ func PruneOpencodeProxyAccounts(channelID int, keep int) error {
 	var stale []uint
 	err := conn.Model(&model.OpencodeProxyAccount{}).
 		Where("channel_id = ?", channelID).
-		Order("last_success_at DESC").
+		Order("MAX(last_success_at, cooldown_until, last_probe_at) DESC").
 		Offset(keep).
 		Pluck("id", &stale).Error
 	if err != nil {

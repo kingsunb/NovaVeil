@@ -31,6 +31,8 @@ const (
 	ocProbeDefaultCount = 100
 	// ocProbeMaxTimeoutMS 单账号探测超时上限。
 	ocProbeMaxTimeoutMS = 120_000
+	// ocProbeClientIP 是账号体检请求在日志流里的客户端标识。
+	ocProbeClientIP = "账号体检"
 	// ocProbeOutcome* 是体检结论枚举。
 	ocProbeOutcomeHealthy  = "healthy"
 	ocProbeOutcomeRejected = "rejected"
@@ -67,9 +69,10 @@ type AccountProbeReport struct {
 }
 
 // ProbeOpencodeAccounts 并发钉住账号探测免费档渠道。
-// accounts 非空时逐个探测(去重), 为空时生成 count 个随机账号。
-// 健康与 403/429 的入池/冷却由 probeOnceWithAccount 的回填逻辑完成, 这里只汇总结论。
-func ProbeOpencodeAccounts(ctx context.Context, channelID int, accounts []string, count, concurrency, timeoutMS int) (*AccountProbeReport, error) {
+// accounts 非空时逐个探测(去重), 为空时生成 count 个随机账号; modelName 为空时
+// 自动选渠道首个 chat 协议模型。健康与 403/429 的入池/冷却由 probeOnceWithAccount
+// 的回填逻辑完成, 这里只汇总结论。
+func ProbeOpencodeAccounts(ctx context.Context, channelID int, accounts []string, count, concurrency, timeoutMS int, modelName string) (*AccountProbeReport, error) {
 	channel, err := op.ChannelGet(channelID)
 	if err != nil {
 		return nil, err
@@ -77,9 +80,13 @@ func ProbeOpencodeAccounts(ctx context.Context, channelID int, accounts []string
 	if !proxyNeedsOpencodeAccount(channel) {
 		return nil, fmt.Errorf("渠道不是含 {account} 代理的 OpenCode 免费档, 无需账号体检")
 	}
-	modelName, err := ocProbeModelName(channel)
-	if err != nil {
-		return nil, err
+	if modelName == "" {
+		modelName, err = ocProbeModelName(channel)
+		if err != nil {
+			return nil, err
+		}
+	} else if !ocProbeChannelHasModel(channel, modelName) {
+		return nil, fmt.Errorf("模型 %q 不在渠道模型列表中, 请先同步模型", modelName)
 	}
 	probing, err := ocProbeAccountList(accounts, count)
 	if err != nil {
@@ -130,6 +137,16 @@ func ProbeOpencodeAccounts(ctx context.Context, channelID int, accounts []string
 		}
 	}
 	return report, nil
+}
+
+// ocProbeChannelHasModel 报告模型名是否在该渠道的模型列表中。
+func ocProbeChannelHasModel(channel model.Channel, modelName string) bool {
+	for i := range channel.Models {
+		if channel.Models[i].Name == modelName {
+			return true
+		}
+	}
+	return false
 }
 
 // ocProbeModelName 选探测用的模型: 优先 chat 协议的首个模型, 否则首个模型。
@@ -266,6 +283,9 @@ type OpencodeAccountLedgerItem struct {
 	LastSuccessAt time.Time `json:"last_success_at"`
 	CooldownUntil time.Time `json:"cooldown_until"`
 	Source        string    `json:"source"`
+	// SuccessCount/SuccessDays 是累计成功统计: 次数含真实转发与体检, 天数按自然日去重。
+	SuccessCount int64 `json:"success_count"`
+	SuccessDays  int   `json:"success_days"`
 }
 
 // OpencodeAccountLedger 是某渠道账号台账的筛选视图。
@@ -323,6 +343,8 @@ func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLe
 			LastSuccessAt:   row.LastSuccessAt,
 			CooldownUntil:   row.CooldownUntil,
 			Source:          row.Source,
+			SuccessCount:    row.SuccessCount,
+			SuccessDays:     row.SuccessDays,
 		})
 	}
 	ledger.Total = len(rows)
@@ -400,7 +422,7 @@ func AutoProbeOpencodeAccounts(ctx context.Context) error {
 		if len(due) == 0 {
 			continue
 		}
-		if _, err := ProbeOpencodeAccounts(ctx, channel.ID, due, 0, ocProbeDefaultConcurrency, 0); err != nil {
+		if _, err := ProbeOpencodeAccounts(ctx, channel.ID, due, 0, ocProbeDefaultConcurrency, 0, ""); err != nil {
 			log.Warnf("渠道 %d 自动体检失败: %v", channel.ID, err)
 			continue
 		}

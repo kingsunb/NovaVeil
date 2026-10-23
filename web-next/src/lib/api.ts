@@ -806,13 +806,14 @@ export const api = {
   },
 
   // ----- OpenCode 账号体检 -----
-  /** 并发体检免费档渠道的代理账号: 健康→入池优先复用; 403/429→冷却 24h。 */
+  /** 并发体检免费档渠道的代理账号: 健康→入池优先复用; 403/429→冷却 24h。model 留空由后端自动选。 */
   probeProxyAccounts: async (body: {
     channel_id: number;
     accounts?: string[];
     count?: number;
     concurrency?: number;
     timeout_ms?: number;
+    model?: string;
   }) => {
     const raw = await http<unknown>("/channel/proxy-accounts/probe", {
       method: "POST",
@@ -847,6 +848,8 @@ export const api = {
         last_success_at: string;
         cooldown_until: string;
         source: string;
+        success_count: number;
+        success_days: number;
       }>;
       total: number;
       usable: number;

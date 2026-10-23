@@ -3,7 +3,7 @@
  * 体检控制与账号台账。生成即落账长期保存，台账随体检与转发流量实时更新，支持三态
  * 筛选、逐账号删除与一键测试台账全部账号。可开启每 24 小时自动体检。
  */
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { UsersRound } from "lucide-react";
@@ -27,6 +27,9 @@ const DEFAULT_COUNT = 100;
 const DEFAULT_CONCURRENCY = 10;
 /** 一键测试时分批调用体检接口的批大小。 */
 const BULK_CHUNK_SIZE = 200;
+/** 台账分页: 默认每页 100, 可选最大 5000。 */
+const LEDGER_PAGE_SIZE_DEFAULT = 100;
+const LEDGER_PAGE_SIZE_OPTIONS = [100, 200, 500, 1000, 5000];
 
 interface AccountProbeResult {
   account: string;
@@ -52,6 +55,8 @@ interface LedgerItem {
   last_success_at: string;
   cooldown_until: string;
   source: string;
+  success_count: number;
+  success_days: number;
 }
 
 interface Ledger {
@@ -99,29 +104,37 @@ function ledgerStateTone(state: string): "success" | "danger" | "warning" | "inf
   return "info";
 }
 
-function sourceLabel(source: string): string {
-  if (source === "generated") return zhCN.proxyAccounts.sourceGenerated;
-  if (source === "traffic") return zhCN.proxyAccounts.sourceTraffic;
-  return zhCN.proxyAccounts.sourceLegacy;
-}
-
 /** 单渠道视图: 生成/体检控制、结果与台账, Free 与 Old 互不混账。 */
 function ChannelSection({ channel }: { channel: Channel }) {
   const queryClient = useQueryClient();
   const [count, setCount] = useState(String(DEFAULT_COUNT));
   const [concurrency, setConcurrency] = useState(String(DEFAULT_CONCURRENCY));
+  const [modelName, setModelName] = useState(channel.models?.[0]?.name ?? "");
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<AccountProbeReport | null>(null);
   const [ledgerFilter, setLedgerFilter] = useState<LedgerFilter>("all");
   const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set());
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
+  const [pageSize, setPageSize] = useState(LEDGER_PAGE_SIZE_DEFAULT);
+  const [pageIndex, setPageIndex] = useState(1);
 
   const ledgerQuery = useQuery({
     queryKey: ["proxy-accounts", channel.id, ledgerFilter],
     queryFn: () => api.listProxyAccounts(channel.id, ledgerFilter),
   });
   const ledgerItems = ledgerQuery.data?.items ?? [];
-  const visibleSelected = ledgerItems.filter((item) => selectedAccounts.has(item.account)).length;
+  const ledgerTotalPages = Math.max(1, Math.ceil(ledgerItems.length / pageSize));
+  const ledgerPage = Math.min(pageIndex, ledgerTotalPages);
+  const ledgerPageItems = useMemo(
+    () => ledgerItems.slice((ledgerPage - 1) * pageSize, ledgerPage * pageSize),
+    [ledgerItems, ledgerPage, pageSize],
+  );
+  const visibleSelected = ledgerPageItems.filter((item) => selectedAccounts.has(item.account)).length;
+
+  // 数据收缩(删除/筛选变更)时把页码拉回有效范围。
+  useEffect(() => {
+    if (pageIndex > ledgerTotalPages) setPageIndex(ledgerTotalPages);
+  }, [ledgerTotalPages, pageIndex]);
 
   function parseInputs(): { count: number; concurrency: number } | null {
     const parsedCount = Math.floor(Number(count));
@@ -150,6 +163,7 @@ function ChannelSection({ channel }: { channel: Channel }) {
         channel_id: channel.id,
         count: inputs.count,
         concurrency: inputs.concurrency,
+        model: modelName || undefined,
       });
       setReport(next);
       await queryClient.invalidateQueries({ queryKey: ["proxy-accounts"] });
@@ -192,6 +206,7 @@ function ChannelSection({ channel }: { channel: Channel }) {
           channel_id: channel.id,
           accounts: chunk,
           concurrency,
+          model: modelName || undefined,
         });
         model = part.model;
         healthy += part.summary.healthy;
@@ -236,6 +251,19 @@ function ChannelSection({ channel }: { channel: Channel }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-4 md:grid-cols-3">
+          <Field label={zhCN.proxyAccounts.model}>
+            <select
+              className="h-9 w-full rounded-md border bg-transparent px-3 text-sm"
+              value={modelName}
+              onChange={(event) => setModelName(event.target.value)}
+            >
+              {(channel.models ?? []).map((model) => (
+                <option key={model.name} value={model.name}>
+                  {model.name}
+                </option>
+              ))}
+            </select>
+          </Field>
           <Field label={zhCN.proxyAccounts.count}>
             <Input value={count} onChange={(event) => setCount(event.target.value)} inputMode="numeric" />
           </Field>
@@ -246,11 +274,11 @@ function ChannelSection({ channel }: { channel: Channel }) {
               inputMode="numeric"
             />
           </Field>
-          <div className="flex items-end">
-            <Button onClick={() => void run()} disabled={running}>
-              {running ? zhCN.proxyAccounts.running : zhCN.proxyAccounts.run}
-            </Button>
-          </div>
+        </div>
+        <div>
+          <Button onClick={() => void run()} disabled={running}>
+            {running ? zhCN.proxyAccounts.running : zhCN.proxyAccounts.run}
+          </Button>
         </div>
 
         {report && (
@@ -309,7 +337,10 @@ function ChannelSection({ channel }: { channel: Channel }) {
               <button
                 key={value}
                 type="button"
-                onClick={() => setLedgerFilter(value)}
+                onClick={() => {
+                  setLedgerFilter(value);
+                  setPageIndex(1);
+                }}
                 className="focus-visible:outline-none"
               >
                 <Pill tone={ledgerFilter === value ? tone : "neutral"} dot={false}>
@@ -342,10 +373,10 @@ function ChannelSection({ channel }: { channel: Channel }) {
                       <input
                         type="checkbox"
                         aria-label={zhCN.proxyAccounts.selectAllVisible}
-                        checked={ledgerItems.length > 0 && visibleSelected === ledgerItems.length}
+                        checked={ledgerPageItems.length > 0 && visibleSelected === ledgerPageItems.length}
                         onChange={(event) => {
                           const next = new Set(selectedAccounts);
-                          for (const item of ledgerItems) {
+                          for (const item of ledgerPageItems) {
                             if (event.target.checked) next.add(item.account);
                             else next.delete(item.account);
                           }
@@ -355,13 +386,15 @@ function ChannelSection({ channel }: { channel: Channel }) {
                     </th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnAccount}</th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnOutcome}</th>
+                    <th className="px-2 py-2">{zhCN.proxyAccounts.columnSuccessCount}</th>
+                    <th className="px-2 py-2">{zhCN.proxyAccounts.columnSuccessDays}</th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnLastSuccess}</th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnSource}</th>
                     <th className="px-2 py-2" />
                   </tr>
                 </thead>
                 <tbody>
-                  {(ledgerQuery.data?.items ?? []).map((item) => (
+                  {(ledgerPageItems).map((item) => (
                     <tr key={item.account} className="border-b last:border-0">
                       <td className="px-2 py-2">
                         <input
@@ -395,8 +428,9 @@ function ChannelSection({ channel }: { channel: Channel }) {
                           </span>
                         )}
                       </td>
+                      <td className="px-2 py-2">{item.success_count}</td>
+                      <td className="px-2 py-2">{item.success_days}</td>
                       <td className="px-2 py-2">{fmtTime(item.last_success_at)}</td>
-                      <td className="px-2 py-2">{sourceLabel(item.source)}</td>
                       <td className="px-2 py-2 text-right">
                         <ConfirmButton onConfirm={() => void deleteAccounts([item.account])} />
                       </td>
@@ -404,6 +438,47 @@ function ChannelSection({ channel }: { channel: Channel }) {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+          {ledgerItems.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <span>{zhCN.proxyAccounts.pageSizeLabel}</span>
+                <select
+                  className="h-8 rounded-md border bg-transparent px-2 text-sm"
+                  aria-label={zhCN.proxyAccounts.pageSizeLabel}
+                  value={pageSize}
+                  onChange={(event) => {
+                    setPageSize(Number(event.target.value));
+                    setPageIndex(1);
+                  }}
+                >
+                  {LEDGER_PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={ledgerPage <= 1}
+                  onClick={() => setPageIndex(ledgerPage - 1)}
+                >
+                  {zhCN.proxyAccounts.prevPage}
+                </Button>
+                <span>{zhCN.proxyAccounts.pageOf(ledgerPage, ledgerTotalPages)}</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={ledgerPage >= ledgerTotalPages}
+                  onClick={() => setPageIndex(ledgerPage + 1)}
+                >
+                  {zhCN.proxyAccounts.nextPage}
+                </Button>
+              </div>
             </div>
           )}
         </div>

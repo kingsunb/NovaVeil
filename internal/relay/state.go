@@ -101,6 +101,7 @@ type RequestState struct {
 	UpstreamType  string      `json:"upstream_type"`            // 最新一轮上游渠道的协议类型。
 	RelayMode     string      `json:"relay_mode"`               // 最新一轮转发方式: passthrough 同协议透传, converted 跨协议转换。
 	ProxyAddr     string      `json:"proxy_addr,omitempty"`     // 最新一轮使用的渠道代理完整地址(密码打码, 含 {account} 解析出的别名); 未走渠道代理为空。
+	AccountProbe  bool        `json:"account_probe,omitempty"`  // 账号体检请求标记: 按实时请求计账(用量分桶), 客户端标记为 账号体检。
 	Masked        bool        `json:"masked,omitempty"`         // 本次请求是否执行了脱敏(请求体占位符替换), 面板据此展示脱敏标记。
 	MaskMatches   []MaskMatch `json:"mask_matches,omitempty"`   // 脱敏命中明细, 仅在脱敏发生时有值; 旧版本/开关关闭/未命中时为空, 前端据此决定是否渲染命中区(文档 07 §3.1)。
 	// MaskMatchesTruncated 命中明细是否因条数/字节上限被裁剪, true 表示当前为摘要而非全量(文档 07 §3.1 第 5 点、design §2.1.3)。
