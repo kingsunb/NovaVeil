@@ -44,6 +44,10 @@ OpenCode Free 是唯一直连 `https://opencode.ai/inference` 免费端点的内
 - **收益**：管理员可在三个内置 OpenCode Free 渠道上分别配置不同代理，同一免费端点的流量按分组/故障转移策略走不同出口。升级后自动补建，无需手动操作。
 - **代价与已知上限**：三个渠道的出厂配置（BaseURL、Key、Models、Headers）完全相同，存在代码重复——若上游模型列表变更，需同步改三处。`EnsureBuiltinChannels` 不覆盖已存在渠道，所以改模型列表后存量部署的 `"OpenCode Free 2"` / `"OpenCode Free 3"` 不会自动更新，管理员需在 UI 手动同步或删除后重启重建。重访信号：OpenCode 免费端点模型列表变更，或需要四个以上副本时考虑抽公共定义消除重复。
 
+## 部分取代
+
+[下线 OpenCode Free 2/3 内置副本渠道](../simplification/2026-10-24-remove-opencode-free-duplicates.md) 收回本篇新增 `"OpenCode Free 2"` / `"OpenCode Free 3"` 的决定：内置清单删除两个副本条目，迁移 024 删除存量库中的内置副本行。本篇保留原始动机与备选分析供回访；其中「自定义渠道每次启动被清 `is_free` 与 `opencode_compat`」的清理不变量仍生效，仍是自定义渠道无法承担 OpenCode 免费转发的根因，备选方案中否掉的放宽清理逻辑与 Key 级代理路线依然否。以下验证段描述加副本当时的回归范围，当前清单断言见新笔记。
+
 ## 验证
 
 `gofmt` 通过，无语法错误。`TestBuiltinFreeChannelsDefinitions` 的 Name 唯一性检查覆盖新条目。`TestOpenCodeFreeSeedProtocolsAreVerified` 按 `Name == "OpenCode Free"` 精确匹配，不受 `"OpenCode Free 2"` / `"OpenCode Free 3"` 影响。完整 `go test ./internal/builtin/...` 需 Go 1.26.7 工具链，当前环境 Go 1.22.0 无法运行，待构建环境就绪后补验。

@@ -178,7 +178,7 @@ func TestEnsureFreeBuiltinChannelsClearsCustomFreeFlag(t *testing.T) {
 }
 
 func TestBuiltinFreeChannelsDefinitions(t *testing.T) {
-	if got, want := len(BuiltinFreeChannels), 17; got != want {
+	if got, want := len(BuiltinFreeChannels), 15; got != want {
 		t.Fatalf("BuiltinFreeChannels count = %d, want %d", got, want)
 	}
 	seen := make(map[string]bool, len(BuiltinFreeChannels))
