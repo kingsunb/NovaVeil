@@ -91,16 +91,15 @@ func SyncModelsTask() error {
 			}
 		}
 
-		// 目录失败只跳过协议填充。/v1/models 的失败与空列表保护已经在上面返回。
+		// 目录失败不覆盖模型，沿用旧值。
+		// /v1/models 的失败与空列表保护已经在上面返回。
 		var catalog map[string]helper.OpencodeModelInfo
-		catalogOK := false
 		if channel.OpencodeCompat {
 			fetched, catalogErr := fetchOpencodeCatalog(fetchCtx, channel)
 			if catalogErr != nil {
-				log.Warnf("skip opencode protocol fill for channel %s: %v", channel.Name, catalogErr)
+				log.Warnf("skip opencode catalog fill for channel %s: %v", channel.Name, catalogErr)
 			} else {
 				catalog = fetched
-				catalogOK = true
 			}
 		}
 
@@ -119,9 +118,8 @@ func SyncModelsTask() error {
 			}
 		}
 		// 外部返回的模型名只在进入内部流程时清洗一次，并由手动模型优先占用重复名称。
-		// 重建 auto 模型时必须带上协议：目录识别到的值优先，否则抄回上一轮的非空协议。
-		// 只写名字和 Source 会在 ChannelUpdate 时把协议抹掉。
-		// 目录还提供上下文窗口、输出上限、推理/工具调用能力与输入模态，一并写入。
+		// 重建 auto 模型以旧行为基线，目录明确提供的新值才覆盖。
+		// 目录失败或漏项时沿用上一轮协议与能力元数据。
 		// OpenCode 免费渠道只同步名字含 free 的模型。
 		onlyFree := channel.IsFree && channel.OpencodeCompat && model.OpenCodeTier(channel.BaseURL) == "zen"
 		seen := make(map[string]struct{}, len(fetchModels))
@@ -141,22 +139,37 @@ func SyncModelsTask() error {
 				continue
 			}
 			seen[modelName] = struct{}{}
-			protocol := oldAutoModels[modelName].UpstreamProtocol
+			prev, hadPrev := oldAutoModels[modelName]
 			cm := model.ChannelModel{
-				Name:             modelName,
-				Source:           model.ChannelModelSourceAuto,
-				UpstreamProtocol: protocol,
+				Name:   modelName,
+				Source: model.ChannelModelSourceAuto,
 			}
-			if catalogOK {
-				if info, ok := catalog[modelName]; ok {
-					if info.Protocol != "" {
-						cm.UpstreamProtocol = info.Protocol
-					}
+			// 目录缺失时保留旧元数据。
+			if hadPrev {
+				cm.UpstreamProtocol = prev.UpstreamProtocol
+				cm.ContextWindow = prev.ContextWindow
+				cm.MaxOutput = prev.MaxOutput
+				cm.Reasoning = prev.Reasoning
+				cm.ToolCall = prev.ToolCall
+				cm.InputModalities = prev.InputModalities
+				cm.MaxReasoningEffort = prev.MaxReasoningEffort
+			}
+			if info, ok := catalog[modelName]; ok {
+				if info.Protocol != "" {
+					cm.UpstreamProtocol = info.Protocol
+				}
+				if info.ContextWindow > 0 {
 					cm.ContextWindow = info.ContextWindow
+				}
+				if info.MaxOutput > 0 {
 					cm.MaxOutput = info.MaxOutput
-					cm.Reasoning = info.Reasoning
-					cm.ToolCall = info.ToolCall
+				}
+				cm.Reasoning = info.Reasoning
+				cm.ToolCall = info.ToolCall
+				if len(info.InputModalities) > 0 {
 					cm.InputModalities = strings.Join(info.InputModalities, ",")
+				}
+				if info.MaxReasoningEffort != "" {
 					cm.MaxReasoningEffort = info.MaxReasoningEffort
 				}
 			}

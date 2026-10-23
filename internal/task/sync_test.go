@@ -13,6 +13,7 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/kingsunb/NovaVeil/internal/testutil"
+	"gorm.io/gorm"
 )
 
 func TestMain(m *testing.M) {
@@ -108,6 +109,175 @@ func TestSyncCatalogFailureKeepsModelsAndProtocols(t *testing.T) {
 	}
 }
 
+func TestSyncCatalogFailureKeepsModelMetadata(t *testing.T) {
+	updateCB := db.GetDB().Callback().Update()
+	const cbName = "test_count_sync_model_updates"
+	modelUpdates := 0
+	if err := updateCB.Before("gorm:update").Register(cbName, func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == "channel_models" {
+			modelUpdates++
+		}
+	}); err != nil {
+		t.Fatalf("register update callback: %v", err)
+	}
+	defer func() {
+		if err := updateCB.Remove(cbName); err != nil {
+			t.Errorf("remove update callback: %v", err)
+		}
+	}()
+
+	channel := insertSyncChannel(t, "https://opencode.ai/zen/go", []model.ChannelModel{{
+		Name:               "kept",
+		Source:             model.ChannelModelSourceAuto,
+		UpstreamProtocol:   model.UpstreamProtocolAnthropic,
+		ContextWindow:      200000,
+		MaxOutput:          8192,
+		Reasoning:          true,
+		ToolCall:           true,
+		InputModalities:    "text,image",
+		MaxReasoningEffort: "high",
+	}})
+	restore := stubSyncFetchCatalog([]string{"kept"}, nil, errors.New("catalog down"))
+	defer restore()
+
+	if err := SyncModelsTask(); err != nil {
+		t.Fatalf("SyncModelsTask: %v", err)
+	}
+	got := loadChannelModels(t, channel.ID)["kept"]
+	if got.UpstreamProtocol != model.UpstreamProtocolAnthropic {
+		t.Fatalf("catalog failure changed protocol: %q", got.UpstreamProtocol)
+	}
+	if got.ContextWindow != 200000 {
+		t.Fatalf("catalog failure changed context window: %d", got.ContextWindow)
+	}
+	if got.MaxOutput != 8192 {
+		t.Fatalf("catalog failure changed max output: %d", got.MaxOutput)
+	}
+	if !got.Reasoning || !got.ToolCall {
+		t.Fatalf("catalog failure changed capabilities: reasoning=%v tool_call=%v", got.Reasoning, got.ToolCall)
+	}
+	if got.InputModalities != "text,image" {
+		t.Fatalf("catalog failure changed input modalities: %q", got.InputModalities)
+	}
+	if got.MaxReasoningEffort != "high" {
+		t.Fatalf("catalog failure changed max reasoning effort: %q", got.MaxReasoningEffort)
+	}
+	if modelUpdates != 0 {
+		t.Fatalf("catalog failure wrote channel models %d time(s), want 0", modelUpdates)
+	}
+}
+
+func TestSyncCatalogMissingEntryKeepsModelMetadata(t *testing.T) {
+	channel := insertSyncChannel(t, "https://opencode.ai/zen/go", []model.ChannelModel{{
+		Name:               "kept",
+		Source:             model.ChannelModelSourceAuto,
+		UpstreamProtocol:   model.UpstreamProtocolAnthropic,
+		ContextWindow:      200000,
+		MaxOutput:          8192,
+		Reasoning:          true,
+		ToolCall:           true,
+		InputModalities:    "text,image",
+		MaxReasoningEffort: "high",
+	}})
+	restore := stubSyncFetchCatalog(
+		[]string{"kept", "fresh"},
+		map[string]helper.OpencodeModelInfo{
+			"fresh": {
+				Protocol:           model.UpstreamProtocolChat,
+				ContextWindow:      128000,
+				MaxOutput:          4096,
+				Reasoning:          true,
+				ToolCall:           true,
+				InputModalities:    []string{"text", "image", "audio"},
+				MaxReasoningEffort: "medium",
+			},
+		},
+		nil,
+	)
+	defer restore()
+
+	if err := SyncModelsTask(); err != nil {
+		t.Fatalf("SyncModelsTask: %v", err)
+	}
+	got := loadChannelModels(t, channel.ID)
+	kept := got["kept"]
+	if kept.UpstreamProtocol != model.UpstreamProtocolAnthropic ||
+		kept.ContextWindow != 200000 ||
+		kept.MaxOutput != 8192 ||
+		!kept.Reasoning ||
+		!kept.ToolCall ||
+		kept.InputModalities != "text,image" ||
+		kept.MaxReasoningEffort != "high" {
+		t.Fatalf("catalog missing entry changed metadata: %#v", kept)
+	}
+	fresh, ok := got["fresh"]
+	if !ok {
+		t.Fatal("catalog model was not created")
+	}
+	if fresh.UpstreamProtocol != model.UpstreamProtocolChat ||
+		fresh.ContextWindow != 128000 ||
+		fresh.MaxOutput != 4096 ||
+		!fresh.Reasoning ||
+		!fresh.ToolCall ||
+		fresh.InputModalities != "text,image,audio" ||
+		fresh.MaxReasoningEffort != "medium" {
+		t.Fatalf("catalog model metadata = %#v", fresh)
+	}
+}
+
+func TestSyncCatalogUpdatesModelMetadata(t *testing.T) {
+	channel := insertSyncChannel(t, "https://opencode.ai/zen/go", []model.ChannelModel{{
+		Name:               "kept",
+		Source:             model.ChannelModelSourceAuto,
+		UpstreamProtocol:   model.UpstreamProtocolAnthropic,
+		ContextWindow:      200000,
+		MaxOutput:          8192,
+		Reasoning:          true,
+		ToolCall:           true,
+		InputModalities:    "text",
+		MaxReasoningEffort: "low",
+	}})
+	restore := stubSyncFetchCatalog(
+		[]string{"kept"},
+		map[string]helper.OpencodeModelInfo{
+			"kept": {
+				Protocol:           model.UpstreamProtocolChat,
+				ContextWindow:      400000,
+				MaxOutput:          16384,
+				Reasoning:          false,
+				ToolCall:           false,
+				InputModalities:    []string{"text", "image"},
+				MaxReasoningEffort: "max",
+			},
+		},
+		nil,
+	)
+	defer restore()
+
+	if err := SyncModelsTask(); err != nil {
+		t.Fatalf("SyncModelsTask: %v", err)
+	}
+	got := loadChannelModels(t, channel.ID)["kept"]
+	if got.UpstreamProtocol != model.UpstreamProtocolChat {
+		t.Fatalf("catalog protocol = %q, want chat", got.UpstreamProtocol)
+	}
+	if got.ContextWindow != 400000 {
+		t.Fatalf("catalog context window = %d, want 400000", got.ContextWindow)
+	}
+	if got.MaxOutput != 16384 {
+		t.Fatalf("catalog max output = %d, want 16384", got.MaxOutput)
+	}
+	if got.Reasoning || got.ToolCall {
+		t.Fatalf("catalog capabilities = reasoning:%v tool_call:%v, want false/false", got.Reasoning, got.ToolCall)
+	}
+	if got.InputModalities != "text,image" {
+		t.Fatalf("catalog input modalities = %q, want text,image", got.InputModalities)
+	}
+	if got.MaxReasoningEffort != "max" {
+		t.Fatalf("catalog max reasoning effort = %q, want max", got.MaxReasoningEffort)
+	}
+}
+
 func TestSyncModelsTaskSkipsDisabledChannels(t *testing.T) {
 	channel := insertSyncChannel(t, "https://opencode.ai/zen", []model.ChannelModel{
 		{Name: "kept", Source: model.ChannelModelSourceAuto},
@@ -199,6 +369,14 @@ func insertSyncChannel(t *testing.T, baseURL string, models []model.ChannelModel
 }
 
 func stubSyncFetch(models []string, protocols map[string]string, catalogErr error) func() {
+	catalog := make(map[string]helper.OpencodeModelInfo, len(protocols))
+	for name, protocol := range protocols {
+		catalog[name] = helper.OpencodeModelInfo{Protocol: protocol}
+	}
+	return stubSyncFetchCatalog(models, catalog, catalogErr)
+}
+
+func stubSyncFetchCatalog(models []string, catalog map[string]helper.OpencodeModelInfo, catalogErr error) func() {
 	prevModels := fetchChannelModels
 	prevCatalog := fetchOpencodeCatalog
 	fetchChannelModels = func(context.Context, model.Channel) ([]string, error) {
@@ -209,16 +387,25 @@ func stubSyncFetch(models []string, protocols map[string]string, catalogErr erro
 		if catalogErr != nil {
 			return nil, catalogErr
 		}
-		out := make(map[string]helper.OpencodeModelInfo, len(protocols))
-		for name, protocol := range protocols {
-			out[name] = helper.OpencodeModelInfo{Protocol: protocol}
-		}
-		return out, nil
+		return catalog, nil
 	}
 	return func() {
 		fetchChannelModels = prevModels
 		fetchOpencodeCatalog = prevCatalog
 	}
+}
+
+func loadChannelModels(t *testing.T, channelID int) map[string]model.ChannelModel {
+	t.Helper()
+	var rows []model.ChannelModel
+	if err := db.GetDB().Where("channel_id = ?", channelID).Find(&rows).Error; err != nil {
+		t.Fatalf("load models: %v", err)
+	}
+	got := make(map[string]model.ChannelModel, len(rows))
+	for _, row := range rows {
+		got[row.Name] = row
+	}
+	return got
 }
 
 func loadProtocols(t *testing.T, channelID int) map[string]string {
