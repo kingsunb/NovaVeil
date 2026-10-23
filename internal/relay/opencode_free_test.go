@@ -197,19 +197,20 @@ func TestShapeOpencodeFreeBodyV1ChatKeyOrder(t *testing.T) {
 	body := []byte(`{"stream":true,"stream_options":{"include_usage":true},"model":"x-free","tools":[{"type":"function","function":{"name":"read","description":"client","parameters":{"type":"object","properties":{}}}}],"max_tokens":1024,"tool_choice":"auto","temperature":0.7}`)
 	out, _, _ := shapeOpencodeFreeBody(body, true, model.UpstreamProtocolChat)
 	want := []string{"model", "max_tokens", "messages", "tools", "tool_choice", "stream", "stream_options", "temperature"}
-	if got := topLevelKeys(t, out); !reflect.DeepEqual(got, want) {
+	if got := topLevelKeyOrder(t, out); !reflect.DeepEqual(got, want) {
 		t.Fatalf("v1 键序 = %v, 期望 %v", got, want)
 	}
 
 	out, _, _ = shapeOpencodeFreeBody([]byte(`{"model":"x-free","stream":true,"messages":[]}`), true, model.UpstreamProtocolChat)
 	want = []string{"model", "messages", "tools", "stream"}
-	if got := topLevelKeys(t, out); !reflect.DeepEqual(got, want) {
+	if got := topLevelKeyOrder(t, out); !reflect.DeepEqual(got, want) {
 		t.Fatalf("v1 缺省键序 = %v, 期望 %v", got, want)
 	}
 }
 
-// topLevelKeys 按出现顺序返回 JSON 顶层键。
-func topLevelKeys(t *testing.T, body []byte) []string {
+// topLevelKeyOrder 按出现顺序返回 JSON 顶层键。
+// 与 convtrace.go 的 topLevelKeys 不同: 那个解析 convtrace 专用的 @keys 元数据。
+func topLevelKeyOrder(t *testing.T, body []byte) []string {
 	t.Helper()
 	dec := json.NewDecoder(bytes.NewReader(body))
 	if tok, err := dec.Token(); err != nil {
