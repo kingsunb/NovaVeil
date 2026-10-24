@@ -63,7 +63,12 @@ func modelTokenDensity(baseURL, modelName string) float64 {
 // 密度比由上下文探测实测写入: 未实测的模型按基准口径, 实测过的模型按实测比例修正;
 // 路由过滤与探测构造共用该函数, 探测说装得下的, 路由判定同尺。
 func estimateModelTokens(body []byte, baseURL, modelName string) int {
-	base := estimateRequestTokens(body)
+	return estimateModelTokensFromBase(estimateRequestTokens(body), baseURL, modelName)
+}
+
+// estimateModelTokensFromBase 按密度把基准估算换算到该模型的上游口径,
+// 供同一请求体多成员复用, 免去逐成员重扫请求体。
+func estimateModelTokensFromBase(base int, baseURL, modelName string) int {
 	if base <= 0 {
 		return 0
 	}
@@ -83,6 +88,7 @@ func contextFitsWindow(body []byte, contextWindow int, baseURL, modelName string
 }
 
 type contextFitScan struct {
+	baseTokens  int
 	candidates  int
 	fitting     int
 	maxWindow   int
@@ -91,16 +97,18 @@ type contextFitScan struct {
 }
 
 // scanContextFit 在选路前标记窗口不足的可达叶子。
+// 基准口径只对请求体估一次, 成员按各自密度比换算。
 func scanContextFit(group model.Group, body []byte) contextFitScan {
 	scan := contextFitScan{
+		baseTokens:  estimateRequestTokens(body),
 		skipped:     make(map[int]bool),
 		blockedRefs: make(map[int]bool),
 	}
-	scan.scanGroup(group, body, 0, make(map[int]bool))
+	scan.scanGroup(group, 0, make(map[int]bool))
 	return scan
 }
 
-func (s *contextFitScan) scanGroup(group model.Group, body []byte, refDepth int, visiting map[int]bool) {
+func (s *contextFitScan) scanGroup(group model.Group, refDepth int, visiting map[int]bool) {
 	if visiting[group.ID] {
 		return
 	}
@@ -120,7 +128,7 @@ func (s *contextFitScan) scanGroup(group model.Group, body []byte, refDepth int,
 				continue
 			}
 			beforeCandidates, beforeFitting := s.candidates, s.fitting
-			s.scanGroup(ref, body, refDepth+1, visiting)
+			s.scanGroup(ref, refDepth+1, visiting)
 			if s.candidates > beforeCandidates && s.fitting == beforeFitting {
 				s.blockedRefs[item.ID] = true
 				clearSessionStickyByItem(group.ID, item.ID)
@@ -145,7 +153,8 @@ func (s *contextFitScan) scanGroup(group model.Group, body []byte, refDepth int,
 		if window > s.maxWindow {
 			s.maxWindow = window
 		}
-		if contextFitsWindow(body, window, channel.BaseURL, item.ChannelModel.Name) {
+		if window <= 0 ||
+			estimateModelTokensFromBase(s.baseTokens, channel.BaseURL, item.ChannelModel.Name) <= window {
 			s.fitting++
 			continue
 		}
