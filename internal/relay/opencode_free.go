@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/utils/opencodeid"
@@ -306,6 +307,9 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 			out, changed = next, true
 		}
 		if protocol == model.UpstreamProtocolChat {
+			if sysNext, sysChanged := ensureOfficialOpencodeSystem(out, "v1", bodyModelName(out)); sysChanged {
+				out, changed = sysNext, true
+			}
 			if normalized := normalizeOpencodeChatBody(out, v1ChatKeyOrder); normalized != nil {
 				out = normalized
 			}
@@ -321,11 +325,74 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 		}
 	}
 	if protocol == model.UpstreamProtocolChat {
+		if sysNext, sysChanged := ensureOfficialOpencodeSystem(out, "v2", bodyModelName(out)); sysChanged {
+			out, changed = sysNext, true
+		}
 		if normalized := normalizeOpencodeChatBody(out, v2ChatKeyOrder); normalized != nil {
 			out = normalized
 		}
 	}
 	return out, changed, ""
+}
+
+// ocOfficialSystemPrefixLen 是官方系统提示幂等判定的前缀长度。
+const ocOfficialSystemPrefixLen = 64
+
+// ensureOfficialOpencodeSystem 保证免费档正文首条 system 消息是官方模板形态。
+// 上游对免费档做系统提示门禁: 缺失或非官方主体的 system 一律 429(2026-10-24 实测,
+// 话术 FreeUsageLimitError), 官方模板尾部追加客户端指令不影响通过。无 system 时
+// 直接插入; 有客户端 system 时以官方模板打头、客户端原文追加到尾部。
+// 首条 system 已是官方形态时幂等跳过, 保证体检模板与重复整形不受影响。
+func ensureOfficialOpencodeSystem(body []byte, lane, modelName string) ([]byte, bool) {
+	templates, err := loadOcProbeTemplates()
+	if err != nil || templates[lane] == nil {
+		return body, false
+	}
+	template := templates[lane]
+	prefix := template.System
+	if len(prefix) > ocOfficialSystemPrefixLen {
+		prefix = prefix[:ocOfficialSystemPrefixLen]
+	}
+	official := template.System
+	official = strings.ReplaceAll(official, "{{MODEL_NAME}}", modelName)
+	official = strings.ReplaceAll(official, "{{MODEL_ID}}", modelName)
+	official = strings.ReplaceAll(official, "{{DATE}}", ocProbeDate(time.Now()))
+	if strings.Contains(official, "{{") {
+		return body, false
+	}
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.IsArray() {
+		return body, false
+	}
+	items := make([]string, 0, len(messages.Array())+1)
+	clientSystem := ""
+	for index, msg := range messages.Array() {
+		if index == 0 && msg.Get("role").String() == "system" {
+			content := msg.Get("content").String()
+			if strings.HasPrefix(content, prefix) {
+				return body, false
+			}
+			clientSystem = content
+			continue
+		}
+		items = append(items, msg.Raw)
+	}
+	merged := official
+	if clientSystem != "" {
+		merged = official + "\n\n" + clientSystem
+	}
+	sysJSON, err := marshalOpencodeJSON(merged)
+	if err != nil {
+		return body, false
+	}
+	parts := make([]string, 0, len(items)+1)
+	parts = append(parts, `{"role":"system","content":`+string(sysJSON)+`}`)
+	parts = append(parts, items...)
+	next, err := sjson.SetRawBytes(body, "messages", []byte("["+strings.Join(parts, ",")+"]"))
+	if err != nil {
+		return body, false
+	}
+	return next, true
 }
 
 func protocolTokenLimitField(protocol string) string {

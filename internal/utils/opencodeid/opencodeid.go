@@ -123,13 +123,27 @@ var (
 )
 
 // SessionIDFromSignal 由信号确定性派生官方 ses_ 会话号。
+// 时间段按小时锚定当前时间: 上游校验会话号时间段解码落在近期窗口, 哈希直接
+// 构造的任意值会解码到 1970 年被 429(2026-10-24 实测)。同一信号在同一小时内
+// 派生同一号, 跨小时等效新会话; 计数低位与随机段仍混入哈希, 同小时内不同
+// 信号互不相同。
 func SessionIDFromSignal(signal string) string {
 	if officialSessionPattern.MatchString(signal) && descendingTimePartPattern.MatchString(signal[4:16]) {
 		return signal
 	}
 	sum := sha256.Sum256([]byte("ses\x00" + signal))
-	return "ses_" + descendingTimePart(sum[:6]) + base62Fixed(sum[6:16], 14)
+	anchor := uint64(time.Now().UnixMilli()/sessionAnchorMillis*sessionAnchorMillis) << 12
+	mixed := anchor | uint64(sum[5])&0xfff
+	inverted := ^mixed & 0xFFFFFFFFFFFF
+	hexPart := hex.EncodeToString([]byte{
+		byte(inverted >> 40), byte(inverted >> 32), byte(inverted >> 24),
+		byte(inverted >> 16), byte(inverted >> 8), byte(inverted),
+	})
+	return "ses_" + hexPart + base62Fixed(sum[6:16], 14)
 }
+
+// sessionAnchorMillis 是派生会话号时间锚的粒度(一小时)。
+const sessionAnchorMillis = 3600 * 1000
 
 // descendingTimePart 取反 48 位时间部分, 落在官方 descending 形态。
 func descendingTimePart(hash []byte) string {

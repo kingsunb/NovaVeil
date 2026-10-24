@@ -109,7 +109,7 @@ var BuiltinFreeChannels = []model.Channel{
 		// https://opencode.ai/zen/v1/chat/completions, 即 legacy 免费档端点。
 		// 与 /inference 档的区别(由 applyOpencodeFreeLaneHeaders 在转发时动态设置):
 		//   - User-Agent 用 v1 模型请求格式 opencode/1.19.4 ai-sdk/provider-utils/<ver>
-		//     runtime/bun/1.3.14, <ver> 按出站协议(chat=4.0.23/responses=4.0.40/anthropic=4.0.46);
+		//     runtime/bun/1.4.4, <ver> 按出站协议(chat=4.0.23/responses=4.0.40/anthropic=4.0.46);
 		//   - x-opencode-project 用裸 40-hex(由 injectOpencodeCorrelationHeaders 注入);
 		//   - 额外发送 x-opencode-request(msg_ 递增 id), v2 档不发此头(网关 403);
 		//   - legacy 档只需单个 read 工具且不校验 schema, 比 /inference 的 5 工具
