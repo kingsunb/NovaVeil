@@ -1,16 +1,23 @@
 package relay
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	_ "embed"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/charmbracelet/log"
+	"github.com/kingsunb/NovaVeil/internal/helper"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/looplj/axonhub/llm"
@@ -18,7 +25,7 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// 批量账号体检: 钉住账号并发打极小真实请求, 健康入池/被拒冷却, 供免费档直接复用。
+// 批量账号体检: 钉住账号并发打与官方客户端同构的完整请求, 健康入池/被拒冷却, 供免费档直接复用。
 // 「账号」是渠道代理模板 {account} 占位符对应的 resin 出口会话, 不是登录凭据。
 const (
 	// ocProbeMaxAccounts 单次体检的账号数上限, 与台账容量对齐。
@@ -96,6 +103,8 @@ func ProbeOpencodeAccounts(ctx context.Context, channelID int, accounts []string
 	if err := op.UpsertOpencodeGeneratedAccounts(channelID, probing); err != nil {
 		return nil, err
 	}
+	// 展示名整批取一次目录, 供系统提示的 Name 行; 失败回退模型 ID。
+	displayName := ocProbeDisplayName(ctx, channel, modelName)
 	if concurrency <= 0 {
 		concurrency = ocProbeDefaultConcurrency
 	}
@@ -119,7 +128,7 @@ func ProbeOpencodeAccounts(ctx context.Context, channelID int, accounts []string
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			results[index] = ocProbeOne(ctx, channel, modelName, account, timeout)
+			results[index] = ocProbeOne(ctx, channel, modelName, displayName, account, timeout)
 		}(i, account)
 	}
 	wg.Wait()
@@ -209,23 +218,26 @@ func ocProbeAccountList(accounts []string, count int) ([]string, error) {
 	return probing, nil
 }
 
-// ocProbeRawRequest 构造与下游 Chat 请求同构的极小探测请求: 只带 model 与统一测试
-// 消息, 不预设输出上限与流式——免费档整形会像真实下游一样注入 stream/tools/32000
-// 输出上限, 出站字节形态与真实转发一致。非 chat 协议回退面板构造器(免费档实际只走 chat)。
-func ocProbeRawRequest(format llm.APIFormat, modelName string) (*httpclient.Request, error) {
-	if format != llm.APIFormatOpenAIChatCompletion {
+// ocProbeRawRequest 构造与官方客户端逐字节同构的体检请求。免费档 chat 模型按实抓模板
+// 发送完整 Agent 形态消息(系统提示+全量工具+流式参数), 免费档整形对其幂等; 其余(非
+// chat 协议或非免费模型)回退面板构造器, 避免在付费档燃烧大系统提示的 token。
+func ocProbeRawRequest(format llm.APIFormat, channel model.Channel, modelName, displayName string, maxOutput int) (*httpclient.Request, error) {
+	if format != llm.APIFormatOpenAIChatCompletion || !isOpencodeFreeModel(channel, modelName) {
 		return newTestRequest(format, modelName, defaultTestMessage, 1)
 	}
-	body, err := sjson.SetBytes([]byte("{}"), "model", modelName)
+	lane := "v2"
+	if isOpencodeV1Lane(channel) {
+		lane = "v1"
+	}
+	body, err := ocProbeClientBody(lane, modelName, displayName, maxOutput)
 	if err != nil {
 		return nil, err
 	}
-	if body, err = sjson.SetBytes(body, "messages", []map[string]string{
-		{"role": "user", "content": defaultTestMessage},
-	}); err != nil {
-		return nil, err
-	}
 	headers := http.Header{"Content-Type": []string{"application/json"}}
+	if lane == "v2" {
+		// 官方 v2 客户端恒发项目目录哈希, 从不发 global。
+		headers.Set(opencodeProjectHeader, ocProbeProjectID)
+	}
 	return &httpclient.Request{
 		Method:    http.MethodPost,
 		Path:      "/v1" + upstreamPath(format),
@@ -235,13 +247,185 @@ func ocProbeRawRequest(format llm.APIFormat, modelName string) (*httpclient.Requ
 	}, nil
 }
 
+//go:embed opencode_probe_v1.json
+var opencodeProbeV1JSON []byte
+
+//go:embed opencode_probe_v2.json
+var opencodeProbeV2JSON []byte
+
+// ocProbeTemplate 是官方客户端实抓的体检模板: 系统提示(含动态标记)与全量工具定义。
+// 2026-10-24 在本地抓包上游用 opencode 1.19.4(v1 档)与 2.1.4(v2 档)各发一条默认测试
+// 消息捕获; 工具定义与抓包原文逐字节一致, 系统提示仅模型/展示名/日期三处动态化。
+type ocProbeTemplate struct {
+	System string          `json:"system"`
+	Tools  json.RawMessage `json:"tools"`
+}
+
+var (
+	ocProbeTemplatesOnce sync.Once
+	ocProbeTemplates     map[string]*ocProbeTemplate
+	ocProbeTemplatesErr  error
+)
+
+// loadOcProbeTemplates 解析两档体检模板, 解析失败在首次调用时固化为错误。
+func loadOcProbeTemplates() (map[string]*ocProbeTemplate, error) {
+	ocProbeTemplatesOnce.Do(func() {
+		ocProbeTemplates = make(map[string]*ocProbeTemplate, 2)
+		for lane, raw := range map[string][]byte{"v1": opencodeProbeV1JSON, "v2": opencodeProbeV2JSON} {
+			var template ocProbeTemplate
+			if ocProbeTemplatesErr = json.Unmarshal(raw, &template); ocProbeTemplatesErr != nil {
+				return
+			}
+			ocProbeTemplates[lane] = &template
+		}
+	})
+	return ocProbeTemplates, ocProbeTemplatesErr
+}
+
+// ocProbeProjectID 是体检 v2 档的项目号: 稳定 40-hex, 形态对齐官方客户端按项目目录
+// 取哈希(同一网关恒定, 等价于官方客户端在固定项目目录下运行)。
+var ocProbeProjectID = func() string {
+	sum := sha256.Sum256([]byte("novaveil-opencode-account-probe"))
+	return hex.EncodeToString(sum[:20])
+}()
+
+// ocProbeClientBody 按官方客户端实抓形态装配体检正文: 键序、参数、工具与抓包一致,
+// 仅模型、展示名、日期与用户消息按当次探测填充。maxOutput 非正时回退 32000。
+func ocProbeClientBody(lane, modelName, displayName string, maxOutput int) ([]byte, error) {
+	templates, err := loadOcProbeTemplates()
+	if err != nil {
+		return nil, err
+	}
+	template := templates[lane]
+	if template == nil {
+		return nil, fmt.Errorf("未知体检模板档位: %s", lane)
+	}
+	if maxOutput <= 0 {
+		maxOutput = opencodeV2CompletionLimit
+	}
+	system := template.System
+	system = strings.ReplaceAll(system, "{{MODEL_NAME}}", displayName)
+	system = strings.ReplaceAll(system, "{{MODEL_ID}}", modelName)
+	system = strings.ReplaceAll(system, "{{DATE}}", ocProbeDate(time.Now()))
+	if strings.Contains(system, "{{") {
+		return nil, fmt.Errorf("体检系统提示存在未替换标记")
+	}
+	tools := template.Tools
+	if runtime.GOOS == "windows" {
+		// 与免费档整形的 shell 平台口径一致, 保证整形对本模板幂等。
+		tools = bytes.ReplaceAll(tools, []byte("on Linux using bash"), []byte("on Windows using bash"))
+	}
+	systemJSON, err := marshalOpencodeJSON(system)
+	if err != nil {
+		return nil, err
+	}
+	userJSON, err := marshalOpencodeJSON(defaultTestMessage)
+	if err != nil {
+		return nil, err
+	}
+	messages := []byte(`[{"role":"system","content":` + string(systemJSON) + `},{"role":"user","content":` + string(userJSON) + `}]`)
+	body := []byte("{}")
+	set := func(path string, value any) error {
+		next, err := sjson.SetBytes(body, path, value)
+		if err != nil {
+			return fmt.Errorf("装配体检字段 %q 失败: %w", path, err)
+		}
+		body = next
+		return nil
+	}
+	setRaw := func(path string, value []byte) error {
+		next, err := sjson.SetRawBytes(body, path, value)
+		if err != nil {
+			return fmt.Errorf("装配体检字段 %q 失败: %w", path, err)
+		}
+		body = next
+		return nil
+	}
+	if lane == "v1" {
+		// v1 档(1.19.4)键序: model, max_tokens, messages, tools, tool_choice, stream, stream_options。
+		if err := set("model", modelName); err != nil {
+			return nil, err
+		}
+		if err := set("max_tokens", maxOutput); err != nil {
+			return nil, err
+		}
+		if err := setRaw("messages", messages); err != nil {
+			return nil, err
+		}
+		if err := setRaw("tools", tools); err != nil {
+			return nil, err
+		}
+		if err := set("tool_choice", "auto"); err != nil {
+			return nil, err
+		}
+	} else {
+		// v2 档(2.1.4)键序: model, messages, tools, stream, stream_options, max_completion_tokens。
+		if err := set("model", modelName); err != nil {
+			return nil, err
+		}
+		if err := setRaw("messages", messages); err != nil {
+			return nil, err
+		}
+		if err := setRaw("tools", tools); err != nil {
+			return nil, err
+		}
+	}
+	if err := set("stream", true); err != nil {
+		return nil, err
+	}
+	if err := setRaw("stream_options", []byte(`{"include_usage":true}`)); err != nil {
+		return nil, err
+	}
+	if lane != "v1" {
+		if err := set("max_completion_tokens", maxOutput); err != nil {
+			return nil, err
+		}
+	}
+	return body, nil
+}
+
+// ocProbeDate 输出官方客户端的系统提示日期格式, 形如 Sat Oct 24 2026(日不补零)。
+func ocProbeDate(now time.Time) string {
+	return fmt.Sprintf("%s %s %d %d", now.Format("Mon"), now.Format("Jan"), now.Day(), now.Year())
+}
+
+// opencodeProbeCatalog 是体检取展示名的目录入口, 测试替换以免真实外呼。
+var opencodeProbeCatalog = helper.FetchOpencodeCatalog
+
+// ocProbeDisplayName 返回模型在官方目录的展示名(体检系统提示的 Name 行), 取不到回退模型 ID。
+// 失败只影响一行文案, 不影响体检结论。
+func ocProbeDisplayName(ctx context.Context, channel model.Channel, modelName string) string {
+	fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	catalog, err := opencodeProbeCatalog(fetchCtx, channel)
+	if err != nil {
+		return modelName
+	}
+	if name := catalog[modelName].Name; name != "" {
+		return name
+	}
+	return modelName
+}
+
+// ocProbeChannelMaxOutput 返回渠道模型表配置的输出上限, 0 表示未配置。
+func ocProbeChannelMaxOutput(channel model.Channel, modelName string) int {
+	for i := range channel.Models {
+		if channel.Models[i].Name == modelName {
+			return channel.Models[i].MaxOutput
+		}
+	}
+	return 0
+}
+
 // ocProbeOne 钉住单个账号探测一次并归类结论, 结论同步写回台账。
-func ocProbeOne(ctx context.Context, channel model.Channel, modelName, account string, timeout time.Duration) AccountProbeResult {
+// 每次调用经 probeOnceWithAccount 铸全新的 opencode 会话号: 账号间、同账号复测间
+// 的 x-opencode-session(及镜像头与 v1 档 msg_ id)互不相同, 避免上游按会话聚合识别。
+func ocProbeOne(ctx context.Context, channel model.Channel, modelName, displayName string, account string, timeout time.Duration) AccountProbeResult {
 	result := AccountProbeResult{Account: account, Outcome: ocProbeOutcomeError}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	probe, err := probeOnceWithAccount(probeCtx, channel, modelName, account, func(format llm.APIFormat) (*httpclient.Request, error) {
-		return ocProbeRawRequest(format, modelName)
+		return ocProbeRawRequest(format, channel, modelName, displayName, ocProbeChannelMaxOutput(channel, modelName))
 	}, false)
 	switch {
 	case err != nil && probe == nil:

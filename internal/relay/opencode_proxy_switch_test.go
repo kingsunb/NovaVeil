@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,6 +25,16 @@ type opencodeProxyProbe struct {
 
 	mu       sync.Mutex
 	accounts []string
+	requests []opencodeProxiedRequest
+}
+
+// opencodeProxiedRequest 是经代理隧道观察到的内层请求快照。
+type opencodeProxiedRequest struct {
+	Account string
+	Method  string
+	Path    string
+	Header  http.Header
+	Body    []byte
 }
 
 func newOpencodeProxyProbe(t *testing.T, respond func(account string) (int, []byte)) *opencodeProxyProbe {
@@ -54,7 +65,17 @@ func newOpencodeProxyProbe(t *testing.T, respond func(account string) (int, []by
 			return
 		}
 		if request, err := http.ReadRequest(rw.Reader); err == nil {
+			body, _ := io.ReadAll(request.Body)
 			_ = request.Body.Close()
+			probe.mu.Lock()
+			probe.requests = append(probe.requests, opencodeProxiedRequest{
+				Account: account,
+				Method:  request.Method,
+				Path:    request.URL.Path,
+				Header:  request.Header.Clone(),
+				Body:    body,
+			})
+			probe.mu.Unlock()
 		}
 		_, _ = fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
 			status, http.StatusText(status), len(body))
@@ -82,6 +103,12 @@ func (p *opencodeProxyProbe) seenAccounts() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.accounts...)
+}
+
+func (p *opencodeProxyProbe) proxiedRequests() []opencodeProxiedRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]opencodeProxiedRequest(nil), p.requests...)
 }
 
 func createOpencodeProxyTestChannel(t *testing.T, proxyTemplate string, keys ...model.ChannelKey) model.Channel {

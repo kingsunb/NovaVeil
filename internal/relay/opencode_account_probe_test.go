@@ -2,15 +2,21 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kingsunb/NovaVeil/internal/db"
+	"github.com/kingsunb/NovaVeil/internal/helper"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
+	"github.com/looplj/axonhub/llm"
+	"github.com/tidwall/gjson"
 )
 
 func probeChatOKBody() []byte {
@@ -195,6 +201,253 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 		if row.SuccessCount != 3 || row.SuccessDays != 2 {
 			t.Fatalf("成功统计异常: count=%d days=%d", row.SuccessCount, row.SuccessDays)
 		}
+	}
+}
+
+// ocProbeExpectedV1Tools / ocProbeExpectedV2Tools 是官方客户端实抓的工具名与顺序。
+var (
+	ocProbeExpectedV1Tools = []string{"bash", "edit", "glob", "grep", "read", "skill", "task", "todowrite", "webfetch", "websearch", "write"}
+	ocProbeExpectedV2Tools = []string{"edit", "glob", "grep", "question", "read", "shell", "skill", "subagent", "webfetch", "websearch", "write", "execute"}
+)
+
+// topLevelJSONKeys 按出现顺序返回 JSON 对象的顶层键。
+func topLevelJSONKeys(t *testing.T, body []byte) []string {
+	t.Helper()
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	if _, err := decoder.Token(); err != nil {
+		t.Fatalf("解析 JSON 起始符失败: %v", err)
+	}
+	var keys []string
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			t.Fatalf("解析 JSON 键失败: %v", err)
+		}
+		keys = append(keys, token.(string))
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			t.Fatalf("解析 JSON 值失败: %v", err)
+		}
+	}
+	return keys
+}
+
+// assertClientFormBody 断言体检正文与官方客户端实抓形态一致: 键序、系统提示动态段、
+// 全量工具、流式参数与测试消息。
+func assertClientFormBody(t *testing.T, body []byte, lane string, modelName, displayName string) {
+	t.Helper()
+	wantKeys := []string{"model", "messages", "tools", "stream", "stream_options", "max_completion_tokens"}
+	if lane == "v1" {
+		wantKeys = []string{"model", "max_tokens", "messages", "tools", "tool_choice", "stream", "stream_options"}
+	}
+	if keys := topLevelJSONKeys(t, body); strings.Join(keys, ",") != strings.Join(wantKeys, ",") {
+		t.Fatalf("%s 档键序异常: %v", lane, keys)
+	}
+	if got := gjson.GetBytes(body, "model").String(); got != modelName {
+		t.Fatalf("model 异常: %q", got)
+	}
+	system := gjson.GetBytes(body, "messages.0.content").String()
+	if lane == "v1" {
+		if !strings.Contains(system, "You are opencode") ||
+			!strings.Contains(system, "the model named "+modelName+".") ||
+			!strings.Contains(system, "opencode/"+modelName) {
+			t.Fatalf("v1 系统提示缺少模型动态段")
+		}
+	} else {
+		if !strings.Contains(system, "You are an AI agent running in OpenCode") ||
+			!strings.Contains(system, "- Name: "+displayName) ||
+			!strings.Contains(system, "- Model ID: "+modelName) {
+			t.Fatalf("v2 系统提示缺少模型动态段")
+		}
+	}
+	if !regexp.MustCompile(`Today's date: (Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2} \d{4}`).MatchString(system) {
+		t.Fatalf("系统提示缺少当日日期: %q", system[len(system)-300:])
+	}
+	if strings.Contains(system, "{{") {
+		t.Fatalf("系统提示存在未替换标记")
+	}
+	if role := gjson.GetBytes(body, "messages.0.role").String(); role != "system" {
+		t.Fatalf("messages.0.role 异常: %q", role)
+	}
+	if content := gjson.GetBytes(body, "messages.1.content").String(); content != defaultTestMessage {
+		t.Fatalf("测试消息异常: %q", content)
+	}
+	if role := gjson.GetBytes(body, "messages.1.role").String(); role != "user" {
+		t.Fatalf("messages.1.role 异常: %q", role)
+	}
+	wantTools := ocProbeExpectedV2Tools
+	if lane == "v1" {
+		wantTools = ocProbeExpectedV1Tools
+	}
+	var gotTools []string
+	for _, tool := range gjson.GetBytes(body, "tools").Array() {
+		gotTools = append(gotTools, tool.Get("function.name").String())
+	}
+	if strings.Join(gotTools, ",") != strings.Join(wantTools, ",") {
+		t.Fatalf("%s 档工具集异常: %v", lane, gotTools)
+	}
+	if !gjson.GetBytes(body, "stream").Bool() || !gjson.GetBytes(body, "stream_options.include_usage").Bool() {
+		t.Fatalf("流式参数异常")
+	}
+	limitField := "max_completion_tokens"
+	if lane == "v1" {
+		limitField = "max_tokens"
+		if got := gjson.GetBytes(body, "tool_choice").String(); got != "auto" {
+			t.Fatalf("v1 档 tool_choice 异常: %q", got)
+		}
+	}
+	if got := gjson.GetBytes(body, limitField).Int(); got != 32000 {
+		t.Fatalf("%s 异常: %d", limitField, got)
+	}
+	phrase := "on Linux using bash"
+	if runtime.GOOS == "windows" {
+		phrase = "on Windows using bash"
+	}
+	if !strings.Contains(string(body), phrase) && lane == "v2" {
+		t.Fatalf("shell 工具描述平台口径异常")
+	}
+}
+
+// TestOcProbeRawRequestMatchesRealClient 验证免费档体检请求与官方客户端实抓形态一致。
+func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
+	cases := []struct {
+		lane    string
+		baseURL string
+	}{
+		{"v1", "http://opencode.test/zen"},
+		{"v2", "http://opencode.test/inference"},
+	}
+	for _, c := range cases {
+		channel := model.Channel{
+			Type:           model.ChannelProviderOpenAI,
+			BaseURL:        c.baseURL,
+			IsFree:         true,
+			OpencodeCompat: true,
+			Models:         []model.ChannelModel{{Name: "probe-free-model"}},
+		}
+		raw, err := ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, channel, "probe-free-model", "Probe Free Model", 0)
+		if err != nil {
+			t.Fatalf("%s 档构造失败: %v", c.lane, err)
+		}
+		if raw.Path != "/v1/chat/completions" {
+			t.Fatalf("%s 档路径异常: %q", c.lane, raw.Path)
+		}
+		if c.lane == "v2" {
+			if got := raw.Headers.Get(opencodeProjectHeader); !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(got) {
+				t.Fatalf("v2 档项目号形态异常: %q", got)
+			}
+		} else if raw.Headers.Get(opencodeProjectHeader) != "" {
+			t.Fatal("v1 档不应携带项目号头")
+		}
+		assertClientFormBody(t, raw.Body, c.lane, "probe-free-model", "Probe Free Model")
+	}
+
+	// 非免费模型回退极小请求, 模型级输出上限在免费档透传。
+	channel := model.Channel{Type: model.ChannelProviderOpenAI, BaseURL: "http://opencode.test/inference", Models: []model.ChannelModel{{Name: "paid-model", MaxOutput: 12345}}}
+	raw, err := ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, channel, "paid-model", "", 12345)
+	if err != nil {
+		t.Fatalf("付费模型构造失败: %v", err)
+	}
+	if got := gjson.GetBytes(raw.Body, "messages.#").Int(); got != 1 {
+		t.Fatalf("非免费模型应回退极小请求: %d 条消息", got)
+	}
+	freeChannel := model.Channel{Type: model.ChannelProviderOpenAI, BaseURL: "http://opencode.test/inference", IsFree: true, Models: []model.ChannelModel{{Name: "probe-free-model", MaxOutput: 9999}}}
+	raw, err = ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, freeChannel, "probe-free-model", "", 9999)
+	if err != nil {
+		t.Fatalf("免费模型构造失败: %v", err)
+	}
+	if got := gjson.GetBytes(raw.Body, "max_completion_tokens").Int(); got != 9999 {
+		t.Fatalf("模型级输出上限应透传: %d", got)
+	}
+}
+
+// TestOcProbeClientBodyShapingIdempotent 验证免费档整形对实抓模板幂等:
+// 出站正文不会被整形层二次改写, 与上游逐字节门禁的口径锁定。
+func TestOcProbeClientBodyShapingIdempotent(t *testing.T) {
+	v1Body, err := ocProbeClientBody("v1", "probe-free-model", "", 0)
+	if err != nil {
+		t.Fatalf("v1 模板构造失败: %v", err)
+	}
+	if shaped, _, _ := shapeOpencodeFreeBody(v1Body, true, model.UpstreamProtocolChat); string(shaped) != string(v1Body) {
+		t.Fatal("v1 档整形不应改写体检模板")
+	}
+	v2Body, err := ocProbeClientBody("v2", "probe-free-model", "", 0)
+	if err != nil {
+		t.Fatalf("v2 模板构造失败: %v", err)
+	}
+	if shaped, _, _ := shapeOpencodeFreeBody(v2Body, false, model.UpstreamProtocolChat); string(shaped) != string(v2Body) {
+		t.Fatal("v2 档整形不应改写体检模板")
+	}
+}
+
+// TestProbeOpencodeAccountsSendsClientFormAndUniqueSessions 端到端验证 v2 免费档体检:
+// 出站正文为官方客户端完整形态, 且每个账号的会话号互不相同。
+func TestProbeOpencodeAccountsSendsClientFormAndUniqueSessions(t *testing.T) {
+	setupFailoverTest(t)
+	probe := newOpencodeProxyProbe(t, func(string) (int, []byte) {
+		return http.StatusOK, probeChatOKBody()
+	})
+	channel := createOpencodeProxyTestChannel(t, probe.template)
+	if err := db.GetDB().Model(&model.Channel{}).Where("id = ?", channel.ID).
+		Updates(map[string]any{"base_url": "http://opencode.test/inference", "is_free": true}).Error; err != nil {
+		t.Fatalf("切换 v2 免费档失败: %v", err)
+	}
+	if err := op.InitCache(); err != nil {
+		t.Fatalf("刷新渠道缓存失败: %v", err)
+	}
+	channel, err := op.ChannelGet(channel.ID)
+	if err != nil {
+		t.Fatalf("读取渠道失败: %v", err)
+	}
+	modelName := channel.Models[0].Name
+	if !isOpencodeFreeModel(channel, modelName) {
+		t.Fatalf("测试渠道应为免费档: %+v", channel)
+	}
+	originalCatalog := opencodeProbeCatalog
+	opencodeProbeCatalog = func(context.Context, model.Channel) (map[string]helper.OpencodeModelInfo, error) {
+		return map[string]helper.OpencodeModelInfo{modelName: {Name: "Probe Free Model"}}, nil
+	}
+	t.Cleanup(func() { opencodeProbeCatalog = originalCatalog })
+
+	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID,
+		[]string{"user_a", "user_b", "user_c"}, 0, 3, 0, modelName); err != nil {
+		t.Fatalf("批量体检失败: %v", err)
+	}
+	requests := probe.proxiedRequests()
+	if len(requests) != 3 {
+		t.Fatalf("应有 3 条出站请求: %d", len(requests))
+	}
+	sessions := make(map[string]bool, 3)
+	for _, request := range requests {
+		if request.Method != http.MethodPost || request.Path != "/inference/openai/v1/chat/completions" {
+			t.Fatalf("出站请求行异常: %s %s", request.Method, request.Path)
+		}
+		session := request.Header.Get("x-opencode-session")
+		if !regexp.MustCompile(`^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`).MatchString(session) {
+			t.Fatalf("会话号形态异常: %q", session)
+		}
+		if sessions[session] {
+			t.Fatalf("会话号重复: %q", session)
+		}
+		sessions[session] = true
+		if request.Header.Get("x-opencode-session-id") != session ||
+			request.Header.Get("x-session-affinity") != session ||
+			request.Header.Get("X-Session-Id") != session {
+			t.Fatalf("会话镜像头异常: %q", session)
+		}
+		if !strings.HasPrefix(request.Header.Get("User-Agent"), "opencode/") {
+			t.Fatalf("User-Agent 异常: %q", request.Header.Get("User-Agent"))
+		}
+		if request.Header.Get("x-opencode-client") != "cli" {
+			t.Fatalf("x-opencode-client 异常: %q", request.Header.Get("x-opencode-client"))
+		}
+		if request.Header.Get("x-opencode-project") != ocProbeProjectID {
+			t.Fatalf("项目号异常: %q", request.Header.Get("x-opencode-project"))
+		}
+		if request.Header.Get("traceparent") == "" || request.Header.Get("b3") == "" {
+			t.Fatal("v2 免费档应携带追踪头")
+		}
+		assertClientFormBody(t, request.Body, "v2", modelName, "Probe Free Model")
 	}
 }
 

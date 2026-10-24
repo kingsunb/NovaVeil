@@ -21,13 +21,14 @@ const opencodeCatalogMaxBytes = 16 << 20
 
 // OpencodeModelInfo 是目录里单个模型的协议与能力元数据。
 type OpencodeModelInfo struct {
-	Protocol        string   // chat / responses / anthropic。
-	ContextWindow   int      // 上下文窗口大小(token); 0 表示目录未提供。
-	MaxOutput       int      // 最大输出 token; 0 表示目录未提供。
-	Reasoning       bool     // 是否支持推理(thinking/reasoning)。
-	ToolCall        bool     // 是否支持工具调用(function calling)。
-	InputModalities []string // 输入模态: text/image/audio/video/pdf 等。
-	MaxReasoningEffort string // 目录声明的最大思考等级; 空表示未声明可选等级。
+	Protocol           string   // chat / responses / anthropic。
+	Name               string   // 目录展示名; 客户端形态消息用, 空表示目录未提供。
+	ContextWindow      int      // 上下文窗口大小(token); 0 表示目录未提供。
+	MaxOutput          int      // 最大输出 token; 0 表示目录未提供。
+	Reasoning          bool     // 是否支持推理(thinking/reasoning)。
+	ToolCall           bool     // 是否支持工具调用(function calling)。
+	InputModalities    []string // 输入模态: text/image/audio/video/pdf 等。
+	MaxReasoningEffort string   // 目录声明的最大思考等级; 空表示未声明可选等级。
 }
 
 // FetchOpencodeCatalog 读取公开目录，返回该渠道档位上已识别的模型协议与能力元数据。
@@ -79,6 +80,7 @@ type opencodeCatalogProvider struct {
 
 type opencodeCatalogModel struct {
 	ID               string                           `json:"id"`
+	Name             string                           `json:"name"`
 	Provider         *opencodeCatalogModelProvider    `json:"provider"`
 	Limit            *opencodeCatalogModelLimit       `json:"limit"`
 	Reasoning        bool                             `json:"reasoning"`
@@ -179,7 +181,7 @@ func ParseOpencodeCatalog(data []byte, tier string) (map[string]OpencodeModelInf
 			if _, exists := out[modelName]; exists {
 				continue
 			}
-			info := OpencodeModelInfo{Protocol: protocol}
+			info := OpencodeModelInfo{Protocol: protocol, Name: strings.TrimSpace(entry.Name)}
 			info.MaxReasoningEffort = maxEffortFromOptions(entry.ReasoningOptions)
 			if entry.Limit != nil {
 				info.ContextWindow = entry.Limit.Context

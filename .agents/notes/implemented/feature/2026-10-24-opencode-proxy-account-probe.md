@@ -14,7 +14,17 @@ Status: implemented
 
 ### 批量体检（`internal/relay/opencode_account_probe.go`）
 
-`ProbeOpencodeAccounts(ctx, channelID, accounts, count, concurrency, timeoutMS)`：渠道须为含 `{account}` 代理的免费档（`proxyNeedsOpencodeAccount` 同口径）；accounts 空时生成随机账号（复用 `opencodeXXXX` 生成器），非空时去重并校验字符集（`^[A-Za-z0-9_-]{1,64}$`，账号要拼进代理 userinfo）；worker 池并发（默认 10，上限 20）各打一次 16 token 极小真实请求（输出预算已被探测路径收敛为 1）。结论三分类：healthy（2xx）/ rejected（403/429）/ error（其余，含代理与网络故障，不入池不冷却）。单次上限 2000 个、单账号超时上限 120s。
+`ProbeOpencodeAccounts(ctx, channelID, accounts, count, concurrency, timeoutMS)`：渠道须为含 `{account}` 代理的免费档（`proxyNeedsOpencodeAccount` 同口径）；accounts 空时生成随机账号（复用 `opencodeXXXX` 生成器），非空时去重并校验字符集（`^[A-Za-z0-9_-]{1,64}$`，账号要拼进代理 userinfo）；worker 池并发（默认 10，上限 20）各打一次官方客户端形态探测请求（形态见下节）。结论三分类：healthy（2xx）/ rejected（403/429）/ error（其余，含代理与网络故障，不入池不冷却）。单次上限 2000 个、单账号超时上限 120s。
+
+### 体检请求形态与独立会话（2026-10-24 同日迭代）
+
+体检请求从「极小构造消息 + 免费档整形补齐」升级为**官方客户端完整形态原样出站**：用真实客户端各发一条默认测试消息实抓模板——v1 档 opencode 1.19.4（`/zen`）与 v2 档 2.1.4（`/inference`）——embed 为 `internal/relay/opencode_probe_v1.json` / `opencode_probe_v2.json`（系统提示 + 全量工具定义，工具字节与抓包一致）。装配时仅四处动态：模型 ID、展示名（v2 系统提示的 Name 行）、当日日期（格式对齐客户端，日不补零）、用户消息（默认测试消息）；输出上限透传渠道模型配置，缺省 32000。免费档整形层对模板幂等（测试锁定逐字节不变），整形逻辑本身不动。
+
+- **会话独立性**：每次探测铸全新 `ses_` 会话号（含 v1 档 `x-opencode-request` 的 msg_ id，按会话+turn 派生）——账号之间、同账号复测之间互不相同，避免上游按会话聚合识别探测流量。
+- **v2 档项目号**：发稳定 40-hex 项目号（`ocProbeProjectID`，sha256 截断），对齐官方客户端「恒发项目目录哈希、从不发 global」的行为；v1 档保持 global（客户端实抓即 global）。
+- **展示名**：整批体检取一次官方目录（`helper.FetchOpencodeCatalog` 复用代理别名出口，15s 超时），失败回退模型 ID，不影响体检结论。
+- **回退口径**：非免费模型或非 chat 协议回退面板极小请求，避免在付费档燃烧 9k token 的系统提示。
+- **平台口径**：v2 模板 shell 工具描述按网关 GOOS 做 Linux/Windows 短语替换，与整形层 `opencodeToolDescription` 同口径。
 
 ### API 与页面
 
@@ -34,14 +44,14 @@ Status: implemented
 
 ## Consequences
 
-- **收益**：冷启动不再逐个试错；N 个账号一次并发体检后健康号即时可被转发优先复用；被拒号立即进入 24h 冷却，转发路径不会撞它们。
-- **代价与已知上限**：每账号消耗一次极小真实免费请求（16 token 输入 + 1 输出）；同步接口在 200 账号 × 慢上游时页面需等待（上限约 200×120s/并发，正常 100×~1.5s/10 并发 ≈ 15s）；探测与上下文探测共用请求日志面板，大批量体检会产生同量级日志条目。
-- **重访信号**：需要定时自动补池；或免费档上游对探测类小请求出现区别对待。
+- **收益**：冷启动不再逐个试错；N 个账号一次并发体检后健康号即时可被转发优先复用；被拒号立即进入 24h 冷却，转发路径不会撞它们；体检流量与真实客户端流量同形，上游无法按请求形态区别对待。
+- **代价与已知上限**：每账号消耗一次真实免费请求（客户端形态正文约 22k 字节、输入约 9k token，上游实报用量进分桶，估算值不进）；同步接口在 200 账号 × 慢上游时页面需等待（上限约 200×120s/并发，正常 100×~1.5s/10 并发 ≈ 15s）；探测与上下文探测共用请求日志面板，大批量体检会产生同量级日志条目。
+- **重访信号**：需要定时自动补池；或官方客户端改版导致模板漂移（重抓方式见 Verification 的抓包上游说明）。
 
 ## Verification
 
 ```sh
-go build ./... && go vet ./... && go test ./internal/relay/ -run TestProbeOpencodeAccounts
+go build ./... && go vet ./... && go test ./internal/relay/ -run 'TestOcProbe|TestProbeOpencodeAccounts'
 cd web-next && pnpm typecheck && pnpm lint && pnpm test -- ProxyAccounts
 ```
 
@@ -49,4 +59,8 @@ cd web-next && pnpm typecheck && pnpm lint && pnpm test -- ProxyAccounts
 - `TestProbeOpencodeAccountsGenerateAndValidate`：生成模式（去重、`opencode` 前缀格式）、非法字符拒绝、超上限拒绝、非 `{account}` 渠道拒绝。
 - `TestOpencodeAccountLedgerStates`：三态派生（健康/冷却/未测试/被拒无在效成功）、筛选与删除。
 - `TestOpencodeAutoProbeDueAccounts`：到期选择（未探测立即到期、周期内跳过、上限截断）。
+- `TestOcProbeRawRequestMatchesRealClient`：v1/v2 两档体检正文的键序、系统提示动态段（模型/展示名/当日日期/无残留标记）、全量工具名与顺序、流式参数、输出上限透传与付费回退。
+- `TestOcProbeClientBodyShapingIdempotent`：免费档整形对模板幂等（逐字节不变）。
+- `TestProbeOpencodeAccountsSendsClientFormAndUniqueSessions`：端到端走完整出站链路（代理隧道内抓取），断言请求行/会话四镜像头/UA/项目号/追踪头与正文客户端形态，且三个账号会话号互不相同。
+- 逐字节取证（2026-10-24，本地抓包上游 + 真实客户端 1.19.4/2.1.4）：体检出站正文归一化模型名后与实抓正文 `cmp` 完全一致（v1 32772B / v2 22333B）。
 - 前端用例：渠道过滤、默认参数与结果表、生成上限、一键测试（生成数量非法不阻塞）、四态筛选/勾选/自动体检、台账删除、批量删除已选、分页。
