@@ -389,7 +389,6 @@ function ChannelSection({ channel }: { channel: Channel }) {
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnSuccessCount}</th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnSuccessDays}</th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnLastSuccess}</th>
-                    <th className="px-2 py-2">{zhCN.proxyAccounts.columnSource}</th>
                     <th className="px-2 py-2" />
                   </tr>
                 </thead>
