@@ -496,7 +496,8 @@ type OpencodeAccountLedger struct {
 // filter: all(默认)/usable/untested/unusable/error/historic。派生口径:
 // 可用 = 未冷却且(最近探测健康 或 7 天内有转发成功); 未测试 = 从未探测且从未成功;
 // 不可用 = 冷却中或最近探测被上游拒绝; 网络错误 = 最近探测遇基础设施故障且无在效成功;
-// 历史可用 = 曾经成功过(含当前冷却/过期的好号)。
+// 历史可用 = 累计成功过(success_count > 0, 不依赖 last_success_at, 免受存量脏数据干扰)。
+// 条目默认按「真实成功 + 体检成功」降序, 同数按账号名升序, 好号置顶。
 func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLedger, error) {
 	channel, err := op.ChannelGet(channelID)
 	if err != nil {
@@ -513,7 +514,7 @@ func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLe
 	ledger := &OpencodeAccountLedger{ChannelID: channelID}
 	for _, row := range rows {
 		state := ocAccountLedgerState(row, now)
-		hasSuccess := !row.LastSuccessAt.IsZero()
+		hasSuccess := row.SuccessCount > 0
 		switch state {
 		case "usable":
 			ledger.Usable++
@@ -550,6 +551,14 @@ func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLe
 			ProbeSuccessCount: row.ProbeSuccessCount,
 		})
 	}
+	sort.SliceStable(ledger.Items, func(i, j int) bool {
+		wi := ledger.Items[i].RealSuccessCount + ledger.Items[i].ProbeSuccessCount
+		wj := ledger.Items[j].RealSuccessCount + ledger.Items[j].ProbeSuccessCount
+		if wi != wj {
+			return wi > wj
+		}
+		return ledger.Items[i].Account < ledger.Items[j].Account
+	})
 	ledger.Total = len(rows)
 	return ledger, nil
 }

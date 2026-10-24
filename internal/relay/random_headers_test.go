@@ -757,11 +757,17 @@ func TestInjectOpencodeTraceHeadersV2FreeLane(t *testing.T) {
 	mustInjectOpencodeCorrelationHeaders(t, channel, req)
 
 	traceID, spanID := assertOpencodeTraceHeaders(t, req)
+	if traceID != opencodeTraceID {
+		t.Fatalf("trace 段应取进程稳定值: %q != %q", traceID, opencodeTraceID)
+	}
 	req2 := newRandomHeaderRequest()
 	mustInjectOpencodeCorrelationHeaders(t, channel, req2)
 	traceID2, spanID2 := assertOpencodeTraceHeaders(t, req2)
-	if traceID == traceID2 || spanID == spanID2 {
-		t.Fatalf("逐请求应重生成追踪 ID: %s/%s 与 %s/%s", traceID, spanID, traceID2, spanID2)
+	if traceID != traceID2 {
+		t.Fatalf("trace 段应进程级稳定: %q / %q", traceID, traceID2)
+	}
+	if spanID == spanID2 {
+		t.Fatalf("span 段应逐请求随机: %s", spanID)
 	}
 	if req.Headers.Get(opencodeB3Header) == req2.Headers.Get(opencodeB3Header) {
 		t.Fatal("逐请求应重生成 b3")

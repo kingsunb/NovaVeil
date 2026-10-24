@@ -496,7 +496,7 @@ func TestProbeOpencodeAccountsRecordsProbeSuccessCounter(t *testing.T) {
 }
 
 // TestOpencodeLedgerHistoricFilterAndSplitCounters 验证「历史可用」筛选口径
-// (曾成功过, 含冷却中的好号)与台账条目的拆分计数字段。
+// (累计成功过且不受伪造最近成功时间干扰)、默认排序与成功清冷却。
 func TestOpencodeLedgerHistoricFilterAndSplitCounters(t *testing.T) {
 	setupFailoverTest(t)
 	probe := newOpencodeProxyProbe(t, func(string) (int, []byte) {
@@ -522,15 +522,41 @@ func TestOpencodeLedgerHistoricFilterAndSplitCounters(t *testing.T) {
 	if err := op.UpsertOpencodeGeneratedAccounts(channel.ID, []string{"never_success"}); err != nil {
 		t.Fatalf("落账失败: %v", err)
 	}
+	// aaa_fabricated: 旧版冷却落库伪造的最近成功时间(计数为 0), 不得计入历史可用。
+	if err := db.GetDB().Create(&model.OpencodeProxyAccount{
+		ChannelID:     channel.ID,
+		Account:       "aaa_fabricated",
+		LastSuccessAt: now.Add(-time.Hour),
+		CooldownUntil: now.Add(6 * 24 * time.Hour),
+		Source:        model.OpencodeAccountSourceTraffic,
+	}).Error; err != nil {
+		t.Fatalf("写伪造成功行失败: %v", err)
+	}
+	// hot_account: 成功数最高的好号, 默认排序应置顶。
+	if err := db.GetDB().Create(&model.OpencodeProxyAccount{
+		ChannelID:         channel.ID,
+		Account:           "hot_account",
+		LastSuccessAt:     now,
+		Source:            model.OpencodeAccountSourceTraffic,
+		SuccessCount:      7,
+		RealSuccessCount:  5,
+		ProbeSuccessCount: 2,
+		LastSuccessDay:    now.Format("2006-01-02"),
+	}).Error; err != nil {
+		t.Fatalf("写高频好号失败: %v", err)
+	}
 
 	ledger, err := ListOpencodeAccountStates(channel.ID, "historic")
 	if err != nil {
 		t.Fatalf("读台账失败: %v", err)
 	}
-	if ledger.Historic != 1 || len(ledger.Items) != 1 || ledger.Items[0].Account != "good_then_cool" {
-		t.Fatalf("历史可用应只有曾成功账号: %+v", ledger)
+	if ledger.Historic != 2 || len(ledger.Items) != 2 {
+		t.Fatalf("历史可用应为两个真实成功过账号: %+v", ledger)
 	}
-	item := ledger.Items[0]
+	if ledger.Items[0].Account != "hot_account" || ledger.Items[1].Account != "good_then_cool" {
+		t.Fatalf("历史可用列表应按成功数降序: %v", ledger.Items)
+	}
+	item := ledger.Items[1]
 	if item.State != "unusable" {
 		t.Fatalf("冷却中的历史可用账号当前态应为不可用: %+v", item)
 	}
@@ -542,8 +568,45 @@ func TestOpencodeLedgerHistoricFilterAndSplitCounters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读台账失败: %v", err)
 	}
-	if all.Historic != 1 || all.Total != 2 {
+	if all.Historic != 2 || all.Total != 4 {
 		t.Fatalf("汇总计数异常: historic=%d total=%d", all.Historic, all.Total)
+	}
+	// 默认排序: 真实+体检成功降序, 同数按账号名升序。
+	order := make([]string, 0, len(all.Items))
+	for _, row := range all.Items {
+		order = append(order, row.Account)
+	}
+	if strings.Join(order, ",") != "hot_account,good_then_cool,aaa_fabricated,never_success" {
+		t.Fatalf("默认排序异常: %v", order)
+	}
+
+	// 成功落库清除冷却: 冷却中的好号再次成功后, 库内冷却归零、状态回到可用。
+	if err := op.SaveOpencodeProxySuccess(channel.ID, "good_then_cool", now); err != nil {
+		t.Fatalf("写成功记录失败: %v", err)
+	}
+	rows, err := op.LoadOpencodeProxyAccounts(channel.ID)
+	if err != nil {
+		t.Fatalf("读台账失败: %v", err)
+	}
+	for _, row := range rows {
+		if row.Account != "good_then_cool" {
+			continue
+		}
+		if !row.CooldownUntil.IsZero() {
+			t.Fatalf("成功后应清除库内冷却: %+v", row)
+		}
+		if row.RealSuccessCount != 2 || row.SuccessCount != 3 {
+			t.Fatalf("成功计数异常: %+v", row)
+		}
+	}
+	after, err := ListOpencodeAccountStates(channel.ID, "all")
+	if err != nil {
+		t.Fatalf("读台账失败: %v", err)
+	}
+	for _, row := range after.Items {
+		if row.Account == "good_then_cool" && row.State != "usable" {
+			t.Fatalf("清冷却后应为可用: %+v", row)
+		}
 	}
 }
 

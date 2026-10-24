@@ -69,6 +69,9 @@ func saveOpencodeAccountSuccess(channelID int, account string, at time.Time, cou
 			"success_days":     gorm.Expr("CASE WHEN last_success_day = ? THEN success_days ELSE success_days + 1 END", day),
 			"last_success_day": day,
 			counterColumn:      gorm.Expr(counterColumn + " + 1"),
+			// 成功即清除冷却, 与池内回填语义一致; 不清会让台账页在冷却期内
+			// 持续显示「健康但不可用」, 且重启后池从库加载又回到冷却。
+			"cooldown_until": time.Time{},
 		}),
 	}).Create(&row)
 	if result.Error != nil {

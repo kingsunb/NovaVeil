@@ -153,7 +153,7 @@ const ledger = {
 /** 按台账接口口径过滤, 供 fetch mock 复用。 */
 function ledgerFor(url: string) {
   const filter = /filter=(\w+)/.exec(url)?.[1] ?? "all";
-  const hasSuccess = (item: (typeof ledger.items)[number]) => !item.last_success_at.startsWith("0001-");
+  const hasSuccess = (item: (typeof ledger.items)[number]) => item.success_count > 0;
   const items = ledger.items.filter((item) => {
     if (filter === "all") return true;
     if (filter === "historic") return hasSuccess(item);

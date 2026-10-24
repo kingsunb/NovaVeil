@@ -304,20 +304,29 @@ func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient
 	return nil
 }
 
-// injectOpencodeTraceHeaders 写入同源追踪头。
-func injectOpencodeTraceHeaders(request *httpclient.Request) error {
+// opencodeTraceID 是本进程对外的稳定追踪 ID。官方 v2 客户端 b3/traceparent 的
+// trace 段在同一安装内跨对话恒定(实抓 8 小时不变), 只有 span 每请求随机; 网关以
+// 进程为安装单位对齐该行为, 避免每请求换 trace-id 成为可识别的非官方特征。
+var opencodeTraceID = func() string {
 	var trace [16]byte
+	if _, err := rand.Read(trace[:]); err != nil {
+		return hex.EncodeToString([]byte("novaveil-trace!!"))
+	}
+	return hex.EncodeToString(trace[:])
+}()
+
+// injectOpencodeTraceHeaders 写入同源追踪头: trace 段取进程稳定值, span 与父段每请求随机。
+func injectOpencodeTraceHeaders(request *httpclient.Request) error {
 	var span [8]byte
 	var parent [8]byte
-	for _, value := range [][]byte{trace[:], span[:], parent[:]} {
+	for _, value := range [][]byte{span[:], parent[:]} {
 		if _, err := rand.Read(value); err != nil {
 			return fmt.Errorf("generate opencode trace id: %w", err)
 		}
 	}
-	traceID := hex.EncodeToString(trace[:])
 	spanID := hex.EncodeToString(span[:])
-	request.Headers.Set(opencodeTraceparentHeader, "00-"+traceID+"-"+spanID+"-01")
-	request.Headers.Set(opencodeB3Header, traceID+"-"+spanID+"-1-"+hex.EncodeToString(parent[:]))
+	request.Headers.Set(opencodeTraceparentHeader, "00-"+opencodeTraceID+"-"+spanID+"-01")
+	request.Headers.Set(opencodeB3Header, opencodeTraceID+"-"+spanID+"-1-"+hex.EncodeToString(parent[:]))
 	return nil
 }
 
