@@ -148,7 +148,7 @@ func UpsertOpencodeGeneratedAccounts(channelID int, accounts []string) error {
 	result := conn.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "channel_id"}, {Name: "account"}},
 		DoNothing: true,
-	}).Create(&rows)
+	}).CreateInBatches(&rows, batchSize)
 	if result.Error != nil {
 		return fmt.Errorf("落账体检账号失败: %w", result.Error)
 	}

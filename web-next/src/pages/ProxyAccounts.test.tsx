@@ -241,7 +241,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     expect(probeBodies[0]).toEqual({ channel_id: 7, count: 100, concurrency: 10, model: "model-a" });
   });
 
-  it("生成数量上限 2000", async () => {
+  it("生成数量上限 30000", async () => {
     const probeBodies: Array<Record<string, unknown>> = [];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -264,11 +264,11 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     await screen.findAllByText("OpenCode Free");
     const user = userEvent.setup();
     await user.clear(screen.getByDisplayValue("100"));
-    await user.type(screen.getByDisplayValue(""), "2000");
+    await user.type(screen.getByDisplayValue(""), "30000");
     await user.click(screen.getByRole("button", { name: "开始体检" }));
 
     await waitFor(() => expect(probeBodies).toHaveLength(1));
-    expect(probeBodies[0]).toEqual({ channel_id: 7, count: 2000, concurrency: 10, model: "model-a" });
+    expect(probeBodies[0]).toEqual({ channel_id: 7, count: 30000, concurrency: 10, model: "model-a" });
   });
 
   it("一键测试台账全部账号并展示进度结果", async () => {

@@ -21,7 +21,7 @@ const (
 	// 403/429 被拒账号统一冷却 24 小时。
 	ocProxyRejectedCooldown = 24 * time.Hour
 	// ocProxyMaxAccounts 是每渠道账号数上限, 库内按此淘汰。
-	ocProxyMaxAccounts = 2000
+	ocProxyMaxAccounts = 30000
 	// 每成员每请求最多换号三次。
 	ocProxyMaxRetries = 3
 	// ocPruneInterval 限制淘汰查询频率, 避免每次落库都全表排序。

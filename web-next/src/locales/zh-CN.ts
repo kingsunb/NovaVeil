@@ -68,7 +68,7 @@ export const zhCN = {
     bulkRunning: (done: number, total: number) => `一键测试中 ${done}/${total}`,
     runDone: (healthy: number, rejected: number, failed: number) =>
       `体检完成：健康 ${healthy}，被拒 ${rejected}，失败 ${failed}`,
-    countInvalid: "生成数量须为 1-2000 的整数",
+    countInvalid: "生成数量须为 1-30000 的整数",
     concurrencyInvalid: "并发数须为 1-20 的整数",
     outcomeHealthy: "健康",
     outcomeRejected: "被拒",

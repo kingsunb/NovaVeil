@@ -14,7 +14,7 @@ Status: implemented
 
 ### 批量体检（`internal/relay/opencode_account_probe.go`）
 
-`ProbeOpencodeAccounts(ctx, channelID, accounts, count, concurrency, timeoutMS)`：渠道须为含 `{account}` 代理的免费档（`proxyNeedsOpencodeAccount` 同口径）；accounts 空时生成随机账号（复用 `opencodeXXXX` 生成器），非空时去重并校验字符集（`^[A-Za-z0-9_-]{1,64}$`，账号要拼进代理 userinfo）；worker 池并发（默认 10，上限 20）各打一次官方客户端形态探测请求（形态见下节）。结论三分类：healthy（2xx）/ rejected（403/429）/ error（其余，含代理与网络故障，不入池不冷却）。单次上限 2000 个、单账号超时上限 120s。
+`ProbeOpencodeAccounts(ctx, channelID, accounts, count, concurrency, timeoutMS)`：渠道须为含 `{account}` 代理的免费档（`proxyNeedsOpencodeAccount` 同口径）；accounts 空时生成随机账号（复用 `opencodeXXXX` 生成器），非空时去重并校验字符集（`^[A-Za-z0-9_-]{1,64}$`，账号要拼进代理 userinfo）；worker 池并发（默认 10，上限 20）各打一次官方客户端形态探测请求（形态见下节）。结论三分类：healthy（2xx）/ rejected（403/429）/ error（其余，含代理与网络故障，不入池不冷却）。单次上限 30000 个、单账号超时上限 120s。
 
 ### 体检请求形态与独立会话（2026-10-24 同日迭代）
 
@@ -32,7 +32,7 @@ Status: implemented
 
 ### 账号台账与自动体检（同日追加）
 
-生成/粘贴的账号**探测前即落账**（`op.UpsertOpencodeGeneratedAccounts`，source=generated），探测结论同步回写（`SaveOpencodeProbeResult`），台账长期保存。`GET /channel/proxy-accounts?filter=` 返回派生视图：可用=未冷却且（最近探测健康或 7 天内有转发成功）；未测试=从未探测且从未成功；不可用=冷却中或最近探测被拒且无在效成功；网络错误=最近探测遇基础设施故障且无在效成功（不代表账号被封，单独筛选可复测）；**历史可用=累计成功过（success_count > 0，不依赖 last_success_at——存量库有旧版冷却落库伪造的非零最近成功时间，按时间判会把从未成功的账号误入历史可用）**。`DELETE /channel/proxy-accounts` 删除台账账号并同步清理进程内池。自动体检：设置键 `opencode_account_auto_probe`（默认开启，台账为空时空转；不进 DefaultSettings，随缓存初始化惰性补种），后台任务每 24 小时跑一轮，只测距上次体检超过周期的账号（最早优先，单渠道单轮上限与单次体检对齐，2000），健康探测会清除既有冷却（复用成功回填）。
+生成/粘贴的账号**探测前即落账**（`op.UpsertOpencodeGeneratedAccounts`，source=generated），探测结论同步回写（`SaveOpencodeProbeResult`），台账长期保存。`GET /channel/proxy-accounts?filter=` 返回派生视图：可用=未冷却且（最近探测健康或 7 天内有转发成功）；未测试=从未探测且从未成功；不可用=冷却中或最近探测被拒且无在效成功；网络错误=最近探测遇基础设施故障且无在效成功（不代表账号被封，单独筛选可复测）；**历史可用=累计成功过（success_count > 0，不依赖 last_success_at——存量库有旧版冷却落库伪造的非零最近成功时间，按时间判会把从未成功的账号误入历史可用）**。`DELETE /channel/proxy-accounts` 删除台账账号并同步清理进程内池。自动体检：设置键 `opencode_account_auto_probe`（默认开启，台账为空时空转；不进 DefaultSettings，随缓存初始化惰性补种），后台任务每 24 小时跑一轮，只测距上次体检超过周期的账号（最早优先，单渠道单轮上限与单次体检对齐，30000），健康探测会清除既有冷却（复用成功回填）。
 
 **成功/失败计数按来源拆分**：台账新增 `real_success_count` / `real_failure_count` / `probe_success_count` 三列——下游真实转发在 handler 回填处计成功与失败（客户端取消/管理端中止不算失败，403/429 同时计失败并冷却），体检探测（账号体检与上下文探测）只计体检成功；`success_count` 仍为两路合计，成功天数口径不变。**成功落库同时清除库内 cooldown_until**（与池内回填语义对齐；旧行为只清内存不清库，台账页会在冷却期持续显示「健康但不可用」且重启后回退）。台账列表默认按「真实成功 + 体检成功」降序、同数按账号名升序。转发选号「已验证优先、最近成功优先」由 `TestOpencodeRelayPrefersVerifiedAccountAndCountsRealTraffic` 端到端锁定。
 

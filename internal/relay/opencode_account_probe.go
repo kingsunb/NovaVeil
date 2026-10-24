@@ -29,7 +29,7 @@ import (
 // 「账号」是渠道代理模板 {account} 占位符对应的 resin 出口会话, 不是登录凭据。
 const (
 	// ocProbeMaxAccounts 单次体检的账号数上限, 与台账容量对齐。
-	ocProbeMaxAccounts = 2000
+	ocProbeMaxAccounts = 30_000
 	// ocProbeMaxConcurrency 单次体检的并发上限。
 	ocProbeMaxConcurrency = 20
 	// ocProbeDefaultConcurrency 未指定时的并发数。
