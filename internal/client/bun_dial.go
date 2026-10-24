@@ -83,6 +83,7 @@ func bunClientHello() *utls.ClientHelloSpec {
 			&utls.KeyShareExtension{KeyShares: []utls.KeyShare{{Group: utls.X25519MLKEM768}, {Group: utls.X25519}}},
 			&utls.PSKKeyExchangeModesExtension{Modes: []uint8{utls.PskModeDHE}},
 			&utls.SupportedVersionsExtension{Versions: []uint16{utls.VersionTLS13, utls.VersionTLS12}},
+			&utls.UtlsPreSharedKeyExtension{},
 		},
 	}
 }
@@ -103,7 +104,14 @@ func (t *BunTransport) dial(ctx context.Context, scheme, addr, serverName string
 	if err != nil || scheme != "https" {
 		return conn, err
 	}
-	tlsConn := utls.UClient(conn, &utls.Config{ServerName: serverName}, utls.HelloCustom)
+	// 进程级 session ticket 缓存: 官方 Bun 客户端在同进程内复用 ticket, 第二次
+	// 连接起 ClientHello 携带 PSK 扩展; 上游把无 PSK 的 chat 连接判为一次性
+	// 客户端拒以 429(2026-10-24 实测 /inference), 缓存后形态与官方一致。
+	tlsConn := utls.UClient(conn, &utls.Config{
+		ServerName:         serverName,
+		ClientSessionCache: bunSessionCache,
+		OmitEmptyPsk:       true,
+	}, utls.HelloCustom)
 	if err := tlsConn.ApplyPreset(bunClientHello()); err != nil {
 		conn.Close()
 		return nil, err
@@ -116,6 +124,9 @@ func (t *BunTransport) dial(ctx context.Context, scheme, addr, serverName string
 	}
 	return tlsConn, nil
 }
+
+// bunSessionCache 按域名复用 TLS 会话 ticket(进程级, LRU)。
+var bunSessionCache = utls.NewLRUClientSessionCache(64)
 
 // dialProxy opens a tunnel to addr through the transport's proxy: an HTTP
 // CONNECT for http and https proxies (the latter over standard TLS, which

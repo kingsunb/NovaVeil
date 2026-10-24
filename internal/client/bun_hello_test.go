@@ -13,7 +13,10 @@ import (
 // 防止 TLS 回归静默通过 go test。
 func bunHelloRaw(t *testing.T) []byte {
 	t.Helper()
-	uconn := utls.UClient(&net.TCPConn{}, &utls.Config{ServerName: "opencode.ai"}, utls.HelloCustom)
+	uconn := utls.UClient(&net.TCPConn{}, &utls.Config{
+		ServerName:   "opencode.ai",
+		OmitEmptyPsk: true,
+	}, utls.HelloCustom)
 	if err := uconn.ApplyPreset(bunClientHello()); err != nil {
 		t.Fatalf("apply preset: %v", err)
 	}
