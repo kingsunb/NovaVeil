@@ -293,7 +293,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
 
   it("台账四态筛选、勾选账号与开关自动体检", async () => {
     const probeBodies: Array<Record<string, unknown>> = [];
-    let ledgerEnabled = true;
+    const ledgerEnabled = true;
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/channel/proxy-accounts/probe")) {
@@ -375,6 +375,79 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     await user.click(screen.getByRole("button", { name: /再次点击确认/ }));
     await waitFor(() => expect(deleteBodies).toHaveLength(1));
     expect(deleteBodies[0]).toEqual({ channel_id: 7, accounts: ["opencode0a1b2c3d"] });
+  });
+
+  it("生成数量非法不阻塞一键测试", async () => {
+    const probeBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/channel/proxy-accounts/probe")) {
+        probeBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return jsonResponse(report);
+      }
+      if (url.includes("/channel/list")) return jsonResponse([eligibleChannel({})]);
+      if (url.includes("/channel/proxy-accounts?")) return ledgerFor(url);
+      if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
+      return jsonResponse(null);
+    }));
+
+    render(
+      <Wrapper>
+        <ProxyAccountsPage />
+      </Wrapper>,
+    );
+
+    await screen.findByText("opencode0a1b2c3d");
+    const user = userEvent.setup();
+    // 一键测试只测台账账号, 生成数量与它无关: 非法值不应阻塞。
+    const countInput = screen
+      .getAllByDisplayValue("100")
+      .find((element) => element instanceof HTMLInputElement);
+    if (!countInput) throw new Error("生成数量输入框应存在");
+    await user.clear(countInput);
+    await user.type(countInput, "0");
+    await user.click(screen.getByRole("button", { name: "一键测试台账" }));
+
+    await waitFor(() => expect(probeBodies).toHaveLength(1));
+    expect(probeBodies[0]).toMatchObject({ channel_id: 7, concurrency: 10 });
+  });
+
+  it("勾选账号后可批量删除已选", async () => {
+    const deleteBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/channel/proxy-accounts?")) return ledgerFor(url);
+      if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
+      if (url.includes("/channel/proxy-accounts")) {
+        deleteBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return jsonResponse({ deleted: 2 });
+      }
+      if (url.includes("/channel/list")) return jsonResponse([eligibleChannel({})]);
+      return jsonResponse(null);
+    }));
+
+    render(
+      <Wrapper>
+        <ProxyAccountsPage />
+      </Wrapper>,
+    );
+
+    await screen.findByText("opencode0a1b2c3d");
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText(/选择账号 opencode0a1b2c3d/));
+    await user.click(screen.getByLabelText(/选择账号 opencode0e4f5a6b/));
+
+    await user.click(screen.getByRole("button", { name: "删除已选 2 个账号" }));
+    await user.click(screen.getByRole("button", { name: /再次点击确认/ }));
+    await waitFor(() => expect(deleteBodies).toHaveLength(1));
+    expect(deleteBodies[0]).toEqual({
+      channel_id: 7,
+      accounts: ["opencode0a1b2c3d", "opencode0e4f5a6b"],
+    });
+    // 删除成功后选择集与按钮一并清空。
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /删除已选/ })).not.toBeInTheDocument(),
+    );
   });
 
   it("没有合格渠道时显示空态", async () => {

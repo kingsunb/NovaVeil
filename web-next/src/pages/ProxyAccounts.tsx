@@ -46,29 +46,6 @@ interface AccountProbeReport {
   summary: { total: number; healthy: number; rejected: number; failed: number };
 }
 
-interface LedgerItem {
-  account: string;
-  state: string;
-  outcome: string;
-  last_probe_status: number;
-  last_probe_at: string;
-  last_success_at: string;
-  cooldown_until: string;
-  source: string;
-  success_count: number;
-  success_days: number;
-}
-
-interface Ledger {
-  channel_id: number;
-  items: LedgerItem[];
-  total: number;
-  usable: number;
-  untested: number;
-  unusable: number;
-  probe_error: number;
-}
-
 type LedgerFilter = "all" | "usable" | "untested" | "unusable" | "error";
 
 function fmtTime(value: string): string {
@@ -179,8 +156,16 @@ function ChannelSection({ channel }: { channel: Channel }) {
 
   /** 一键测试: 勾选了账号时只测勾选的, 否则测台账全部; 按 200 个一批顺序体检。 */
   async function runBulkTest() {
-    const inputs = parseInputs();
-    const concurrency = inputs?.concurrency ?? DEFAULT_CONCURRENCY;
+    // 勾选测试与生成数量无关, 只校验并发数。
+    const parsedConcurrency = Math.floor(Number(concurrency));
+    if (
+      !Number.isFinite(parsedConcurrency) ||
+      parsedConcurrency < 1 ||
+      parsedConcurrency > MAX_CONCURRENCY
+    ) {
+      toast.error(zhCN.proxyAccounts.concurrencyInvalid);
+      return;
+    }
     setBulk({ done: 0, total: 0 });
     try {
       const full = await api.listProxyAccounts(channel.id, "all");
@@ -205,7 +190,7 @@ function ChannelSection({ channel }: { channel: Channel }) {
         const part = await api.probeProxyAccounts({
           channel_id: channel.id,
           accounts: chunk,
-          concurrency,
+          concurrency: parsedConcurrency,
           model: modelName || undefined,
         });
         model = part.model;
@@ -235,6 +220,13 @@ function ChannelSection({ channel }: { channel: Channel }) {
     try {
       const result = await api.deleteProxyAccounts(channel.id, accounts);
       await queryClient.invalidateQueries({ queryKey: ["proxy-accounts"] });
+      // 已删账号同步移出选择集, 避免一键测试再带上。
+      setSelectedAccounts((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Set(prev);
+        for (const account of accounts) next.delete(account);
+        return next;
+      });
       toast.success(zhCN.proxyAccounts.deleteDone(result.deleted));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.deleteFailed);
@@ -288,26 +280,31 @@ function ChannelSection({ channel }: { channel: Channel }) {
               <Pill tone="danger">{zhCN.proxyAccounts.summaryRejected} {report.summary.rejected}</Pill>
               <Pill tone="warning">{zhCN.proxyAccounts.summaryFailed} {report.summary.failed}</Pill>
             </div>
-            <div className="overflow-x-auto">
+            <div className="max-h-[26rem] overflow-auto">
               <table className="w-full text-sm">
-                <thead>
+                <thead className="sticky top-0 z-10 bg-card/90 backdrop-blur-sm">
                   <tr className="border-b text-left text-muted-foreground">
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnAccount}</th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnOutcome}</th>
-                    <th className="px-2 py-2">{zhCN.proxyAccounts.columnStatus}</th>
-                    <th className="px-2 py-2">{zhCN.proxyAccounts.columnLatency}</th>
+                    <th className="px-2 py-2 tabular-nums">{zhCN.proxyAccounts.columnStatus}</th>
+                    <th className="px-2 py-2 tabular-nums">{zhCN.proxyAccounts.columnLatency}</th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnDetail}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {report.results.map((result) => (
-                    <tr key={result.account} className="border-b last:border-0">
+                    <tr
+                      key={result.account}
+                      className="border-b border-border/60 transition-colors last:border-0 hover:bg-surface-subtle/60"
+                    >
                       <td className="px-2 py-2 font-mono">{result.account}</td>
                       <td className="px-2 py-2">
                         <Pill tone={outcomeTone(result.outcome)}>{outcomeLabel(result.outcome)}</Pill>
                       </td>
-                      <td className="px-2 py-2">{result.status > 0 ? result.status : "-"}</td>
-                      <td className="px-2 py-2">{zhCN.proxyAccounts.latencyMS(result.latency_ms)}</td>
+                      <td className="px-2 py-2 tabular-nums">{result.status > 0 ? result.status : "-"}</td>
+                      <td className="px-2 py-2 tabular-nums text-muted-foreground">
+                        {zhCN.proxyAccounts.latencyMS(result.latency_ms)}
+                      </td>
                       <td
                         className="max-w-80 truncate px-2 py-2 text-muted-foreground"
                         title={`${result.detail}｜${zhCN.proxyAccounts.detailHint}`}
@@ -334,15 +331,15 @@ function ChannelSection({ channel }: { channel: Channel }) {
                 ["error", zhCN.proxyAccounts.filterError, ledgerQuery.data?.probe_error ?? 0, "warning"],
               ] as const
             ).map(([value, label, count, tone]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => {
-                  setLedgerFilter(value);
-                  setPageIndex(1);
-                }}
-                className="focus-visible:outline-none"
-              >
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => {
+                    setLedgerFilter(value);
+                    setPageIndex(1);
+                  }}
+                  className="cursor-pointer transition-transform focus-visible:outline-none active:scale-95"
+                >
                 <Pill tone={ledgerFilter === value ? tone : "neutral"} dot={false}>
                   {label} {count}
                 </Pill>
@@ -361,13 +358,23 @@ function ChannelSection({ channel }: { channel: Channel }) {
                   ? zhCN.proxyAccounts.bulkTestSelected(selectedAccounts.size)
                   : zhCN.proxyAccounts.bulkTest}
             </Button>
+            {selectedAccounts.size > 0 && (
+              <ConfirmButton
+                tone="destructive"
+                label={zhCN.proxyAccounts.deleteSelected(selectedAccounts.size)}
+                loadingLabel={zhCN.proxyAccounts.deleteFailed}
+                onConfirm={() => void deleteAccounts([...selectedAccounts])}
+              />
+            )}
           </div>
-          {(ledgerQuery.data?.items?.length ?? 0) === 0 ? (
+          {ledgerQuery.isLoading ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">{zhCN.proxyAccounts.ledgerLoading}</p>
+          ) : (ledgerQuery.data?.items?.length ?? 0) === 0 ? (
             <EmptyState icon={<UsersRound className="size-8" />} title={zhCN.proxyAccounts.emptyLedger} />
           ) : (
-            <div className="overflow-x-auto">
+            <div className="max-h-[32rem] overflow-auto">
               <table className="w-full text-sm">
-                <thead>
+                <thead className="sticky top-0 z-10 bg-card/90 backdrop-blur-sm">
                   <tr className="border-b text-left text-muted-foreground">
                     <th className="px-2 py-2">
                       <input
@@ -386,15 +393,18 @@ function ChannelSection({ channel }: { channel: Channel }) {
                     </th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnAccount}</th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnOutcome}</th>
-                    <th className="px-2 py-2">{zhCN.proxyAccounts.columnSuccessCount}</th>
-                    <th className="px-2 py-2">{zhCN.proxyAccounts.columnSuccessDays}</th>
+                    <th className="px-2 py-2 tabular-nums">{zhCN.proxyAccounts.columnSuccessCount}</th>
+                    <th className="px-2 py-2 tabular-nums">{zhCN.proxyAccounts.columnSuccessDays}</th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnLastSuccess}</th>
                     <th className="px-2 py-2" />
                   </tr>
                 </thead>
                 <tbody>
                   {(ledgerPageItems).map((item) => (
-                    <tr key={item.account} className="border-b last:border-0">
+                    <tr
+                      key={item.account}
+                      className="border-b border-border/60 transition-colors last:border-0 hover:bg-surface-subtle/60"
+                    >
                       <td className="px-2 py-2">
                         <input
                           type="checkbox"
@@ -427,8 +437,8 @@ function ChannelSection({ channel }: { channel: Channel }) {
                           </span>
                         )}
                       </td>
-                      <td className="px-2 py-2">{item.success_count}</td>
-                      <td className="px-2 py-2">{item.success_days}</td>
+                      <td className="px-2 py-2 tabular-nums">{item.success_count}</td>
+                      <td className="px-2 py-2 tabular-nums">{item.success_days}</td>
                       {/* 未成功过的账号不展示最近成功时间(历史脏数据可能带伪造值) */}
                       <td className="px-2 py-2">
                         {item.success_count > 0 ? fmtTime(item.last_success_at) : "-"}

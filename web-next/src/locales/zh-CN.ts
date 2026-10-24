@@ -44,6 +44,12 @@ export const zhCN = {
     appliedWindow: (model: string, tokens: string) =>
       `已把 ${model} 的上下文窗口写为 ${tokens}`,
     applyFailed: "写入失败",
+    stop: "停止探测",
+    stopped: "已停止探测",
+    taskStopped: "已停止",
+    clearQueue: "清空队列",
+    historyChannelLabel: "筛选渠道",
+    historyAllChannels: "全部渠道",
   },
   proxyAccounts: {
     title: "OpenCode 账号体检",
@@ -93,6 +99,7 @@ export const zhCN = {
     selectAllVisible: "全选当前筛选结果",
     selectAccount: "选择账号",
     bulkTestSelected: (count: number) => `测试已选 ${count} 个账号`,
+    deleteSelected: (count: number) => `删除已选 ${count} 个账号`,
     stateError: "网络错误",
     columnSource: "来源",
     sourceGenerated: "体检录入",
@@ -106,6 +113,7 @@ export const zhCN = {
     deleteDone: (count: number) => `已删除 ${count} 个账号`,
     deleteFailed: "删除失败",
     emptyLedger: "台账为空：先在上面生成或粘贴账号并体检",
+    ledgerLoading: "台账加载中…",
     autoProbeTitle: "自动体检",
     autoProbeDescription: "开启后每 24 小时自动对台账内到期账号并发体检一轮：健康入池复用，被拒冷却 24 小时。",
     autoProbeOn: "每 24 小时自动体检",

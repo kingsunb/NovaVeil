@@ -3,7 +3,7 @@
  * 探测走与真实转发一致的出站构造（含出口 IP 池），并写入请求日志与探测历史。
  * 同一张列表还支持按「渠道 × 模型」直接定义/清除人工上下文窗口，无需先探测。
  */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ChevronDown, ChevronRight } from "lucide-react";
@@ -46,7 +46,7 @@ interface ProbeTask {
   endpoint: string;
   model: string;
   tokens: number;
-  state: "pending" | "running" | "done";
+  state: "pending" | "running" | "done" | "canceled";
   result?: ContextProbeResult;
 }
 
@@ -63,10 +63,13 @@ export default function ContextProbePage() {
   const [windowDrafts, setWindowDrafts] = useState<Record<string, string>>({});
   const [batchWindow, setBatchWindow] = useState("");
   const [savingWindows, setSavingWindows] = useState(false);
+  const [historyChannel, setHistoryChannel] = useState<number | "">("");
+  const abortRef = useRef<AbortController | null>(null);
 
   const historyQuery = useQuery({
-    queryKey: ["probe-history"],
-    queryFn: () => api.listContextProbeRecords(),
+    queryKey: ["probe-history", historyChannel],
+    queryFn: ({ signal }) =>
+      api.listContextProbeRecords(historyChannel === "" ? undefined : historyChannel, signal),
   });
 
   const targets = useMemo<ProbeTarget[]>(() => {
@@ -116,6 +119,7 @@ export default function ContextProbePage() {
   );
   const selectedCount = targets.filter((target) => selectedKeys.has(target.key)).length;
   const doneCount = tasks.filter((task) => task.state === "done").length;
+  const canceledCount = tasks.filter((task) => task.state === "canceled").length;
   const failedCount = tasks.filter(
     (task) => task.state === "done" && task.result && task.result.status === 0,
   ).length;
@@ -272,6 +276,10 @@ export default function ContextProbePage() {
     void applyBatch(value);
   }
 
+  function stopProbe() {
+    abortRef.current?.abort();
+  }
+
   async function runProbe() {
     if (selectedKeys.size === 0 || selectedSizes.length === 0) {
       toast.error("先勾选模型与至少一个规模");
@@ -296,6 +304,15 @@ export default function ContextProbePage() {
     }
     setTasks(plan);
     setRunning(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const markCanceled = (indices: number[]) => {
+      if (indices.length === 0) return;
+      const pending = new Set(indices);
+      setTasks((prev) =>
+        prev.map((item, i) => (pending.has(i) ? { ...item, state: "canceled" } : item)),
+      );
+    };
     try {
       // 全局三路并发; 同一「端点:模型」同一时刻只允许 1 个在途任务,
       // 避免多档密度校准按完成顺序互相覆盖。
@@ -304,6 +321,10 @@ export default function ContextProbePage() {
       const taskEndpointModel = (task: ProbeTask) => `${task.endpoint}:${task.model}`;
       const worker = async () => {
         while (pendingIndices.length > 0) {
+          if (controller.signal.aborted) {
+            markCanceled(pendingIndices.splice(0));
+            return;
+          }
           const position = pendingIndices.findIndex(
             (index) => !inFlight.has(taskEndpointModel(plan[index])),
           );
@@ -315,30 +336,39 @@ export default function ContextProbePage() {
             prev.map((item, i) => (i === index ? { ...item, state: "running" } : item)),
           );
           try {
-            const reply = await api.probeModelContext(task.channelId, task.model, task.tokens);
+            const reply = await api.probeModelContext(
+              task.channelId,
+              task.model,
+              task.tokens,
+              controller.signal,
+            );
             setTasks((prev) =>
               prev.map((item, i) => (i === index ? { ...item, state: "done", result: reply } : item)),
             );
           } catch (error) {
-            const message = error instanceof Error ? error.message : "探测失败";
-            setTasks((prev) =>
-              prev.map((item, i) =>
-                i === index
-                  ? {
-                      ...item,
-                      state: "done",
-                      result: {
-                        tokens: task.tokens,
-                        accepted: false,
-                        status: 0,
-                        detail: message,
-                        latency_ms: 0,
-                        actual_tokens: 0,
-                      },
-                    }
-                  : item,
-              ),
-            );
+            if (controller.signal.aborted) {
+              markCanceled([index]);
+            } else {
+              const message = error instanceof Error ? error.message : "探测失败";
+              setTasks((prev) =>
+                prev.map((item, i) =>
+                  i === index
+                    ? {
+                        ...item,
+                        state: "done",
+                        result: {
+                          tokens: task.tokens,
+                          accepted: false,
+                          status: 0,
+                          detail: message,
+                          latency_ms: 0,
+                          actual_tokens: 0,
+                        },
+                      }
+                    : item,
+                ),
+              );
+            }
           } finally {
             inFlight.delete(taskEndpointModel(task));
           }
@@ -348,9 +378,14 @@ export default function ContextProbePage() {
         Array.from({ length: Math.min(PROBE_CONCURRENCY, plan.length) }, () => worker()),
       );
       await queryClient.invalidateQueries({ queryKey: ["probe-history"] });
-      toast.success("探测结束");
+      if (controller.signal.aborted) {
+        toast.info(zhCN.contextProbe.stopped);
+      } else {
+        toast.success("探测结束");
+      }
     } finally {
       setRunning(false);
+      abortRef.current = null;
     }
   }
 
@@ -426,6 +461,11 @@ export default function ContextProbePage() {
             <Button onClick={runProbe} disabled={running || selectedCount === 0}>
               {running ? "探测中" : `开始探测（${selectedCount * selectedSizes.length} 组）`}
             </Button>
+            {running && (
+              <Button size="sm" variant="ghost" onClick={stopProbe}>
+                {zhCN.contextProbe.stop}
+              </Button>
+            )}
             <span className="text-xs text-ink-muted">
               {zhCN.contextProbe.concurrencyHint(selectedCount, selectedSizes.length)}
             </span>
@@ -603,144 +643,186 @@ export default function ContextProbePage() {
       {tasks.length > 0 ? (
         <Card>
           <CardHeader>
-            <CardTitle>探测队列</CardTitle>
-            <CardDescription>
-              共 {tasks.length} 组，已完成 {doneCount} 组{failedCount > 0 ? `，失败 ${failedCount} 组` : ""}。
-            </CardDescription>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <CardTitle>探测队列</CardTitle>
+                <CardDescription>
+                  共 {tasks.length} 组，已完成 {doneCount} 组
+                  {canceledCount > 0 ? `，已停止 ${canceledCount} 组` : ""}
+                  {failedCount > 0 ? `，失败 ${failedCount} 组` : ""}。
+                </CardDescription>
+              </div>
+              {!running && (
+                <Button size="sm" variant="ghost" onClick={() => setTasks([])}>
+                  {zhCN.contextProbe.clearQueue}
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-ink-muted">
-                  <th className="py-2">渠道</th>
-                  <th className="py-2">模型</th>
-                  <th className="py-2">规模</th>
-                  <th className="py-2">状态</th>
-                  <th className="py-2">耗时</th>
-                  <th className="py-2">说明</th>
-                  <th className="py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {tasks.map((task) => {
-                  const result = task.result;
-                  return (
-                    <tr key={task.key} className="border-t border-border">
-                      <td className="max-w-[10rem] truncate py-2">{task.channelName}</td>
-                      <td className="mono max-w-[14rem] truncate py-2">{task.model}</td>
-                      <td className="py-2">
-                        {formatWindowTokens(task.tokens)}
-                        {result?.actual_tokens ? (
-                          <span className="ml-1 text-xs text-ink-muted">
-                            实 {formatWindowTokens(result.actual_tokens)}
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="py-2">
-                        {task.state === "pending" ? (
-                          <Pill tone="neutral">排队中</Pill>
-                        ) : task.state === "running" ? (
-                          <Pill tone="info">探测中</Pill>
-                        ) : !result ? (
-                          <Pill tone="neutral">失败</Pill>
-                        ) : result.status === 0 ? (
-                          <Pill tone="neutral">失败</Pill>
-                        ) : result.accepted ? (
-                          <Pill tone="success">接受</Pill>
-                        ) : (
-                          <Pill tone="danger">拒绝</Pill>
-                        )}
-                      </td>
-                      <td className="py-2 text-xs text-ink-muted">
-                        {result && result.latency_ms > 0 ? `${result.latency_ms} ms` : "-"}
-                      </td>
-                      <td
-                        className={
-                          result && result.status === 0
-                            ? "max-w-[18rem] truncate py-2 text-xs text-red-600 dark:text-red-400"
-                            : "max-w-[18rem] truncate py-2 text-xs text-ink-muted"
-                        }
-                        title={result?.detail || undefined}
+            <div className="max-h-[26rem] overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-card/90 backdrop-blur-sm">
+                  <tr className="text-left text-xs text-ink-muted">
+                    <th className="py-2">渠道</th>
+                    <th className="py-2">模型</th>
+                    <th className="py-2">规模</th>
+                    <th className="py-2">状态</th>
+                    <th className="py-2">耗时</th>
+                    <th className="py-2">说明</th>
+                    <th className="py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {tasks.map((task) => {
+                    const result = task.result;
+                    return (
+                      <tr
+                        key={task.key}
+                        className="border-t border-border/60 transition-colors hover:bg-surface-subtle/60"
                       >
-                        {!result ? "-" : result.status === 0
-                          ? result.detail
-                          : `HTTP ${result.status}${result.detail ? ` · ${result.detail}` : ""}`}
-                      </td>
-                      <td className="py-2 text-right">
-                        {result?.accepted ? (
-                          <Button size="sm" variant="ghost" onClick={() => applyResult(task)}>
-                            应用
-                          </Button>
-                        ) : null}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        <td className="max-w-[10rem] truncate py-2">{task.channelName}</td>
+                        <td className="mono max-w-[14rem] truncate py-2">{task.model}</td>
+                        <td className="py-2 tabular-nums">
+                          {formatWindowTokens(task.tokens)}
+                          {result?.actual_tokens ? (
+                            <span className="ml-1 text-xs text-ink-muted">
+                              实 {formatWindowTokens(result.actual_tokens)}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td className="py-2">
+                          {task.state === "pending" ? (
+                            <Pill tone="neutral">排队中</Pill>
+                          ) : task.state === "running" ? (
+                            <Pill tone="info">探测中</Pill>
+                          ) : task.state === "canceled" ? (
+                            <Pill tone="neutral">{zhCN.contextProbe.taskStopped}</Pill>
+                          ) : !result ? (
+                            <Pill tone="neutral">失败</Pill>
+                          ) : result.status === 0 ? (
+                            <Pill tone="neutral">失败</Pill>
+                          ) : result.accepted ? (
+                            <Pill tone="success">接受</Pill>
+                          ) : (
+                            <Pill tone="danger">拒绝</Pill>
+                          )}
+                        </td>
+                        <td className="py-2 text-xs tabular-nums text-ink-muted">
+                          {result && result.latency_ms > 0 ? `${result.latency_ms} ms` : "-"}
+                        </td>
+                        <td
+                          className={
+                            result && result.status === 0
+                              ? "max-w-[18rem] truncate py-2 text-xs text-red-600 dark:text-red-400"
+                              : "max-w-[18rem] truncate py-2 text-xs text-ink-muted"
+                          }
+                          title={result?.detail || undefined}
+                        >
+                          {!result ? "-" : result.status === 0
+                            ? result.detail
+                            : `HTTP ${result.status}${result.detail ? ` · ${result.detail}` : ""}`}
+                        </td>
+                        <td className="py-2 text-right">
+                          {result?.accepted ? (
+                            <Button size="sm" variant="ghost" onClick={() => applyResult(task)}>
+                              应用
+                            </Button>
+                          ) : null}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </CardContent>
         </Card>
       ) : null}
 
       <Card>
         <CardHeader>
-          <CardTitle>探测历史</CardTitle>
-          <CardDescription>最近 100 条记录，按时间倒序。</CardDescription>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <CardTitle>探测历史</CardTitle>
+              <CardDescription>最近 100 条记录，按时间倒序。</CardDescription>
+            </div>
+            <select
+              className="h-8 rounded-md border bg-transparent px-2 text-xs"
+              aria-label={zhCN.contextProbe.historyChannelLabel}
+              value={historyChannel}
+              onChange={(event) =>
+                setHistoryChannel(event.target.value === "" ? "" : Number(event.target.value))
+              }
+            >
+              <option value="">{zhCN.contextProbe.historyAllChannels}</option>
+              {(channelsQuery.data ?? []).map((channel) => (
+                <option key={channel.id} value={channel.id}>
+                  {channel.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </CardHeader>
         <CardContent>
           {history.length === 0 ? (
             <p className="text-xs text-ink-muted">还没有探测记录。</p>
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-ink-muted">
-                  <th className="py-2">时间</th>
-                  <th className="py-2">渠道</th>
-                  <th className="py-2">模型</th>
-                  <th className="py-2">规模</th>
-                  <th className="py-2">结果</th>
-                  <th className="py-2">耗时</th>
-                  <th className="py-2">说明</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((row) => (
-                  <tr key={row.id} className="border-t border-border">
-                    <td className="py-2 text-xs text-ink-muted">
-                      {new Date(row.created_at).toLocaleString()}
-                    </td>
-                    <td className="max-w-[10rem] truncate py-2">{row.channel_name}</td>
-                    <td className="mono max-w-[14rem] truncate py-2">{row.model_name}</td>
-                    <td className="py-2">
-                      {formatWindowTokens(row.tokens)}
-                      {row.actual_tokens ? (
-                        <span className="ml-1 text-xs text-ink-muted">
-                          实 {formatWindowTokens(row.actual_tokens)}
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="py-2">
-                      {row.status === 0 ? (
-                        <Pill tone="neutral">失败</Pill>
-                      ) : row.accepted ? (
-                        <Pill tone="success">接受</Pill>
-                      ) : (
-                        <Pill tone="danger">拒绝</Pill>
-                      )}
-                    </td>
-                    <td className="py-2 text-xs text-ink-muted">
-                      {row.latency_ms > 0 ? `${row.latency_ms} ms` : "-"}
-                    </td>
-                    <td
-                      className="max-w-[18rem] truncate py-2 text-xs text-ink-muted"
-                      title={row.detail || undefined}
-                    >
-                      {row.detail || "-"}
-                    </td>
+            <div className="max-h-[26rem] overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-card/90 backdrop-blur-sm">
+                  <tr className="text-left text-xs text-ink-muted">
+                    <th className="py-2">时间</th>
+                    <th className="py-2">渠道</th>
+                    <th className="py-2">模型</th>
+                    <th className="py-2">规模</th>
+                    <th className="py-2">结果</th>
+                    <th className="py-2">耗时</th>
+                    <th className="py-2">说明</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {history.map((row) => (
+                    <tr
+                      key={row.id}
+                      className="border-t border-border/60 transition-colors hover:bg-surface-subtle/60"
+                    >
+                      <td className="py-2 text-xs tabular-nums text-ink-muted">
+                        {new Date(row.created_at).toLocaleString()}
+                      </td>
+                      <td className="max-w-[10rem] truncate py-2">{row.channel_name}</td>
+                      <td className="mono max-w-[14rem] truncate py-2">{row.model_name}</td>
+                      <td className="py-2 tabular-nums">
+                        {formatWindowTokens(row.tokens)}
+                        {row.actual_tokens ? (
+                          <span className="ml-1 text-xs text-ink-muted">
+                            实 {formatWindowTokens(row.actual_tokens)}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="py-2">
+                        {row.status === 0 ? (
+                          <Pill tone="neutral">失败</Pill>
+                        ) : row.accepted ? (
+                          <Pill tone="success">接受</Pill>
+                        ) : (
+                          <Pill tone="danger">拒绝</Pill>
+                        )}
+                      </td>
+                      <td className="py-2 text-xs tabular-nums text-ink-muted">
+                        {row.latency_ms > 0 ? `${row.latency_ms} ms` : "-"}
+                      </td>
+                      <td
+                        className="max-w-[18rem] truncate py-2 text-xs text-ink-muted"
+                        title={row.detail || undefined}
+                      >
+                        {row.detail || "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </CardContent>
       </Card>

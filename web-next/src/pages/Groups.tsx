@@ -1554,7 +1554,7 @@ function GroupEditor({
               />
               <Toggle
                 label="上下文窗口过滤"
-                description="按请求估算 token 跳过装不下请求的成员；只有手动填写的窗口参与过滤，同步目录值仅展示，未填则照常尝试"
+                description="按请求估算 token 跳过装不下请求的成员；只有手动填写的窗口参与过滤，同步目录值仅展示，未填则照常尝试。分组引用链以顶层分组（请求模型名对应的分组）的开关为准，子分组开关不生效"
                 checked={relayConfig.context_fit_enabled}
                 onChange={(v) => updateRelay("context_fit_enabled", v)}
               />

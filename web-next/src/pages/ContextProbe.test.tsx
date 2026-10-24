@@ -96,7 +96,7 @@ describe("<ContextProbePage /> 窗口定义", () => {
     );
 
     const user = userEvent.setup();
-    await screen.findByText("OpenCode Free");
+    await screen.findByText("OpenCode Free", { selector: "span" });
     await user.click(screen.getByLabelText("展开渠道"));
 
     expect(await screen.findByText("model-a")).toBeInTheDocument();
@@ -149,7 +149,7 @@ describe("<ContextProbePage /> 窗口定义", () => {
     );
 
     const user = userEvent.setup();
-    await screen.findByText("OpenCode Free");
+    await screen.findByText("OpenCode Free", { selector: "span" });
     await user.click(screen.getByLabelText("展开渠道"));
     const input = await screen.findByLabelText("model-b 窗口 token");
     expect(input).toHaveValue(128000);
@@ -190,7 +190,7 @@ describe("<ContextProbePage /> 窗口定义", () => {
     );
 
     const user = userEvent.setup();
-    await screen.findByText("OpenCode Free");
+    await screen.findByText("OpenCode Free", { selector: "span" });
     await user.click(screen.getByLabelText("展开渠道"));
     const input = await screen.findByLabelText("model-b 窗口 token");
     await user.clear(input);
@@ -236,7 +236,7 @@ describe("<ContextProbePage /> 精度与批量语义", () => {
     );
 
     const user = userEvent.setup();
-    await screen.findByText("OpenCode Free");
+    await screen.findByText("OpenCode Free", { selector: "span" });
     await user.click(screen.getByLabelText("展开渠道"));
 
     expect(await screen.findByText("已定义 131.072K")).toBeInTheDocument();
@@ -277,7 +277,7 @@ describe("<ContextProbePage /> 精度与批量语义", () => {
     );
 
     const user = userEvent.setup();
-    await screen.findByText("OpenCode Free");
+    await screen.findByText("OpenCode Free", { selector: "span" });
     await user.click(screen.getByLabelText("展开渠道"));
     await user.click(screen.getByLabelText("选择渠道 OpenCode Free"));
 
@@ -316,7 +316,7 @@ describe("<ContextProbePage /> 精度与批量语义", () => {
     );
 
     const user = userEvent.setup();
-    await screen.findByText("OpenCode Free");
+    await screen.findByText("OpenCode Free", { selector: "span" });
     await user.click(screen.getByLabelText("展开渠道"));
     await user.click(screen.getByLabelText("选择 model-a"));
     await user.click(screen.getByRole("button", { name: "批量清除" }));
@@ -342,7 +342,7 @@ describe("<ContextProbePage /> 精度与批量语义", () => {
     );
 
     const user = userEvent.setup();
-    await screen.findByText("OpenCode Free");
+    await screen.findByText("OpenCode Free", { selector: "span" });
     await user.click(screen.getByLabelText("展开渠道"));
 
     expect(screen.getByRole("button", { name: "批量定义（0）" })).toBeDisabled();
@@ -382,7 +382,7 @@ describe("<ContextProbePage /> 精度与批量语义", () => {
     );
 
     const user = userEvent.setup();
-    await screen.findByText("OpenCode Free");
+    await screen.findByText("OpenCode Free", { selector: "span" });
     await user.click(screen.getByLabelText("展开渠道"));
 
     const draftInput = await screen.findByLabelText("model-a 窗口 token");
@@ -451,7 +451,7 @@ describe("<ContextProbePage /> 同模型串行调度", () => {
     );
 
     const user = userEvent.setup();
-    await screen.findByText("OpenCode Free");
+    await screen.findByText("OpenCode Free", { selector: "span" });
     await user.click(screen.getByLabelText("展开渠道"));
     await user.click(screen.getByLabelText("选择 model-b"));
     await user.click(screen.getByText("64K"));
@@ -518,7 +518,7 @@ describe("<ContextProbePage /> 同模型串行调度", () => {
     );
 
     const user = userEvent.setup();
-    await screen.findByText("OpenCode Free");
+    await screen.findByText("OpenCode Free", { selector: "span" });
     await user.click(screen.getByLabelText("展开渠道"));
     await user.click(screen.getByLabelText("选择渠道 OpenCode Free"));
     await user.click(screen.getByRole("button", { name: "开始探测（2 组）" }));
@@ -528,5 +528,85 @@ describe("<ContextProbePage /> 同模型串行调度", () => {
 
     while (releases.length > 0) releases.shift()?.();
     await waitFor(() => expect(screen.getAllByText("接受")).toHaveLength(2));
+  });
+});
+
+describe("<ContextProbePage /> 停止与清空", () => {
+  it("停止探测中止在途请求并把剩余任务标记为已停止", async () => {
+    let probeCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/model-eval/probe-context")) {
+          probeCalls += 1;
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+          });
+        }
+        if (url.includes("/channel/list")) return jsonResponse([channel]);
+        if (url.includes("/model-eval/probe-history")) return jsonResponse([]);
+        return jsonResponse(null);
+      }),
+    );
+
+    render(
+      <Wrapper>
+        <ContextProbePage />
+      </Wrapper>,
+    );
+
+    const user = userEvent.setup();
+    await screen.findByText("OpenCode Free", { selector: "span" });
+    await user.click(screen.getByLabelText("展开渠道"));
+    await user.click(screen.getByLabelText("选择 model-b"));
+    await user.click(screen.getByText("64K"));
+    await user.click(screen.getByRole("button", { name: "开始探测（2 组）" }));
+
+    await waitFor(() => expect(probeCalls).toBe(1));
+    await user.click(screen.getByRole("button", { name: "停止探测" }));
+
+    // 第一档在途中止, 第二档未开始: 两档都显示已停止。
+    await waitFor(() => expect(screen.getAllByText("已停止")).toHaveLength(2));
+    // 停止后队列可清空, 开始按钮恢复可用。
+    await user.click(screen.getByRole("button", { name: "清空队列" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "清空队列" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "开始探测（2 组）" })).toBeEnabled();
+  });
+});
+
+describe("<ContextProbePage /> 历史筛选", () => {
+  it("历史可按渠道筛选, 请求携带 channel_id", async () => {
+    const historyUrls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/model-eval/probe-history")) {
+          historyUrls.push(url);
+          return jsonResponse([]);
+        }
+        if (url.includes("/channel/list")) return jsonResponse([channel]);
+        return jsonResponse(null);
+      }),
+    );
+
+    render(
+      <Wrapper>
+        <ContextProbePage />
+      </Wrapper>,
+    );
+
+    await screen.findByText("探测历史");
+    expect(historyUrls.every((url) => !url.includes("channel_id"))).toBe(true);
+
+    // 等渠道 option 渲染完成后再选择。
+    await screen.findByText("OpenCode Free", { selector: "option" });
+    await userEvent.setup().selectOptions(screen.getByLabelText("筛选渠道"), "7");
+    await waitFor(() => expect(historyUrls.some((url) => url.includes("channel_id=7"))).toBe(true));
   });
 });
