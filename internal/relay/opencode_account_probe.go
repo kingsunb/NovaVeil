@@ -459,36 +459,44 @@ const ocAutoProbeMaxPerChannel = ocProbeMaxAccounts
 
 // OpencodeAccountLedgerItem 是台账中单个账号的展示条目。
 type OpencodeAccountLedgerItem struct {
-	Account       string    `json:"account"`
-	State         string    `json:"state"`
-	Outcome       string    `json:"outcome"`
-	LastProbeStatus int     `json:"last_probe_status"`
-	LastProbeAt   time.Time `json:"last_probe_at"`
-	LastSuccessAt time.Time `json:"last_success_at"`
-	CooldownUntil time.Time `json:"cooldown_until"`
-	Source        string    `json:"source"`
+	Account         string    `json:"account"`
+	State           string    `json:"state"`
+	Outcome         string    `json:"outcome"`
+	LastProbeStatus int       `json:"last_probe_status"`
+	LastProbeAt     time.Time `json:"last_probe_at"`
+	LastSuccessAt   time.Time `json:"last_success_at"`
+	CooldownUntil   time.Time `json:"cooldown_until"`
+	Source          string    `json:"source"`
 	// SuccessCount/SuccessDays 是累计成功统计: 次数含真实转发与体检, 天数按自然日去重。
 	SuccessCount int64 `json:"success_count"`
 	SuccessDays  int   `json:"success_days"`
+	// RealSuccessCount/RealFailureCount/ProbeSuccessCount 按来源拆分:
+	// 下游真实转发的成功/失败数, 与体检探测的成功数。
+	RealSuccessCount  int64 `json:"real_success_count"`
+	RealFailureCount  int64 `json:"real_failure_count"`
+	ProbeSuccessCount int64 `json:"probe_success_count"`
 }
 
 // OpencodeAccountLedger 是某渠道账号台账的筛选视图。
 type OpencodeAccountLedger struct {
-	ChannelID int                       `json:"channel_id"`
+	ChannelID int                         `json:"channel_id"`
 	Items     []OpencodeAccountLedgerItem `json:"items"`
-	Total     int                       `json:"total"`
-	Usable    int                       `json:"usable"`
-	Untested  int                       `json:"untested"`
-	Unusable  int                       `json:"unusable"`
+	Total     int                         `json:"total"`
+	Usable    int                         `json:"usable"`
+	Untested  int                         `json:"untested"`
+	Unusable  int                         `json:"unusable"`
 	// ProbeError 是最近一次体检遇基础设施故障(网络/代理/上游 5xx)的账号数:
 	// 不代表账号被封, 单独筛选便于复测。
 	ProbeError int `json:"probe_error"`
+	// Historic 是历史可用账号数: 曾经成功过(不论当前冷却或过期)。
+	Historic int `json:"historic"`
 }
 
 // ListOpencodeAccountStates 返回渠道账号台账并按状态派生与筛选。
-// filter: all(默认)/usable/untested/unusable/error。派生口径:
+// filter: all(默认)/usable/untested/unusable/error/historic。派生口径:
 // 可用 = 未冷却且(最近探测健康 或 7 天内有转发成功); 未测试 = 从未探测且从未成功;
-// 不可用 = 冷却中或最近探测被上游拒绝; 网络错误 = 最近探测遇基础设施故障且无在效成功。
+// 不可用 = 冷却中或最近探测被上游拒绝; 网络错误 = 最近探测遇基础设施故障且无在效成功;
+// 历史可用 = 曾经成功过(含当前冷却/过期的好号)。
 func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLedger, error) {
 	channel, err := op.ChannelGet(channelID)
 	if err != nil {
@@ -505,6 +513,7 @@ func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLe
 	ledger := &OpencodeAccountLedger{ChannelID: channelID}
 	for _, row := range rows {
 		state := ocAccountLedgerState(row, now)
+		hasSuccess := !row.LastSuccessAt.IsZero()
 		switch state {
 		case "usable":
 			ledger.Usable++
@@ -515,20 +524,30 @@ func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLe
 		default:
 			ledger.Unusable++
 		}
-		if filter != "all" && filter != state {
+		if hasSuccess {
+			ledger.Historic++
+		}
+		if filter == "historic" {
+			if !hasSuccess {
+				continue
+			}
+		} else if filter != "all" && filter != state {
 			continue
 		}
 		ledger.Items = append(ledger.Items, OpencodeAccountLedgerItem{
-			Account:         row.Account,
-			State:           state,
-			Outcome:         row.LastProbeOutcome,
-			LastProbeStatus: row.LastProbeStatus,
-			LastProbeAt:     row.LastProbeAt,
-			LastSuccessAt:   row.LastSuccessAt,
-			CooldownUntil:   row.CooldownUntil,
-			Source:          row.Source,
-			SuccessCount:    row.SuccessCount,
-			SuccessDays:     row.SuccessDays,
+			Account:           row.Account,
+			State:             state,
+			Outcome:           row.LastProbeOutcome,
+			LastProbeStatus:   row.LastProbeStatus,
+			LastProbeAt:       row.LastProbeAt,
+			LastSuccessAt:     row.LastSuccessAt,
+			CooldownUntil:     row.CooldownUntil,
+			Source:            row.Source,
+			SuccessCount:      row.SuccessCount,
+			SuccessDays:       row.SuccessDays,
+			RealSuccessCount:  row.RealSuccessCount,
+			RealFailureCount:  row.RealFailureCount,
+			ProbeSuccessCount: row.ProbeSuccessCount,
 		})
 	}
 	ledger.Total = len(rows)

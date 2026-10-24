@@ -302,11 +302,11 @@ func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName,
 		probeErr = fmt.Errorf("上游返回异常状态: %s %s", response.Status, result.Detail)
 	}
 	finishTestRequest(logRequest, result.Detail, usage, probeErr)
-	// 回填探测账号: 成功或 403/429 冷却, 探测不换号。
+	// 回填探测账号: 成功或 403/429 冷却, 探测不换号。探测成功按体检口径计数。
 	if proxyAccount != "" {
 		switch {
 		case result.Accepted:
-			markOpencodeProxySuccess(channel.ID, proxyAccount)
+			markOpencodeProxySuccess(channel.ID, proxyAccount, true)
 		case response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests:
 			markOpencodeProxyRejected(channel.ID, proxyAccount)
 		}

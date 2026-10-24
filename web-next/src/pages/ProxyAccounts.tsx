@@ -46,7 +46,7 @@ interface AccountProbeReport {
   summary: { total: number; healthy: number; rejected: number; failed: number };
 }
 
-type LedgerFilter = "all" | "usable" | "untested" | "unusable" | "error";
+type LedgerFilter = "all" | "usable" | "untested" | "unusable" | "error" | "historic";
 
 function fmtTime(value: string): string {
   if (!value || value.startsWith("0001-")) return "-";
@@ -326,6 +326,7 @@ function ChannelSection({ channel }: { channel: Channel }) {
               [
                 ["all", zhCN.proxyAccounts.filterAll, ledgerQuery.data?.total ?? 0, "neutral"],
                 ["usable", zhCN.proxyAccounts.filterUsable, ledgerQuery.data?.usable ?? 0, "success"],
+                ["historic", zhCN.proxyAccounts.filterHistoric, ledgerQuery.data?.historic ?? 0, "success"],
                 ["untested", zhCN.proxyAccounts.filterUntested, ledgerQuery.data?.untested ?? 0, "info"],
                 ["unusable", zhCN.proxyAccounts.filterUnusable, ledgerQuery.data?.unusable ?? 0, "danger"],
                 ["error", zhCN.proxyAccounts.filterError, ledgerQuery.data?.probe_error ?? 0, "warning"],
@@ -393,7 +394,9 @@ function ChannelSection({ channel }: { channel: Channel }) {
                     </th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnAccount}</th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnOutcome}</th>
-                    <th className="px-2 py-2 tabular-nums">{zhCN.proxyAccounts.columnSuccessCount}</th>
+                    <th className="px-2 py-2 tabular-nums">{zhCN.proxyAccounts.columnRealSuccess}</th>
+                    <th className="px-2 py-2 tabular-nums">{zhCN.proxyAccounts.columnRealFailure}</th>
+                    <th className="px-2 py-2 tabular-nums">{zhCN.proxyAccounts.columnProbeSuccess}</th>
                     <th className="px-2 py-2 tabular-nums">{zhCN.proxyAccounts.columnSuccessDays}</th>
                     <th className="px-2 py-2">{zhCN.proxyAccounts.columnLastSuccess}</th>
                     <th className="px-2 py-2" />
@@ -437,7 +440,9 @@ function ChannelSection({ channel }: { channel: Channel }) {
                           </span>
                         )}
                       </td>
-                      <td className="px-2 py-2 tabular-nums">{item.success_count}</td>
+                      <td className="px-2 py-2 tabular-nums">{item.real_success_count}</td>
+                      <td className="px-2 py-2 tabular-nums">{item.real_failure_count}</td>
+                      <td className="px-2 py-2 tabular-nums">{item.probe_success_count}</td>
                       <td className="px-2 py-2 tabular-nums">{item.success_days}</td>
                       {/* 未成功过的账号不展示最近成功时间(历史脏数据可能带伪造值) */}
                       <td className="px-2 py-2">

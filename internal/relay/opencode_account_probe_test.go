@@ -451,6 +451,128 @@ func TestProbeOpencodeAccountsSendsClientFormAndUniqueSessions(t *testing.T) {
 	}
 }
 
+// waitForOpencodeAccountCounters 轮询等待账号行落库且三类拆分计数达到期望值。
+func waitForOpencodeAccountCounters(t *testing.T, channelID int, account string, realSuccess, realFailure, probeSuccess int64) model.OpencodeProxyAccount {
+	t.Helper()
+	var persisted model.OpencodeProxyAccount
+	waitFor(t, 2*time.Second, func() bool {
+		rows, err := op.LoadOpencodeProxyAccounts(channelID)
+		if err != nil {
+			return false
+		}
+		for _, row := range rows {
+			if row.Account != account {
+				continue
+			}
+			persisted = row
+			return row.RealSuccessCount == realSuccess && row.RealFailureCount == realFailure && row.ProbeSuccessCount == probeSuccess
+		}
+		return false
+	})
+	return persisted
+}
+
+// TestProbeOpencodeAccountsRecordsProbeSuccessCounter 验证体检成功只计体检计数,
+// 不与真实转发成功混账。
+func TestProbeOpencodeAccountsRecordsProbeSuccessCounter(t *testing.T) {
+	setupFailoverTest(t)
+	probe := newOpencodeProxyProbe(t, func(account string) (int, []byte) {
+		if account == "user_bad" {
+			return http.StatusForbidden, []byte(`{"error":{"message":"FreeTierError"}}`)
+		}
+		return http.StatusOK, probeChatOKBody()
+	})
+	channel := createOpencodeProxyTestChannel(t, probe.template)
+
+	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID,
+		[]string{"user_good", "user_bad"}, 0, 2, 0, ""); err != nil {
+		t.Fatalf("批量体检失败: %v", err)
+	}
+	row := waitForOpencodeAccountCounters(t, channel.ID, "user_good", 0, 0, 1)
+	if row.SuccessCount != 1 {
+		t.Fatalf("总成功应为 1: %+v", row)
+	}
+	waitForOpencodeAccountCounters(t, channel.ID, "user_bad", 0, 0, 0)
+}
+
+// TestOpencodeLedgerHistoricFilterAndSplitCounters 验证「历史可用」筛选口径
+// (曾成功过, 含冷却中的好号)与台账条目的拆分计数字段。
+func TestOpencodeLedgerHistoricFilterAndSplitCounters(t *testing.T) {
+	setupFailoverTest(t)
+	probe := newOpencodeProxyProbe(t, func(string) (int, []byte) {
+		return http.StatusOK, probeChatOKBody()
+	})
+	channel := createOpencodeProxyTestChannel(t, probe.template)
+	now := time.Now()
+
+	// good_then_cool: 先真实成功再冷却, 是「历史可用」的冷却好号。
+	if err := op.SaveOpencodeProxySuccess(channel.ID, "good_then_cool", now); err != nil {
+		t.Fatalf("写成功记录失败: %v", err)
+	}
+	if err := op.SaveOpencodeProxyProbeSuccess(channel.ID, "good_then_cool", now); err != nil {
+		t.Fatalf("写体检成功失败: %v", err)
+	}
+	if err := op.SaveOpencodeProxyRealFailure(channel.ID, "good_then_cool"); err != nil {
+		t.Fatalf("写失败记录失败: %v", err)
+	}
+	if err := op.SaveOpencodeProxyCooldown(channel.ID, "good_then_cool", now.Add(time.Hour)); err != nil {
+		t.Fatalf("写冷却失败: %v", err)
+	}
+	// never_success: 从未成功, 不属于历史可用。
+	if err := op.UpsertOpencodeGeneratedAccounts(channel.ID, []string{"never_success"}); err != nil {
+		t.Fatalf("落账失败: %v", err)
+	}
+
+	ledger, err := ListOpencodeAccountStates(channel.ID, "historic")
+	if err != nil {
+		t.Fatalf("读台账失败: %v", err)
+	}
+	if ledger.Historic != 1 || len(ledger.Items) != 1 || ledger.Items[0].Account != "good_then_cool" {
+		t.Fatalf("历史可用应只有曾成功账号: %+v", ledger)
+	}
+	item := ledger.Items[0]
+	if item.State != "unusable" {
+		t.Fatalf("冷却中的历史可用账号当前态应为不可用: %+v", item)
+	}
+	if item.RealSuccessCount != 1 || item.RealFailureCount != 1 || item.ProbeSuccessCount != 1 || item.SuccessCount != 2 {
+		t.Fatalf("拆分计数异常: %+v", item)
+	}
+
+	all, err := ListOpencodeAccountStates(channel.ID, "all")
+	if err != nil {
+		t.Fatalf("读台账失败: %v", err)
+	}
+	if all.Historic != 1 || all.Total != 2 {
+		t.Fatalf("汇总计数异常: historic=%d total=%d", all.Historic, all.Total)
+	}
+}
+
+// TestOpencodeRelayPrefersVerifiedAccountAndCountsRealTraffic 端到端确认下游真实
+// 请求优先选已验证(健康)账号, 且成功按真实转发口径计数。
+func TestOpencodeRelayPrefersVerifiedAccountAndCountsRealTraffic(t *testing.T) {
+	setupFailoverTest(t)
+	probe := newOpencodeProxyProbe(t, func(string) (int, []byte) {
+		return http.StatusOK, chatCompletionBody("chatcmpl-verified-first", "ok-verified-first", 3, 5)
+	})
+	channel := createOpencodeProxyTestChannel(t, probe.template)
+	pool := &ocProxyPool{loaded: true, accounts: map[string]*ocProxyAccount{
+		"verified-good":    {account: "verified-good", lastSuccessAt: time.Now(), verified: true},
+		"unverified-fresh": {account: "unverified-fresh"},
+	}}
+	ocProxyPools.Store(channel.ID, pool)
+	t.Cleanup(func() { ocProxyPools.Delete(channel.ID) })
+	group := createIntegrationGroup(t, "opencode-verified-first", opencodeProxyTestConfig(), integrationLeafItem(t, channel, channel.Models[0].Name))
+
+	recorder := postOpencodeProxyRequest(t, group, nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("请求应成功, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if seen := probe.seenAccounts(); len(seen) != 1 || seen[0] != "verified-good" {
+		t.Fatalf("下游请求应先选已验证健康账号, 实际 %v", seen)
+	}
+	waitForOpencodeAccountCounters(t, channel.ID, "verified-good", 1, 0, 0)
+}
+
 // TestOpencodeAutoProbeDueAccounts 验证到期选择: 未探测立即到期, 周期内跳过, 上限截断。
 func TestOpencodeAutoProbeDueAccounts(t *testing.T) {
 	now := time.Now()

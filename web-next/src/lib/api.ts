@@ -833,7 +833,7 @@ export const api = {
     };
   },
 
-  /** 账号台账: 四态筛选 all/usable/untested/unusable/error。 */
+  /** 账号台账: 五类筛选 all/usable/untested/unusable/error/historic。 */
   listProxyAccounts: async (channelId: number, filter: string) =>
     (await http<unknown>(
       `/channel/proxy-accounts?channel_id=${channelId}&filter=${encodeURIComponent(filter)}`,
@@ -849,6 +849,9 @@ export const api = {
         cooldown_until: string;
         source: string;
         success_count: number;
+        real_success_count: number;
+        real_failure_count: number;
+        probe_success_count: number;
         success_days: number;
       }>;
       total: number;
@@ -856,6 +859,7 @@ export const api = {
       untested: number;
       unusable: number;
       probe_error: number;
+      historic: number;
     },
   /** 从台账删除指定账号并同步清理进程内池。 */
   deleteProxyAccounts: (channelId: number, accounts: string[]) =>

@@ -269,6 +269,9 @@ func TestOpencodeProxy403RetriesAnotherAccount(t *testing.T) {
 	}
 	assertOpencodeProxyCooldownDuration(t, pool["bad-account"].cooldownUntil, ocProxyRejectedCooldown)
 	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", ocProxyRejectedCooldown)
+	// 真实流量计数拆分: 坏账号一次真实失败, 好账号一次真实成功, 体检计数均为 0。
+	waitForOpencodeAccountCounters(t, channel.ID, "bad-account", 0, 1, 0)
+	waitForOpencodeAccountCounters(t, channel.ID, "good-account", 1, 0, 0)
 
 	itemID := group.Items[0].ID
 	route := routeSnapshot(t, group.ID)

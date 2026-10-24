@@ -595,15 +595,21 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				result.Close()
 				err = memberTimeoutError(metadataStreaming, timeoutSeconds)
 			}
-			// 回填账号结果: 成功或 403/429 冷却。
+			// 回填账号结果: 成功或 403/429 冷却; 真实转发的成功/失败按来源分开计数,
+			// 客户端取消/管理端中止不算失败。
 			proxyAccountRejection := false
 			if proxyAccount != "" {
 				if err == nil {
-					markOpencodeProxySuccess(channel.ID, proxyAccount)
-				} else if code, ok := UpstreamStatusCode(err); ok {
-					proxyAccountRejection = code == http.StatusForbidden || code == http.StatusTooManyRequests
-					if proxyAccountRejection {
-						markOpencodeProxyRejected(channel.ID, proxyAccount)
+					markOpencodeProxySuccess(channel.ID, proxyAccount, false)
+				} else {
+					if code, ok := UpstreamStatusCode(err); ok {
+						proxyAccountRejection = code == http.StatusForbidden || code == http.StatusTooManyRequests
+						if proxyAccountRejection {
+							markOpencodeProxyRejected(channel.ID, proxyAccount)
+						}
+					}
+					if !errors.Is(err, context.Canceled) {
+						markOpencodeProxyRealFailure(channel.ID, proxyAccount)
 					}
 				}
 			}

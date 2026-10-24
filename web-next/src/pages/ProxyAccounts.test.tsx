@@ -91,6 +91,9 @@ const ledger = {
       cooldown_until: "0001-01-01T00:00:00Z",
       source: "generated",
       success_count: 12,
+      real_success_count: 10,
+      real_failure_count: 2,
+      probe_success_count: 2,
       success_days: 3,
     },
     {
@@ -99,11 +102,14 @@ const ledger = {
       outcome: "rejected",
       last_probe_status: 403,
       last_probe_at: "2026-10-24T12:00:00Z",
-      last_success_at: "0001-01-01T00:00:00Z",
+      last_success_at: "2026-10-23T12:00:00Z",
       cooldown_until: "2026-10-25T12:00:00Z",
       source: "generated",
-      success_count: 0,
-      success_days: 0,
+      success_count: 5,
+      real_success_count: 3,
+      real_failure_count: 1,
+      probe_success_count: 2,
+      success_days: 2,
     },
     {
       account: "opencode0c7d8e9f",
@@ -115,6 +121,9 @@ const ledger = {
       cooldown_until: "0001-01-01T00:00:00Z",
       source: "generated",
       success_count: 0,
+      real_success_count: 0,
+      real_failure_count: 0,
+      probe_success_count: 0,
       success_days: 0,
     },
     {
@@ -127,6 +136,9 @@ const ledger = {
       cooldown_until: "0001-01-01T00:00:00Z",
       source: "generated",
       success_count: 0,
+      real_success_count: 0,
+      real_failure_count: 0,
+      probe_success_count: 0,
       success_days: 0,
     },
   ],
@@ -135,12 +147,18 @@ const ledger = {
   untested: 1,
   unusable: 1,
   probe_error: 1,
+  historic: 2,
 };
 
 /** 按台账接口口径过滤, 供 fetch mock 复用。 */
 function ledgerFor(url: string) {
   const filter = /filter=(\w+)/.exec(url)?.[1] ?? "all";
-  const items = ledger.items.filter((item) => filter === "all" || item.state === filter);
+  const hasSuccess = (item: (typeof ledger.items)[number]) => !item.last_success_at.startsWith("0001-");
+  const items = ledger.items.filter((item) => {
+    if (filter === "all") return true;
+    if (filter === "historic") return hasSuccess(item);
+    return item.state === filter;
+  });
   return jsonResponse({
     ...ledger,
     items,
@@ -148,6 +166,7 @@ function ledgerFor(url: string) {
     usable: items.filter((item) => item.state === "usable").length,
     untested: items.filter((item) => item.state === "untested").length,
     unusable: items.filter((item) => item.state === "unusable").length,
+    historic: ledger.items.filter(hasSuccess).length,
   });
 }
 
@@ -343,6 +362,14 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     expect(await screen.findByText("opencode0d9e0f1a2")).toBeInTheDocument();
     expect(screen.getAllByText("opencode0a1b2c3d")).toHaveLength(1);
 
+    // 历史可用筛选: 只显示曾成功过的账号(含冷却中的好号), 未成功账号不出现在台账
+    expect(screen.getByText("历史可用 2")).toBeInTheDocument();
+    await user.click(screen.getByText("历史可用 2"));
+    await waitFor(() =>
+      expect(screen.getAllByText("opencode0e4f5a6b")).toHaveLength(2),
+    );
+    expect(screen.queryByText("opencode0d9e0f1a2")).not.toBeInTheDocument();
+
     // 开关自动体检
     await user.click(screen.getByRole("switch"));
     await waitFor(() => expect(probeBodies.length).toBeGreaterThanOrEqual(2));
@@ -480,6 +507,9 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
         cooldown_until: "0001-01-01T00:00:00Z",
         source: "generated",
         success_count: index,
+        real_success_count: index,
+        real_failure_count: 0,
+        probe_success_count: 0,
         success_days: index % 5,
       })),
       total: 250,
@@ -487,6 +517,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
       untested: 63,
       unusable: 62,
       probe_error: 62,
+      historic: 63,
     };
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
       const url = String(input);

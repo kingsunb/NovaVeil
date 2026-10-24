@@ -174,8 +174,9 @@ func releaseOpencodeProxyAccount(channelID int, account string) {
 	}
 }
 
-// markOpencodeProxySuccess 记录账号成功, 并异步落库。
-func markOpencodeProxySuccess(channelID int, account string) {
+// markOpencodeProxySuccess 记录账号成功并异步落库; probe 为 true 记体检成功,
+// false 记下游真实转发成功, 两路共用最近成功时间与成功天数, 计数列分开累计。
+func markOpencodeProxySuccess(channelID int, account string, probe bool) {
 	now := time.Now()
 	pool := ocProxyPoolFor(channelID)
 	pool.mu.Lock()
@@ -191,8 +192,12 @@ func markOpencodeProxySuccess(channelID int, account string) {
 	state.cooldownUntil = time.Time{}
 	prune := pool.needsPrune()
 	pool.mu.Unlock()
+	save := op.SaveOpencodeProxySuccess
+	if probe {
+		save = op.SaveOpencodeProxyProbeSuccess
+	}
 	go func() {
-		if err := op.SaveOpencodeProxySuccess(channelID, account, now); err != nil {
+		if err := save(channelID, account, now); err != nil {
 			log.Warnf("opencode 代理账号成功记录落库失败: %v", err)
 			return
 		}
@@ -201,6 +206,16 @@ func markOpencodeProxySuccess(channelID int, account string) {
 		}
 		if err := op.PruneOpencodeProxyAccounts(channelID, ocProxyMaxAccounts); err != nil {
 			log.Warnf("opencode 代理账号清理失败: %v", err)
+		}
+	}()
+}
+
+// markOpencodeProxyRealFailure 累计一次下游真实转发失败并异步落库;
+// 只计数, 不影响池内可用性与冷却。
+func markOpencodeProxyRealFailure(channelID int, account string) {
+	go func() {
+		if err := op.SaveOpencodeProxyRealFailure(channelID, account); err != nil {
+			log.Warnf("opencode 代理账号失败记录落库失败: %v", err)
 		}
 	}()
 }

@@ -393,7 +393,7 @@ func probeProxyAccounts(c *gin.Context) {
 	resp.Success(c, report)
 }
 
-// listProxyAccounts 返回渠道账号台账, filter 取 all/usable/untested/unusable。
+// listProxyAccounts 返回渠道账号台账, filter 取 all/usable/untested/unusable/error/historic。
 func listProxyAccounts(c *gin.Context) {
 	channelID, err := strconv.Atoi(c.Query("channel_id"))
 	if err != nil || channelID <= 0 {

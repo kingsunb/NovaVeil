@@ -26,9 +26,21 @@ func LoadOpencodeProxyAccounts(channelID int) ([]model.OpencodeProxyAccount, err
 	return rows, nil
 }
 
-// SaveOpencodeProxySuccess 记录账号最近一次成功, 累计成功次数并按自然日(0 点到 24 点)
-// 去重累计成功天数; 不存在则插入。
+// SaveOpencodeProxySuccess 记录一次下游真实转发成功: 更新最近成功时间, 累计总成功
+// 与真实成功数并按自然日(0 点到 24 点)去重累计成功天数; 不存在则插入。
 func SaveOpencodeProxySuccess(channelID int, account string, at time.Time) error {
+	return saveOpencodeAccountSuccess(channelID, account, at, "real_success_count")
+}
+
+// SaveOpencodeProxyProbeSuccess 记录一次体检探测成功: 计数口径与真实转发共用
+// 最近成功时间与成功天数, 仅拆分计数列。
+func SaveOpencodeProxyProbeSuccess(channelID int, account string, at time.Time) error {
+	return saveOpencodeAccountSuccess(channelID, account, at, "probe_success_count")
+}
+
+// saveOpencodeAccountSuccess 是两类成功记录的公共 upsert: counterColumn 取
+// real_success_count / probe_success_count, 插入行对应列置 1。
+func saveOpencodeAccountSuccess(channelID int, account string, at time.Time, counterColumn string) error {
 	conn := db.GetDB()
 	if conn == nil {
 		return nil
@@ -43,6 +55,11 @@ func SaveOpencodeProxySuccess(channelID int, account string, at time.Time) error
 		SuccessDays:    1,
 		LastSuccessDay: day,
 	}
+	if counterColumn == "probe_success_count" {
+		row.ProbeSuccessCount = 1
+	} else {
+		row.RealSuccessCount = 1
+	}
 	result := conn.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "channel_id"}, {Name: "account"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
@@ -51,10 +68,36 @@ func SaveOpencodeProxySuccess(channelID int, account string, at time.Time) error
 			"success_count":    gorm.Expr("success_count + 1"),
 			"success_days":     gorm.Expr("CASE WHEN last_success_day = ? THEN success_days ELSE success_days + 1 END", day),
 			"last_success_day": day,
+			counterColumn:      gorm.Expr(counterColumn + " + 1"),
 		}),
 	}).Create(&row)
 	if result.Error != nil {
 		return fmt.Errorf("保存代理账号成功记录失败: %w", result.Error)
+	}
+	return nil
+}
+
+// SaveOpencodeProxyRealFailure 累计一次下游真实转发失败, 不动成功与冷却字段。
+func SaveOpencodeProxyRealFailure(channelID int, account string) error {
+	conn := db.GetDB()
+	if conn == nil {
+		return nil
+	}
+	row := model.OpencodeProxyAccount{
+		ChannelID:        channelID,
+		Account:          account,
+		Source:           model.OpencodeAccountSourceTraffic,
+		RealFailureCount: 1,
+	}
+	result := conn.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "channel_id"}, {Name: "account"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"real_failure_count": gorm.Expr("real_failure_count + 1"),
+			"updated_at":         time.Now(),
+		}),
+	}).Create(&row)
+	if result.Error != nil {
+		return fmt.Errorf("保存代理账号失败记录失败: %w", result.Error)
 	}
 	return nil
 }

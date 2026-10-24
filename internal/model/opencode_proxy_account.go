@@ -34,11 +34,16 @@ type OpencodeProxyAccount struct {
 	LastProbeStatus  int       `json:"last_probe_status"`
 	// SuccessCount 是累计成功请求数(真实转发 + 体检); SuccessDays 是有成功请求的
 	// 自然日天数(0 点到 24 点为一天); LastSuccessDay 是最近成功的日键, 用于跨天判定。
-	SuccessCount   int64  `json:"success_count"`
-	SuccessDays    int    `json:"success_days"`
-	LastSuccessDay string `json:"last_success_day"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	// RealSuccessCount/RealFailureCount 是下游真实转发的成功/失败数; ProbeSuccessCount
+	// 是体检探测的成功数; 三者按来源拆分, SuccessCount 仍为两路合计。
+	SuccessCount      int64     `json:"success_count"`
+	RealSuccessCount  int64     `json:"real_success_count"`
+	RealFailureCount  int64     `json:"real_failure_count"`
+	ProbeSuccessCount int64     `json:"probe_success_count"`
+	SuccessDays       int       `json:"success_days"`
+	LastSuccessDay    string    `json:"last_success_day"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // TableName 固定表名, 避免 GORM 复数化差异。
