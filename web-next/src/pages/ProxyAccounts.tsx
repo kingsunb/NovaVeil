@@ -429,7 +429,10 @@ function ChannelSection({ channel }: { channel: Channel }) {
                       </td>
                       <td className="px-2 py-2">{item.success_count}</td>
                       <td className="px-2 py-2">{item.success_days}</td>
-                      <td className="px-2 py-2">{fmtTime(item.last_success_at)}</td>
+                      {/* 未成功过的账号不展示最近成功时间(历史脏数据可能带伪造值) */}
+                      <td className="px-2 py-2">
+                        {item.success_count > 0 ? fmtTime(item.last_success_at) : "-"}
+                      </td>
                       <td className="px-2 py-2 text-right">
                         <ConfirmButton onConfirm={() => void deleteAccounts([item.account])} />
                       </td>
