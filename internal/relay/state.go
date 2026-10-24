@@ -248,6 +248,7 @@ func (r RequestState) MarshalJSON() ([]byte, error) {
 		UpstreamType         string          `json:"upstream_type"`
 		RelayMode            string          `json:"relay_mode"`
 		ProxyAddr            string          `json:"proxy_addr,omitempty"`
+		AccountProbe         bool            `json:"account_probe,omitempty"`
 		Masked               bool            `json:"masked,omitempty"`
 		MaskMatches          []MaskMatch     `json:"mask_matches,omitempty"`
 		MaskMatchesTruncated bool            `json:"mask_matches_truncated,omitempty"`
@@ -270,7 +271,7 @@ func (r RequestState) MarshalJSON() ([]byte, error) {
 		KeyName: r.KeyName, Usage: r.Usage, UsageEstimated: r.UsageEstimated, Round: r.Round,
 		TargetChannel: r.TargetChannel, TargetModel: r.TargetModel, KeyLabel: r.KeyLabel,
 		ThinkingLevel: r.ThinkingLevel, ClientFormat: r.ClientFormat, UpstreamType: r.UpstreamType,
-		RelayMode: r.RelayMode, ProxyAddr: r.ProxyAddr, Masked: r.Masked,
+		RelayMode: r.RelayMode, ProxyAddr: r.ProxyAddr, AccountProbe: r.AccountProbe, Masked: r.Masked,
 		MaskMatches: r.MaskMatches, MaskMatchesTruncated: r.MaskMatchesTruncated,
 		Sending: r.Sending, Error: r.Error, Class: r.Class, Attempts: attempts,
 	})
