@@ -8,7 +8,7 @@ Status: implemented
 
 > `Commands run on Windows using bash.`
 
-而 [v2 parity 笔记](./2026-10-24-opencode-v2-fingerprint-parity.md) 按源码分析把 `opencodeToolDescription` 定为替换成 "on Windows using powershell"——恰好制造出一个真实客户端不会发的字符串，方向反了。措辞源头是 opencode2api 的 `v2ShellDescription`（[2026-10-19 笔记](../../architecture/2026-10-19-opencode2api-compat-followup.md)），源码分析沿用了它。
+而 [v2 parity 笔记](./2026-10-24-opencode-v2-fingerprint-parity.md) 按源码分析把 `opencodeToolDescription` 定为替换成 "on Windows using powershell"——恰好制造出一个真实客户端不会发的字符串，方向反了。措辞源头是 opencode2api 的 `v2ShellDescription`（[2026-10-19 笔记](../architecture/2026-10-19-opencode2api-compat-followup.md)），源码分析沿用了它。
 
 二进制侧证据：`opencode.exe` 中 `"using bash"` 整串出现 0 次，描述是 `on ${平台} using ${shell}` 运行时拼接；Windows 上官方客户端固定以 Git Bash 作为执行 shell（与启动它的 shell 无关），故解析结果恒为 bash。
 
