@@ -208,11 +208,14 @@ func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName,
 		if candidate == "" {
 			candidate = pickOpencodeProxyAccount(ctx, channel.ID)
 		}
-		if resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate); resolveErr == nil {
-			addr := resolved.String()
-			effective.ChannelProxy = &addr
-			proxyAccount = candidate
+		resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate)
+		if resolveErr != nil {
+			// 不回显模板原文, 避免代理凭据进日志与台账。
+			return nil, fmt.Errorf("代理模板解析失败")
 		}
+		addr := resolved.String()
+		effective.ChannelProxy = &addr
+		proxyAccount = candidate
 	}
 	format, _, target := testRequestTarget(effective, modelName, "")
 	raw, err := buildRaw(format)

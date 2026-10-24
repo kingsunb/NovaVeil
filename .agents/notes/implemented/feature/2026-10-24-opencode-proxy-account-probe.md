@@ -10,11 +10,11 @@ Status: implemented
 
 ### 钉号探测（`internal/relay/context_probe.go`）
 
-`probeOnce` 抽出 `probeOnceWithAccount(ctx, channel, modelName, tokens, account)`：account 为空沿用池内选号（原行为不变），非空时强制用该账号探测。拿到 HTTP 响应时结论（Status/Detail/Latency）随 result 返回而非丢弃——`probeOnce` 包装层保持旧契约（err 时 result=nil），`ProbeContextWindow` 调用方无感知。成功/403/429 的池回填逻辑原样复用：**体检结果与转发共享同一套池状态**。
+`probeOnce` 抽出 `probeOnceWithAccount(ctx, channel, modelName, tokens, account)`：account 为空沿用池内选号（原行为不变），非空时强制用该账号探测。拿到 HTTP 响应时结论（Status/Detail/Latency）随 result 返回而非丢弃——`probeOnce` 包装层保持旧契约（err 时 result=nil），`ProbeContextWindow` 调用方无感知。成功/403/429 的池回填逻辑原样复用：**体检结果与转发共享同一套池状态**。`channel_proxy` 模板解析失败时探测直接报错（不回显模板原文，避免代理凭据进日志与台账），不带着未替换的 `{account}` 占位符出站。
 
 ### 批量体检（`internal/relay/opencode_account_probe.go`）
 
-`ProbeOpencodeAccounts(ctx, channelID, accounts, count, concurrency, timeoutMS)`：渠道须为含 `{account}` 代理的免费档（`proxyNeedsOpencodeAccount` 同口径）；accounts 空时生成随机账号（复用 `opencodeXXXX` 生成器），非空时去重并校验字符集（`^[A-Za-z0-9_-]{1,64}$`，账号要拼进代理 userinfo）；worker 池并发（默认 10，上限 20）各打一次 16 token 极小真实请求（输出预算已被探测路径收敛为 1）。结论三分类：healthy（2xx）/ rejected（403/429）/ error（其余，含代理与网络故障，不入池不冷却）。单次上限 200 个、单账号超时上限 120s。
+`ProbeOpencodeAccounts(ctx, channelID, accounts, count, concurrency, timeoutMS)`：渠道须为含 `{account}` 代理的免费档（`proxyNeedsOpencodeAccount` 同口径）；accounts 空时生成随机账号（复用 `opencodeXXXX` 生成器），非空时去重并校验字符集（`^[A-Za-z0-9_-]{1,64}$`，账号要拼进代理 userinfo）；worker 池并发（默认 10，上限 20）各打一次 16 token 极小真实请求（输出预算已被探测路径收敛为 1）。结论三分类：healthy（2xx）/ rejected（403/429）/ error（其余，含代理与网络故障，不入池不冷却）。单次上限 2000 个、单账号超时上限 120s。
 
 ### API 与页面
 
@@ -22,7 +22,7 @@ Status: implemented
 
 ### 账号台账与自动体检（同日追加）
 
-生成/粘贴的账号**探测前即落账**（`op.UpsertOpencodeGeneratedAccounts`，source=generated），探测结论同步回写（`SaveOpencodeProbeResult`），台账长期保存。`GET /channel/proxy-accounts?filter=` 返回三态派生视图：可用=未冷却且（最近探测健康或 7 天内有转发成功）；未测试=从未探测且从未成功；不可用=冷却中或最近探测被拒且无在效成功。`DELETE /channel/proxy-accounts` 删除台账账号并同步清理进程内池。自动体检：设置键 `opencode_account_auto_probe`（默认开启，台账为空时空转；不进 DefaultSettings，随缓存初始化惰性补种），后台任务每 24 小时跑一轮，只测距上次体检超过周期的账号（最早优先，单渠道单轮 200 个上限），健康探测会清除既有冷却（复用成功回填）。
+生成/粘贴的账号**探测前即落账**（`op.UpsertOpencodeGeneratedAccounts`，source=generated），探测结论同步回写（`SaveOpencodeProbeResult`），台账长期保存。`GET /channel/proxy-accounts?filter=` 返回四态派生视图：可用=未冷却且（最近探测健康或 7 天内有转发成功）；未测试=从未探测且从未成功；不可用=冷却中或最近探测被拒且无在效成功；网络错误=最近探测遇基础设施故障且无在效成功（不代表账号被封，单独筛选可复测）。`DELETE /channel/proxy-accounts` 删除台账账号并同步清理进程内池。自动体检：设置键 `opencode_account_auto_probe`（默认开启，台账为空时空转；不进 DefaultSettings，随缓存初始化惰性补种），后台任务每 24 小时跑一轮，只测距上次体检超过周期的账号（最早优先，单渠道单轮上限与单次体检对齐，2000），健康探测会清除既有冷却（复用成功回填）。
 
 配套修复两处由「未探测账号落账」暴露的池语义问题：`loadOpencodeProxyPool` 不再整行视为 verified（按 last_success_at 判定），`markOpencodeProxyCooldown` 补做首次加载（原首载竞态会用库内旧行覆盖内存冷却）。
 
@@ -49,4 +49,4 @@ cd web-next && pnpm typecheck && pnpm lint && pnpm test -- ProxyAccounts
 - `TestProbeOpencodeAccountsGenerateAndValidate`：生成模式（去重、`opencode` 前缀格式）、非法字符拒绝、超上限拒绝、非 `{account}` 渠道拒绝。
 - `TestOpencodeAccountLedgerStates`：三态派生（健康/冷却/未测试/被拒无在效成功）、筛选与删除。
 - `TestOpencodeAutoProbeDueAccounts`：到期选择（未探测立即到期、周期内跳过、上限截断）。
-- 前端六用例：渠道过滤、默认参数与结果表、自定义账号列表、空态、台账三态/筛选/开关、台账删除。
+- 前端用例：渠道过滤、默认参数与结果表、生成上限、一键测试（生成数量非法不阻塞）、四态筛选/勾选/自动体检、台账删除、批量删除已选、分页。

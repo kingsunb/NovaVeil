@@ -400,7 +400,7 @@ func DeleteOpencodeAccountsFromLedger(channelID int, accounts []string) (int64, 
 
 // AutoProbeOpencodeAccounts 对启用 {account} 代理的免费档渠道执行到期账号体检。
 // 由后台任务每 24 小时调用; 开关(opencode_account_auto_probe)关闭时直接返回。
-// 到期 = 距上次体检超过周期(未探测的生成账号立即到期), 单渠道单轮最多 200 个。
+// 到期 = 距上次体检超过周期(未探测的生成账号立即到期), 单渠道单轮上限与单次体检对齐。
 func AutoProbeOpencodeAccounts(ctx context.Context) error {
 	enabled, err := op.SettingGetBool(model.SettingKeyOpencodeAccountAutoProbe)
 	if err != nil {
