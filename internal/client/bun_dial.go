@@ -23,11 +23,13 @@ import (
 // http.DefaultTransport.
 const bunHandshakeTimeout = 30 * time.Second
 
-// bunClientHello returns the ClientHello of Bun's fetch, captured from Bun
-// 1.4.3. Bun links its own BoringSSL, so the hello is the same on every
-// platform: JA4 t13d1713h1, no GREASE, no padding, http/1.1 as the only ALPN
-// protocol and X25519MLKEM768 as the first key share. uTLS keeps handshake
-// state in the extensions, so every connection needs a fresh spec.
+// bunClientHello returns the ClientHello of Bun's fetch. The skeleton was
+// captured from Bun 1.4.3 and re-verified field by field on 2026-10-24 against
+// the official opencode 2.1.4 / 1.19.4 clients, which run Bun 1.4.4: Bun links
+// its own BoringSSL, so the hello is the same on every platform: JA4
+// t13d1713h1, no GREASE, no padding, http/1.1 as the only ALPN protocol and
+// X25519MLKEM768 as the first key share. uTLS keeps handshake state in the
+// extensions, so every connection needs a fresh spec.
 // 2026-10-24 sigalgs 对齐官方客户端实抓(opencode 2.1.4 与 1.19.4 均含
 // Ed25519 与 P-521, 尾序在 PKCS1WithSHA512 后): 缺此两项时上游对免费档
 // 一律 429 FreeUsageLimitError, 补齐后同出口恢复 200。

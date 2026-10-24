@@ -25,6 +25,7 @@ Status: implemented
 ## Consequences
 
 - **收益**：免费档出站与官方客户端 TLS 指纹逐字段一致；指纹墙导致的 429 消除（v1 档同 IP 429→200 已实测闭环，v2 档指纹同样对齐）。
+- **版本同步清单（升级必查三处）**：`internal/client/bun.go` 的 `bunRuntimeVersion`（UA 回退 `Bun/<version>`）、`internal/client/bun_dial.go` 的 `bunClientHello` 指纹与注释、`internal/model/opencode_protocol.go` 的 `opencodeV1BunVersion`。2026-10-24 一并统一到 `1.4.4`：官方 2.1.4/1.19.4 客户端（跑 Bun 1.4.4）实抓 ClientHello 与本 spec 逐字段一致，即 Bun 1.4.3→1.4.4 的 TLS 指纹仅 sigalgs 两项之差，骨架未变。该清单已固化为 [AGENTS.md 约定](../../../../AGENTS.md)。
 - **代价与已知上限**：剩余 429 属出口 IP 免费额度耗尽（住宅池 IP 共享所致），账号体检的换号机制是既有对策，不是代码缺陷；上游未来再改 ClientHello 时需重抓对比，重访信号是「真客户端 200 + 本仓 429」的对照再次出现。
 - **判定口径**：排查 429 时先看错误体——`FreeUsageLimitError` 且真客户端同出口也 429 是 IP 额度；`FreeUsageLimitError` 但真客户端同出口 200 是指纹回归。
 

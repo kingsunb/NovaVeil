@@ -29,7 +29,7 @@ import (
 // bunRuntimeVersion 是 Bun 运行时版本, 用于 BunTransport 默认 User-Agent 回退
 // ("Bun/<version>")。OpenCode 1.x/2.x CLI 均跑在 Bun 上, 出站 User-Agent 通常已由
 // 渠道配置或 applyOpencodeFreeLaneHeaders 显式设置, 此回退仅在调用方未设时生效。
-const bunRuntimeVersion = "1.3.14"
+const bunRuntimeVersion = "1.4.4"
 
 // BunOptions configures a BunTransport. The fields mirror their namesakes on
 // http.Transport; a nil Proxy dials the upstream directly.
