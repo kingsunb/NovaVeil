@@ -29,7 +29,8 @@ func cleanFabricatedOpencodeSuccessTimes(db *gorm.DB) error {
 		return nil
 	}
 	var rows []model.OpencodeProxyAccount
-	if err := db.Where("success_count = ?", 0).Find(&rows).Error; err != nil {
+	// success_count 列晚于存量行加入(AutoMigrate 补列后旧行为 NULL), 判据必须含 NULL。
+	if err := db.Where("success_count IS NULL OR success_count = ?", 0).Find(&rows).Error; err != nil {
 		return fmt.Errorf("查询待清理的代理账号失败: %w", err)
 	}
 	for _, row := range rows {

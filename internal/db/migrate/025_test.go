@@ -46,6 +46,13 @@ func TestCleanFabricatedOpencodeSuccessTimes(t *testing.T) {
 	}
 	// 未探测行: 无冷却无成功。
 	untested := model.OpencodeProxyAccount{ChannelID: 1, Account: "acct-untested"}
+	// 旧行经 AutoMigrate 补列后 success_count 为 NULL 的伪造行(线上真实形态)。
+	if err := database.Exec(
+		`INSERT INTO opencode_proxy_accounts (channel_id, account, last_success_at, cooldown_until, success_count, success_days) VALUES (?, ?, ?, ?, NULL, NULL)`,
+		1, "acct-fabricated-null", fabricatedCooldown.Add(-7*24*time.Hour), fabricatedCooldown,
+	).Error; err != nil {
+		t.Fatalf("seed null row: %v", err)
+	}
 	for _, row := range []*model.OpencodeProxyAccount{&fabricated, &realSuccess, &plainSuccess, &untested} {
 		if err := database.Create(row).Error; err != nil {
 			t.Fatalf("seed %s: %v", row.Account, err)
@@ -69,6 +76,9 @@ func TestCleanFabricatedOpencodeSuccessTimes(t *testing.T) {
 	}
 	if !loaded["acct-fabricated"].LastSuccessAt.IsZero() {
 		t.Fatalf("伪造的最近成功应被清零: %+v", loaded["acct-fabricated"])
+	}
+	if fn, ok := loaded["acct-fabricated-null"]; !ok || !fn.LastSuccessAt.IsZero() {
+		t.Fatalf("NULL 计数的伪造行最近成功应被清零: %+v", fn)
 	}
 	for _, account := range []string{"acct-real-success", "acct-plain-success"} {
 		if loaded[account].LastSuccessAt.IsZero() {
