@@ -24,8 +24,21 @@ func insertOcAccountAt(t *testing.T, channelID int, account string, success, coo
 	require.NoError(t, db.GetDB().Create(&row).Error)
 }
 
-// TestPruneOpencodeProxyAccounts 按最近活跃时间(成功/冷却/体检取最大)裁剪到 keep 条:
-// 冷却中的记录不会被提前清掉, 零值最旧, 且不影响其他渠道。
+// insertOcAccountWithSuccess 落库一个成功过的代理账号(带成功计数)。
+func insertOcAccountWithSuccess(t *testing.T, channelID int, account string, success time.Time, count int64) {
+	t.Helper()
+	row := model.OpencodeProxyAccount{
+		ChannelID:     channelID,
+		Account:       account,
+		LastSuccessAt: success,
+		SuccessCount:  count,
+		Source:        model.OpencodeAccountSourceTraffic,
+	}
+	require.NoError(t, db.GetDB().Create(&row).Error)
+}
+
+// TestPruneOpencodeProxyAccounts 全为未成功组时按最近活跃时间(成功/冷却/体检取最大)
+// 裁剪到 keep 条: 冷却中的记录不被先清, 零值最旧, 且不影响其他渠道。
 func TestPruneOpencodeProxyAccounts(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	insertOcAccountAt(t, 970001, "keep-cooling", base, base.Add(5*time.Hour), base)
@@ -54,4 +67,23 @@ func TestPruneOpencodeProxyAccounts(t *testing.T) {
 	require.NoError(t, PruneOpencodeProxyAccounts(970001, 2))
 	require.NoError(t, db.GetDB().Where("channel_id = ?", 970001).Find(&remaining).Error)
 	assert.Len(t, remaining, 2)
+}
+
+// TestPruneOpencodeProxyAccountsKeepsHistoric 超限淘汰先删从未成功过的账号:
+// 历史可用(累计成功过)优先保留, 哪怕其最近活跃时间更旧、未成功号仍在冷却。
+func TestPruneOpencodeProxyAccountsKeepsHistoric(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	insertOcAccountWithSuccess(t, 970003, "historic-old", base, 3)
+	insertOcAccountAt(t, 970003, "rejected-cooling", base, base.Add(100*time.Hour), base)
+	insertOcAccountAt(t, 970003, "untested-probed", base, base, base.Add(50*time.Hour))
+	t.Cleanup(func() {
+		_ = db.GetDB().Where("channel_id = ?", 970003).Delete(&model.OpencodeProxyAccount{}).Error
+	})
+
+	require.NoError(t, PruneOpencodeProxyAccounts(970003, 1))
+
+	var remaining []model.OpencodeProxyAccount
+	require.NoError(t, db.GetDB().Where("channel_id = ?", 970003).Find(&remaining).Error)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, "historic-old", remaining[0].Account, "历史可用优先保留")
 }

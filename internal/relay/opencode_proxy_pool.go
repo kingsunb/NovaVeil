@@ -138,22 +138,16 @@ func (p *ocProxyPool) needsPrune() bool {
 	return true
 }
 
-// trimLocked 把内存账号数压回上限, 淘汰最久未活跃的; 调用方需持锁。
-// 活跃时间取最近成功与冷却截止的较大者: 冷却中的记录同样计入活跃, 不会被提前清掉。
+// trimLocked 把内存账号数压回上限, 淘汰序与库内一致: 未成功过的先清,
+// 同组按最久未活跃; 调用方需持锁。
 func (p *ocProxyPool) trimLocked(keep string) {
-	recency := func(state *ocProxyAccount) time.Time {
-		if state.cooldownUntil.After(state.lastSuccessAt) {
-			return state.cooldownUntil
-		}
-		return state.lastSuccessAt
-	}
 	for len(p.accounts) > ocProxyMaxAccounts {
 		var oldest *ocProxyAccount
 		for _, state := range p.accounts {
 			if state.account == keep {
 				continue
 			}
-			if oldest == nil || recency(state).Before(recency(oldest)) {
+			if oldest == nil || ocProxyEvictFirst(state, oldest) {
 				oldest = state
 			}
 		}
@@ -162,6 +156,22 @@ func (p *ocProxyPool) trimLocked(keep string) {
 		}
 		delete(p.accounts, oldest.account)
 	}
+}
+
+// ocProxyRecency 取最近成功与冷却截止的较大者作为活跃时间。
+func ocProxyRecency(state *ocProxyAccount) time.Time {
+	if state.cooldownUntil.After(state.lastSuccessAt) {
+		return state.cooldownUntil
+	}
+	return state.lastSuccessAt
+}
+
+// ocProxyEvictFirst 报告 a 是否比 b 先淘汰: 未成功过的先清, 同组最久未活跃先清。
+func ocProxyEvictFirst(a, b *ocProxyAccount) bool {
+	if a.verified != b.verified {
+		return !a.verified
+	}
+	return ocProxyRecency(a).Before(ocProxyRecency(b))
 }
 
 // releaseOpencodeProxyAccount 归还账号的并发槽位。

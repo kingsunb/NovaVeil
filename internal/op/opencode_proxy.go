@@ -194,8 +194,9 @@ func DeleteOpencodeProxyAccounts(channelID int, accounts []string) (int64, error
 	return result.RowsAffected, nil
 }
 
-// PruneOpencodeProxyAccounts 删除某渠道最旧的记录直到不超过 keep 条。
-// 淘汰序按最近活跃时间(成功/冷却/体检三者取最大)排序, 冷却中的记录不会被提前清掉。
+// PruneOpencodeProxyAccounts 淘汰某渠道记录直到不超过 keep 条。
+// 历史可用(累计成功过)优先保留, 从未成功过的先删;
+// 同组按最近活跃时间(成功/冷却/体检三者取最大)从旧到新淘汰。
 // 排序在应用层做: 多参 MAX 与裸 OFFSET 仅 SQLite 合法, MySQL/Postgres 直接报错。
 func PruneOpencodeProxyAccounts(channelID int, keep int) error {
 	conn := db.GetDB()
@@ -210,6 +211,9 @@ func PruneOpencodeProxyAccounts(channelID int, keep int) error {
 		return nil
 	}
 	sort.Slice(rows, func(i, j int) bool {
+		if (rows[i].SuccessCount > 0) != (rows[j].SuccessCount > 0) {
+			return rows[i].SuccessCount > 0
+		}
 		return ocAccountRecency(rows[i]).After(ocAccountRecency(rows[j]))
 	})
 	stale := make([]uint, 0, len(rows)-keep)
