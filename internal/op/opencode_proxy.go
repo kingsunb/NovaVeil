@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/kingsunb/NovaVeil/internal/db"
@@ -149,27 +150,42 @@ func DeleteOpencodeProxyAccounts(channelID int, accounts []string) (int64, error
 
 // PruneOpencodeProxyAccounts 删除某渠道最旧的记录直到不超过 keep 条。
 // 淘汰序按最近活跃时间(成功/冷却/体检三者取最大)排序, 冷却中的记录不会被提前清掉。
+// 排序在应用层做: 多参 MAX 与裸 OFFSET 仅 SQLite 合法, MySQL/Postgres 直接报错。
 func PruneOpencodeProxyAccounts(channelID int, keep int) error {
 	conn := db.GetDB()
 	if conn == nil || keep <= 0 {
 		return nil
 	}
-	var stale []uint
-	err := conn.Model(&model.OpencodeProxyAccount{}).
-		Where("channel_id = ?", channelID).
-		Order("MAX(last_success_at, cooldown_until, last_probe_at) DESC").
-		Offset(keep).
-		Pluck("id", &stale).Error
-	if err != nil {
+	var rows []model.OpencodeProxyAccount
+	if err := conn.Where("channel_id = ?", channelID).Find(&rows).Error; err != nil {
 		return fmt.Errorf("查询待清理代理账号失败: %w", err)
 	}
-	if len(stale) == 0 {
+	if len(rows) <= keep {
 		return nil
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return ocAccountRecency(rows[i]).After(ocAccountRecency(rows[j]))
+	})
+	stale := make([]uint, 0, len(rows)-keep)
+	for _, row := range rows[keep:] {
+		stale = append(stale, row.ID)
 	}
 	if err := conn.Delete(&model.OpencodeProxyAccount{}, stale).Error; err != nil {
 		return fmt.Errorf("清理代理账号失败: %w", err)
 	}
 	return nil
+}
+
+// ocAccountRecency 取成功/冷却/体检三个时间的最大值, 零值视为最旧。
+func ocAccountRecency(row model.OpencodeProxyAccount) time.Time {
+	recency := row.LastSuccessAt
+	if row.CooldownUntil.After(recency) {
+		recency = row.CooldownUntil
+	}
+	if row.LastProbeAt.After(recency) {
+		recency = row.LastProbeAt
+	}
+	return recency
 }
 
 // EnsureOpencodeAccountAutoProbeSetting 保证自动体检开关的设置行存在并载入缓存。
