@@ -571,7 +571,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				if apiKeyID > 0 {
 					callerScope = strconv.Itoa(apiKeyID)
 				}
-				requestOpencodeSession = opencodeid.DeriveSessionID(raw.Headers, raw.Body, callerScope)
+				requestOpencodeSession = opencodeid.DeriveSessionID(raw.Headers, raw.Body, callerScope, isOpencodeV1Lane(channel))
 				requestRandomValueResolved = true
 			}
 			var result *upstreamResponse

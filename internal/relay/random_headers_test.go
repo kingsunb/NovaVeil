@@ -653,7 +653,7 @@ func TestInjectOpencodeCorrelationHeadersV2Child(t *testing.T) {
 
 func TestInjectOpencodeCorrelationHeadersV2Parent(t *testing.T) {
 	channel := model.Channel{ID: 1002, OpencodeCompat: true, BaseURL: "https://opencode.ai/inference"}
-	parent := opencodeid.SessionIDFromSignal("parent-signal")
+	parent := opencodeid.SessionIDFromSignal("parent-signal", false)
 
 	for attempt := 0; attempt < 2; attempt++ {
 		req := newRandomHeaderRequest()
@@ -696,7 +696,7 @@ func TestInjectOpencodeCorrelationHeadersV2Parent(t *testing.T) {
 
 func TestInjectOpencodeCorrelationHeadersV1Unchanged(t *testing.T) {
 	channel := model.Channel{ID: 1003, OpencodeCompat: true, BaseURL: "https://opencode.ai/zen"}
-	parent := opencodeid.SessionIDFromSignal("parent-signal")
+	parent := opencodeid.SessionIDFromSignal("parent-signal", true)
 	req := newRandomHeaderRequest()
 	req.Headers.Set(opencodeSessionHeader, validSesA)
 	req.Headers.Set(opencodeSessionIDHeader, validSesB)

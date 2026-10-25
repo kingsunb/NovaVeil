@@ -268,7 +268,7 @@ func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient
 		parent = gjson.GetBytes(request.Body, "metadata.parent_session_id").String()
 	}
 	if parent != "" {
-		parent = opencodeid.SessionIDFromSignal(parent)
+		parent = opencodeid.SessionIDFromSignal(parent, v1)
 		request.Headers.Set(opencodeParentHeader, parent)
 		request.Headers.Set(opencodeParentSessionHeader, parent)
 		if !v1 {

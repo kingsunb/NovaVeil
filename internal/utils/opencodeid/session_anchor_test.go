@@ -17,8 +17,8 @@ func TestSessionIDFromSignalStaysInWindow(t *testing.T) {
 	currentEra := now / era
 	oldest := now - 31*sessionDayMillis - 24*3600*1000
 	for _, signal := range []string{"conv-a", "conv-b", "x"} {
-		first := SessionIDFromSignal(signal)
-		if again := SessionIDFromSignal(signal); again != first {
+		first := SessionIDFromSignal(signal, false)
+		if again := SessionIDFromSignal(signal, false); again != first {
 			t.Fatalf("同一信号应恒定派生: %s vs %s", first, again)
 		}
 		m := pattern.FindStringSubmatch(first)
@@ -43,7 +43,7 @@ func TestSessionIDFromSignalStaysInWindow(t *testing.T) {
 		}
 	}
 	official := GenerateSessionID()
-	if SessionIDFromSignal(official) != official {
+	if SessionIDFromSignal(official, false) != official {
 		t.Fatal("官方号应原样保留")
 	}
 }

@@ -43,14 +43,14 @@ func IsOfficialSessionID(signal string) bool {
 
 // ScopedSessionID 混入调用者 scope 后确定性派生 ses_ 会话号。
 // 官方号原样保留; 其余信号混入 scope 再哈希, 使不同调用者不共享会话。
-func ScopedSessionID(scope, signal string) string {
+func ScopedSessionID(scope, signal string, v1Lane bool) string {
 	if IsOfficialSessionID(signal) {
 		return signal
 	}
 	if scope != "" {
 		signal = scope + "\x00" + signal
 	}
-	return SessionIDFromSignal(signal)
+	return SessionIDFromSignal(signal, v1Lane)
 }
 
 // ExtractSessionSignal 从 10+ 源提取会话信号, 空则回退 conversationSeed / previous_response_id。
@@ -78,12 +78,12 @@ func ExtractSessionSignal(headers http.Header, body []byte) string {
 
 // DeriveSessionID 提取信号、混入 scope、确定性派生 ses_ 会话号。
 // 信号全空时随机生成, 与上游 DeriveRequestIDs 的最终回退一致。
-func DeriveSessionID(headers http.Header, body []byte, scope string) string {
+func DeriveSessionID(headers http.Header, body []byte, scope string, v1Lane bool) string {
 	signal := ExtractSessionSignal(headers, body)
 	if signal == "" {
 		signal = GenerateSessionID()
 	}
-	return ScopedSessionID(scope, signal)
+	return ScopedSessionID(scope, signal, v1Lane)
 }
 
 // ConversationSeed 指纹对话开头: system/instructions + 首条 user turn。
