@@ -25,7 +25,17 @@ func probeChatOKBody() []byte {
 
 // TestProbeOpencodeAccountsClassifiesAndSeedsPool 验证批量体检的三类结论与池回填:
 // 健康→verified 入池优先复用; 403→24h 冷却; 其余非 2xx 归为失败不冷却。
+
+// ocProbePinQuestion 测试内锁定单一体检问题, 保持端到端断言确定性。
+func ocProbePinQuestion(t *testing.T) {
+	t.Helper()
+	questions := ocProbeQuestions
+	ocProbeQuestions = []string{defaultTestMessage}
+	t.Cleanup(func() { ocProbeQuestions = questions })
+}
+
 func TestProbeOpencodeAccountsClassifiesAndSeedsPool(t *testing.T) {
+	ocProbePinQuestion(t)
 	setupFailoverTest(t)
 	probe := newOpencodeProxyProbe(t, func(account string) (int, []byte) {
 		if strings.HasSuffix(account, "bad") {
@@ -83,6 +93,7 @@ func TestProbeOpencodeAccountsClassifiesAndSeedsPool(t *testing.T) {
 
 // TestProbeOpencodeAccountsGenerateAndValidate 验证随机生成模式与入参校验。
 func TestProbeOpencodeAccountsGenerateAndValidate(t *testing.T) {
+	ocProbePinQuestion(t)
 	setupFailoverTest(t)
 	probe := newOpencodeProxyProbe(t, func(string) (int, []byte) {
 		return http.StatusOK, probeChatOKBody()
@@ -325,7 +336,7 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 			OpencodeCompat: true,
 			Models:         []model.ChannelModel{{Name: "probe-free-model"}},
 		}
-		raw, err := ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, channel, "probe-free-model", "Probe Free Model", 0)
+		raw, err := ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, channel, "probe-free-model", "Probe Free Model", defaultTestMessage, 0)
 		if err != nil {
 			t.Fatalf("%s 档构造失败: %v", c.lane, err)
 		}
@@ -344,7 +355,7 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 
 	// 非免费模型回退极小请求, 模型级输出上限在免费档透传。
 	channel := model.Channel{Type: model.ChannelProviderOpenAI, BaseURL: "http://opencode.test/inference", Models: []model.ChannelModel{{Name: "paid-model", MaxOutput: 12345}}}
-	raw, err := ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, channel, "paid-model", "", 12345)
+	raw, err := ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, channel, "paid-model", "", defaultTestMessage, 12345)
 	if err != nil {
 		t.Fatalf("付费模型构造失败: %v", err)
 	}
@@ -352,7 +363,7 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 		t.Fatalf("非免费模型应回退极小请求: %d 条消息", got)
 	}
 	freeChannel := model.Channel{Type: model.ChannelProviderOpenAI, BaseURL: "http://opencode.test/inference", IsFree: true, Models: []model.ChannelModel{{Name: "probe-free-model", MaxOutput: 9999}}}
-	raw, err = ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, freeChannel, "probe-free-model", "", 9999)
+	raw, err = ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, freeChannel, "probe-free-model", "", defaultTestMessage, 9999)
 	if err != nil {
 		t.Fatalf("免费模型构造失败: %v", err)
 	}
@@ -364,14 +375,14 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 // TestOcProbeClientBodyShapingIdempotent 验证免费档整形对实抓模板幂等:
 // 出站正文不会被整形层二次改写, 与上游逐字节门禁的口径锁定。
 func TestOcProbeClientBodyShapingIdempotent(t *testing.T) {
-	v1Body, err := ocProbeClientBody("v1", "probe-free-model", "", 0)
+	v1Body, err := ocProbeClientBody("v1", "probe-free-model", "", defaultTestMessage, 0)
 	if err != nil {
 		t.Fatalf("v1 模板构造失败: %v", err)
 	}
 	if shaped, _, _ := shapeOpencodeFreeBody(v1Body, true, model.UpstreamProtocolChat); string(shaped) != string(v1Body) {
 		t.Fatal("v1 档整形不应改写体检模板")
 	}
-	v2Body, err := ocProbeClientBody("v2", "probe-free-model", "", 0)
+	v2Body, err := ocProbeClientBody("v2", "probe-free-model", "", defaultTestMessage, 0)
 	if err != nil {
 		t.Fatalf("v2 模板构造失败: %v", err)
 	}
@@ -383,6 +394,7 @@ func TestOcProbeClientBodyShapingIdempotent(t *testing.T) {
 // TestProbeOpencodeAccountsSendsClientFormAndUniqueSessions 端到端验证 v2 免费档体检:
 // 出站正文为官方客户端完整形态, 且每个账号的会话号互不相同。
 func TestProbeOpencodeAccountsSendsClientFormAndUniqueSessions(t *testing.T) {
+	ocProbePinQuestion(t)
 	setupFailoverTest(t)
 	probe := newOpencodeProxyProbe(t, func(string) (int, []byte) {
 		return http.StatusOK, probeChatOKBody()
@@ -475,6 +487,7 @@ func waitForOpencodeAccountCounters(t *testing.T, channelID int, account string,
 // TestProbeOpencodeAccountsRecordsProbeSuccessCounter 验证体检成功只计体检计数,
 // 不与真实转发成功混账。
 func TestProbeOpencodeAccountsRecordsProbeSuccessCounter(t *testing.T) {
+	ocProbePinQuestion(t)
 	setupFailoverTest(t)
 	probe := newOpencodeProxyProbe(t, func(account string) (int, []byte) {
 		if account == "user_bad" {

@@ -22,7 +22,7 @@ import { zhCN } from "@/locales/zh-CN";
 
 /** 与后端 ocProbe* 常量对齐。 */
 const MAX_ACCOUNTS = 30000;
-const MAX_CONCURRENCY = 20;
+const MAX_CONCURRENCY = 50;
 const DEFAULT_COUNT = 100;
 const DEFAULT_CONCURRENCY = 10;
 /** 一键测试时分批调用体检接口的批大小。 */

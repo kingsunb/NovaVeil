@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"regexp"
 	"runtime"
@@ -31,7 +32,7 @@ const (
 	// ocProbeMaxAccounts 单次体检的账号数上限, 与台账容量对齐。
 	ocProbeMaxAccounts = 30_000
 	// ocProbeMaxConcurrency 单次体检的并发上限。
-	ocProbeMaxConcurrency = 20
+	ocProbeMaxConcurrency = 50
 	// ocProbeDefaultConcurrency 未指定时的并发数。
 	ocProbeDefaultConcurrency = 10
 	// ocProbeDefaultCount 未指定时的生成数量。
@@ -45,6 +46,25 @@ const (
 	ocProbeOutcomeRejected = "rejected"
 	ocProbeOutcomeError    = "error"
 )
+
+// ocProbeQuestions 是体检问题池: 全量账号用同一文案出站易被上游按消息指纹
+// 聚合识别, 每次探测随机选一问; 含 %d 的问题以 1-1000 随机数值填充。
+var ocProbeQuestions = []string{
+	"在吗？你是什么模型？你的知识时间截止到什么时候？",
+	"我要去洗汽车，洗车店离我家只有%dm，走路去还是坐公交车去？回复最多五个字。",
+	"在面积为1的矩形ABCD中（包括边界）有5个点，其中任意三点不共线。求以这5个点为顶点的所有三角形中，面积不大于1/4的三角形的个数的最小值。",
+	"有一堆煤，第一天拉走总量的4/7，第二天拉走4/7吨，哪一天拉得多?",
+	"在一个有32个成员的课程群里，老师(群主)发布消息：\"我从教务系统中导出的课程设计名单中仅有31名同学，现在群里有32名同学，请大家看看哪位同学进错了群\"。如果你是上这门课的同学，你该怎么办?",
+}
+
+// ocProbeRandomQuestion 返回随机体检问题, 含 %d 占位的以 1-1000 填充。
+func ocProbeRandomQuestion() string {
+	question := ocProbeQuestions[rand.Intn(len(ocProbeQuestions))]
+	if strings.Contains(question, "%d") {
+		question = fmt.Sprintf(question, 1+rand.Intn(1000))
+	}
+	return question
+}
 
 // ocProbeAccountPattern 限制账号字符集: 账号会被拼进代理 URL 的 userinfo,
 // 只放行 userinfo 安全字符, 避免畸形账号破坏代理解析。
@@ -221,7 +241,7 @@ func ocProbeAccountList(accounts []string, count int) ([]string, error) {
 // ocProbeRawRequest 构造与官方客户端逐字节同构的体检请求。免费档 chat 模型按实抓模板
 // 发送完整 Agent 形态消息(系统提示+全量工具+流式参数), 免费档整形对其幂等; 其余(非
 // chat 协议或非免费模型)回退面板构造器, 避免在付费档燃烧大系统提示的 token。
-func ocProbeRawRequest(format llm.APIFormat, channel model.Channel, modelName, displayName string, maxOutput int) (*httpclient.Request, error) {
+func ocProbeRawRequest(format llm.APIFormat, channel model.Channel, modelName, displayName, question string, maxOutput int) (*httpclient.Request, error) {
 	if format != llm.APIFormatOpenAIChatCompletion || !isOpencodeFreeModel(channel, modelName) {
 		return newTestRequest(format, modelName, defaultTestMessage, 1)
 	}
@@ -229,7 +249,7 @@ func ocProbeRawRequest(format llm.APIFormat, channel model.Channel, modelName, d
 	if isOpencodeV1Lane(channel) {
 		lane = "v1"
 	}
-	body, err := ocProbeClientBody(lane, modelName, displayName, maxOutput)
+	body, err := ocProbeClientBody(lane, modelName, displayName, question, maxOutput)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +311,7 @@ var ocProbeProjectID = func() string {
 
 // ocProbeClientBody 按官方客户端实抓形态装配体检正文: 键序、参数、工具与抓包一致,
 // 仅模型、展示名、日期与用户消息按当次探测填充。maxOutput 非正时回退 32000。
-func ocProbeClientBody(lane, modelName, displayName string, maxOutput int) ([]byte, error) {
+func ocProbeClientBody(lane, modelName, displayName, question string, maxOutput int) ([]byte, error) {
 	templates, err := loadOcProbeTemplates()
 	if err != nil {
 		return nil, err
@@ -319,7 +339,7 @@ func ocProbeClientBody(lane, modelName, displayName string, maxOutput int) ([]by
 	if err != nil {
 		return nil, err
 	}
-	userJSON, err := marshalOpencodeJSON(defaultTestMessage)
+	userJSON, err := marshalOpencodeJSON(question)
 	if err != nil {
 		return nil, err
 	}
@@ -425,7 +445,7 @@ func ocProbeOne(ctx context.Context, channel model.Channel, modelName, displayNa
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	probe, err := probeOnceWithAccount(probeCtx, channel, modelName, account, func(format llm.APIFormat) (*httpclient.Request, error) {
-		return ocProbeRawRequest(format, channel, modelName, displayName, ocProbeChannelMaxOutput(channel, modelName))
+		return ocProbeRawRequest(format, channel, modelName, displayName, ocProbeRandomQuestion(), ocProbeChannelMaxOutput(channel, modelName))
 	}, false)
 	switch {
 	case err != nil && probe == nil:

@@ -79,7 +79,7 @@ func TestEnsureOfficialOpencodeSystemIdempotent(t *testing.T) {
 }
 
 func TestEnsureOfficialOpencodeSystemLeavesProbeTemplateAlone(t *testing.T) {
-	body, err := ocProbeClientBody("v1", "m1", "m1", 0)
+	body, err := ocProbeClientBody("v1", "m1", "m1", defaultTestMessage, 0)
 	if err != nil {
 		t.Fatalf("build probe body: %v", err)
 	}

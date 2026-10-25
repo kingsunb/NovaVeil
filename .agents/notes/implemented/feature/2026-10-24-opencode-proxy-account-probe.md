@@ -14,7 +14,9 @@ Status: implemented
 
 ### 批量体检（`internal/relay/opencode_account_probe.go`）
 
-`ProbeOpencodeAccounts(ctx, channelID, accounts, count, concurrency, timeoutMS)`：渠道须为含 `{account}` 代理的免费档（`proxyNeedsOpencodeAccount` 同口径）；accounts 空时生成随机账号（复用 `opencodeXXXX` 生成器），非空时去重并校验字符集（`^[A-Za-z0-9_-]{1,64}$`，账号要拼进代理 userinfo）；worker 池并发（默认 10，上限 20）各打一次官方客户端形态探测请求（形态见下节）。结论三分类：healthy（2xx）/ rejected（403/429）/ error（其余，含代理与网络故障，不入池不冷却）。单次上限 30000 个、单账号超时上限 120s。
+`ProbeOpencodeAccounts(ctx, channelID, accounts, count, concurrency, timeoutMS)`：渠道须为含 `{account}` 代理的免费档（`proxyNeedsOpencodeAccount` 同口径）；accounts 空时生成随机账号（复用 `opencodeXXXX` 生成器），非空时去重并校验字符集（`^[A-Za-z0-9_-]{1,64}$`，账号要拼进代理 userinfo）；worker 池并发（默认 10、上限 50）各打一次官方客户端形态探测请求（形态见下节）。结论三分类：healthy（2xx）/ rejected（403/429）/ error（其余，含代理与网络故障，不入池不冷却）。单次上限 30000 个、单账号超时上限 120s。
+
+2026-10-25 起探测消息改用问题池轮换（`ocProbeQuestions` 五问，洗车问的距离以 1-1000 随机填充）：全量账号同一文案出站易被上游按消息指纹聚合识别。曾同日加过平滑放行与随机错峰，同日按运营决策回收（体检吞吐优先），前端并发上限与后端对齐为 50/默认 10。
 
 ### 体检请求形态与独立会话（2026-10-24 同日迭代）
 
@@ -49,7 +51,7 @@ Status: implemented
 ## Consequences
 
 - **收益**：冷启动不再逐个试错；N 个账号一次并发体检后健康号即时可被转发优先复用；被拒号立即进入 24h 冷却，转发路径不会撞它们；体检流量与真实客户端流量同形，上游无法按请求形态区别对待。
-- **代价与已知上限**：每账号消耗一次真实免费请求（客户端形态正文约 22k 字节、输入约 9k token，上游实报用量进分桶，估算值不进）；同步接口在 200 账号 × 慢上游时页面需等待（上限约 200×120s/并发，正常 100×~1.5s/10 并发 ≈ 15s）；探测与上下文探测共用请求日志面板，大批量体检会产生同量级日志条目。
+- **代价与已知上限**：每账号消耗一次真实免费请求（客户端形态正文约 22k 字节、输入约 9k token，上游实报用量进分桶，估算值不进）；同步接口在大批量时页面需等待（前端已按 200 一键分批）；探测与上下文探测共用请求日志面板，大批量体检会产生同量级日志条目。
 - **重访信号**：需要定时自动补池；或官方客户端改版导致模板漂移（重抓方式见 Verification 的抓包上游说明）。
 
 ## Verification
