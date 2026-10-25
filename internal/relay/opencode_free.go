@@ -285,7 +285,9 @@ func bodyModelName(body []byte) string {
 }
 
 // shapeOpencodeFreeBody 把免费档正文规范成 Agent 形态。
-func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, bool, string) {
+// shapeOpencodeFreeBody 把免费档正文规范成 Agent 形态。第三返回值是出站
+// 工具别名表(出站名 → 客户端名), 转发路径据此把响应里的出站名还原给客户端。
+func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, bool, map[string]string) {
 	out := body
 	changed := false
 
@@ -314,7 +316,10 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 				out = normalized
 			}
 		}
-		return out, changed, alias
+		if alias == "" {
+			return out, changed, nil
+		}
+		return out, changed, map[string]string{v1ReadToolName: alias}
 	}
 	if next, injected := ensureOpencodeFreeTools(out, protocol); injected {
 		out, changed = next, true
@@ -328,11 +333,18 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 		if sysNext, sysChanged := ensureOfficialOpencodeSystem(out, "v2", bodyModelName(out)); sysChanged {
 			out, changed = sysNext, true
 		}
+		if toolNext, aliases := ensureOfficialV2Toolset(out); aliases != nil {
+			out, changed = toolNext, true
+			if normalized := normalizeOpencodeChatBody(out, v2ChatKeyOrder); normalized != nil {
+				out = normalized
+			}
+			return out, changed, aliases
+		}
 		if normalized := normalizeOpencodeChatBody(out, v2ChatKeyOrder); normalized != nil {
 			out = normalized
 		}
 	}
-	return out, changed, ""
+	return out, changed, nil
 }
 
 // ocOfficialSystemPrefixLen 是官方系统提示幂等判定的前缀长度。

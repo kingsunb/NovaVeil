@@ -94,14 +94,14 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	// OpenCode 免费档的 Accept 由官方客户端决定(见 opencodeFreeLaneAccept), 需绕过流式透传
 	// 的默认 text/event-stream; 其余渠道留空, 行为与改动前完全一致。
 	opencodeAccept := ""
-	v1ReadAlias := ""
+	var toolAliases map[string]string
 	if isOpencodeFreeModel(channel, bodyModelName(request.Body)) {
 		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)补 Accept, Anthropic 另补 beta。
 		applyOpencodeFreeLaneHeaders(channel, request, bodyModelName(request.Body))
 		opencodeAccept = opencodeFreeLaneAccept(channel)
 		if isChatFormat(format) {
 			var shaped bool
-			request.Body, shaped, v1ReadAlias = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(channel), formatToProtocol(format))
+			request.Body, shaped, toolAliases = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(channel), formatToProtocol(format))
 			collapsed = shaped && !streaming
 		}
 	}
@@ -114,9 +114,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		// 槽位由返回值持有, 调用方在事件流耗尽或转发终止时调用 Close 释放;
 		// 失败路径已在 sendPassthroughStream 内部 close events 后返回, 此处无需再释放。
 		resp.release = releaseConcurrency
-		if v1ReadAlias != "" {
-			applyV1ReadAliasRestore(resp, v1ReadAlias)
-		}
+		applyToolAliasRestore(resp, toolAliases)
 		return resp, nil
 	}
 	if collapsed {
@@ -134,9 +132,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		if err := validateCollapsedFreeBody(format, body, usage); err != nil {
 			return nil, err
 		}
-		if v1ReadAlias != "" {
-			body = restoreV1ReadAliasInBody(body, v1ReadAlias)
-		}
+		body = restoreToolAliasesInBody(body, toolAliases)
 		return &upstreamResponse{body: body, usage: usage, release: releaseConcurrency}, nil
 	}
 
@@ -179,40 +175,42 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		return nil, fmt.Errorf("%w: %s", err, errBodySnippet(response.Body))
 	}
 	// response.Body 是本请求的独立读取缓冲, 直接移交所有权, 不再整包克隆一份。
-	if v1ReadAlias != "" {
-		response.Body = restoreV1ReadAliasInBody(response.Body, v1ReadAlias)
-	}
+	response.Body = restoreToolAliasesInBody(response.Body, toolAliases)
 	return &upstreamResponse{body: response.Body, header: response.Headers.Clone(), usage: parsed.Usage, release: releaseConcurrency}, nil
 }
 
-// applyV1ReadAliasRestore 对流式响应做 v1 read 工具名还原。
-func applyV1ReadAliasRestore(resp *upstreamResponse, alias string) {
+// applyToolAliasRestore 对流式响应按别名表还原工具名: 窗口内已缓冲事件就地
+// 改写, 剩余事件流经包装流逐事件还原。空表时零开销直通。
+func applyToolAliasRestore(resp *upstreamResponse, aliases map[string]string) {
+	if len(aliases) == 0 || resp == nil {
+		return
+	}
 	for _, ev := range resp.window {
 		if ev != nil && len(ev.Data) > 0 {
-			ev.Data = restoreV1ReadAliasInEvent(ev.Data, alias)
+			ev.Data = restoreToolAliasesInEvent(ev.Data, aliases)
 		}
 	}
 	if resp.events != nil {
-		resp.events = &v1ReadAliasStream{inner: resp.events, alias: alias}
+		resp.events = &toolAliasStream{inner: resp.events, aliases: aliases}
 	}
 }
 
-// v1ReadAliasStream 包装事件流, 逐事件还原 read 工具名。
-type v1ReadAliasStream struct {
-	inner streams.Stream[*httpclient.StreamEvent]
-	alias string
+// toolAliasStream 包装事件流, 逐事件还原出站工具别名。
+type toolAliasStream struct {
+	inner   streams.Stream[*httpclient.StreamEvent]
+	aliases map[string]string
 }
 
-func (s *v1ReadAliasStream) Next() bool { return s.inner.Next() }
-func (s *v1ReadAliasStream) Current() *httpclient.StreamEvent {
+func (s *toolAliasStream) Next() bool { return s.inner.Next() }
+func (s *toolAliasStream) Current() *httpclient.StreamEvent {
 	ev := s.inner.Current()
 	if ev != nil && len(ev.Data) > 0 {
-		ev.Data = restoreV1ReadAliasInEvent(ev.Data, s.alias)
+		ev.Data = restoreToolAliasesInEvent(ev.Data, s.aliases)
 	}
 	return ev
 }
-func (s *v1ReadAliasStream) Close() error { return s.inner.Close() }
-func (s *v1ReadAliasStream) Err() error   { return s.inner.Err() }
+func (s *toolAliasStream) Close() error { return s.inner.Close() }
+func (s *toolAliasStream) Err() error   { return s.inner.Err() }
 
 // sendPassthroughStream 发起同协议流式请求并预读有效性窗口, 窗口通过验证才算本轮取得可提交响应。
 // accept 非空时用它作为出站 Accept(OpenCode 免费档的官方值), 否则用默认 text/event-stream。

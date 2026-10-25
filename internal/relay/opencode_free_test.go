@@ -67,36 +67,29 @@ func TestShapeOpencodeFreeBodyForcesAgentShape(t *testing.T) {
 	for _, tool := range gjson.GetBytes(body, "tools").Array() {
 		names = append(names, tool.Get("function.name").String())
 	}
-	if len(names) != len(opencodeFreeCoreTools) {
-		t.Fatalf("应注入 %d 个核心工具, 实际 %d: %v", len(opencodeFreeCoreTools), len(names), names)
+	templates, err := loadOcProbeTemplates()
+	if err != nil {
+		t.Fatalf("体检模板解析失败: %v", err)
 	}
-	for _, core := range opencodeFreeCoreTools {
-		found := false
-		for _, n := range names {
-			if n == core {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("缺失核心工具 %q: %v", core, names)
-		}
+	officialNames := make([]string, 0, 16)
+	for _, tool := range gjson.ParseBytes(templates["v2"].Tools).Array() {
+		officialNames = append(officialNames, tool.Get("function.name").String())
+	}
+	if strings.Join(names, ",") != strings.Join(officialNames, ",") {
+		t.Fatalf("v2 无工具正文应获得官方全集(顺序一致), 实际 %v", names)
 	}
 }
 
-// TestShapeOpencodeFreeBodyIdempotent 验证已满足 Agent 形态(真实工具定义)的请求不再改写。
+// TestShapeOpencodeFreeBodyIdempotent 验证官方全集工具集的请求不再改写。
 func TestShapeOpencodeFreeBodyIdempotent(t *testing.T) {
-	body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"max_completion_tokens":32000,"tools":[` +
-		func() string {
-			var parts []string
-			for _, core := range opencodeFreeCoreTools {
-				parts = append(parts, opencodeFreeTool(core, model.UpstreamProtocolChat))
-			}
-			return strings.Join(parts, ",")
-		}() + `]}`)
+	templates, err := loadOcProbeTemplates()
+	if err != nil {
+		t.Fatalf("体检模板解析失败: %v", err)
+	}
+	body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"max_completion_tokens":32000,"tools":` + string(templates["v2"].Tools) + `}`)
 	_, changed, _ := shapeOpencodeFreeBody(body, false, model.UpstreamProtocolChat)
 	if changed {
-		t.Fatalf("已完备的 Agent 形态应无改写")
+		t.Fatalf("官方全集应无改写")
 	}
 }
 
@@ -172,9 +165,9 @@ func TestShapeOpencodeFreeBodyV1ReadTool(t *testing.T) {
 	})
 
 	t.Run("read 变体改名并补占位", func(t *testing.T) {
-		body, _, alias := shapeOpencodeFreeBody([]byte(`{"model":"x-free","tools":[{"type":"function","function":{"name":"ReadFile","description":"client","parameters":{"type":"object","properties":{}}}}]}`), true, model.UpstreamProtocolChat)
-		if alias != "ReadFile" {
-			t.Fatalf("应返回别名 ReadFile, 实际 %q", alias)
+		body, _, aliases := shapeOpencodeFreeBody([]byte(`{"model":"x-free","tools":[{"type":"function","function":{"name":"ReadFile","description":"client","parameters":{"type":"object","properties":{}}}}]}`), true, model.UpstreamProtocolChat)
+		if aliases[v1ReadToolName] != "ReadFile" {
+			t.Fatalf("应返回别名表 read→ReadFile, 实际 %v", aliases)
 		}
 		raw := gjson.GetBytes(body, "tools").Raw
 		if strings.Contains(raw, `"name":"ReadFile"`) {
@@ -276,25 +269,38 @@ func TestOpencodeToolDescriptionPlatform(t *testing.T) {
 	}
 }
 
+// TestShapeOpencodeFreeBodyCorrectsClientPatch 锁定 patch 的新语义: patch 不在
+// 官方 12 工具集内, 客户端 patch 改名为 clint_patch 且定义原样保留, 响应侧还原。
 func TestShapeOpencodeFreeBodyCorrectsClientPatch(t *testing.T) {
 	def, ok := knownOpencodeTool("patch")
 	if !ok {
 		t.Fatal("knownOpencodeTool 应识别 patch")
 	}
 	body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[{"type":"function","function":{"name":"patch","description":` + quoteJSON(t, def.Description) + `,"parameters":{"type":"object","properties":{"diff":{"type":"string"}}}}}]}`)
-	got, changed, _ := shapeOpencodeFreeBody(body, false, model.UpstreamProtocolChat)
+	got, changed, aliases := shapeOpencodeFreeBody(body, false, model.UpstreamProtocolChat)
 	if !changed {
-		t.Fatal("客户端 patch 定义不一致时应替换")
+		t.Fatal("客户端 patch 应改名出站")
+	}
+	if aliases["clint_patch"] != "patch" {
+		t.Fatalf("别名表应含 clint_patch→patch, 实际 %v", aliases)
+	}
+	if gjson.GetBytes(got, "tools.12.function.name").String() != "clint_patch" {
+		t.Fatalf("patch 应排在官方集之后并改名: %s", gjson.GetBytes(got, "tools.#").Raw)
 	}
 	var parameters map[string]any
-	if err := json.Unmarshal([]byte(gjson.GetBytes(got, "tools.0.function.parameters").Raw), &parameters); err != nil {
-		t.Fatalf("解析 patch parameters: %v", err)
+	if err := json.Unmarshal([]byte(gjson.GetBytes(got, "tools.12.function.parameters").Raw), &parameters); err != nil {
+		t.Fatalf("解析 clint_patch parameters: %v", err)
 	}
-	if !reflect.DeepEqual(parameters, def.Parameters) {
-		t.Fatalf("patch parameters 未按真实定义校正: %#v", parameters)
+	// ensureOpencodeFreeTools 先把已知工具校正为真实定义, 再由改名层改名出站。
+	want, _ := json.Marshal(def.Parameters)
+	gotParams, _ := json.Marshal(parameters)
+	if string(gotParams) != string(want) {
+		t.Fatalf("clint_patch 定义应校正为真实定义, 实际 %#v", parameters)
 	}
 }
 
+// TestShapeOpencodeFreeBodyKeepsExactPatch 同锁新语义: 客户端 patch 即使定义与
+// 旧 opencode_tools.json 完全一致, 出站仍改名 clint_patch(官方集无 patch 名)。
 func TestShapeOpencodeFreeBodyKeepsExactPatch(t *testing.T) {
 	tools := make([]string, 0, len(opencodeFreeCoreTools)+1)
 	for _, core := range opencodeFreeCoreTools {
@@ -302,8 +308,15 @@ func TestShapeOpencodeFreeBodyKeepsExactPatch(t *testing.T) {
 	}
 	tools = append(tools, opencodeFreeTool("patch", model.UpstreamProtocolChat))
 	body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"max_completion_tokens":32000,"tools":[` + strings.Join(tools, ",") + `]}`)
-	if got, changed, _ := shapeOpencodeFreeBody(body, false, model.UpstreamProtocolChat); changed {
-		t.Fatalf("真实 patch 定义不应改写: %s", got)
+	got, changed, aliases := shapeOpencodeFreeBody(body, false, model.UpstreamProtocolChat)
+	if !changed {
+		t.Fatalf("patch 应改名出站: %s", got)
+	}
+	if aliases["clint_patch"] != "patch" {
+		t.Fatalf("别名表应含 clint_patch→patch, 实际 %v", aliases)
+	}
+	if !strings.Contains(gjson.GetBytes(got, "tools").Raw, `"name":"clint_patch"`) {
+		t.Fatalf("出站应含 clint_patch: %s", got)
 	}
 }
 
