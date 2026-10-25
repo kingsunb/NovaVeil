@@ -614,6 +614,15 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 			}
 
+			// WARP SOCKS5 反应式淘汰: 代理指向 WARP 容器时, 403/429 通知其换 IP。
+			warpRejection := false
+			if err != nil && proxyAccount == "" && isWarpSocksProxy(channel) {
+				if code, ok := UpstreamStatusCode(err); ok && (code == http.StatusForbidden || code == http.StatusTooManyRequests) {
+					warpRejection = true
+					warpPenalizeExit(channel)
+				}
+			}
+
 			if err != nil {
 				// 本地计时器触发的超时会以上下文取消的形式浮出, 还原为明确的超时失败再进入统一处理。
 				if errors.Is(context.Cause(roundCtx), errMemberResponseTimeout) {
@@ -638,7 +647,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 代理账号 403/429 不冷却 Key。
 				// 旧式单 Key 与仅剩一把的渠道不走此路径, 照常进入下方失败计数与冷却处理。
 				keyAuthRejection := isAuthRejectionError(err)
-				if outcome == AttemptFailed && !proxyAccountRejection && len(channel.Keys) > 1 && (keyAuthRejection || isKeyRateLimitError(err)) {
+				if outcome == AttemptFailed && !(proxyAccountRejection || warpRejection) && len(channel.Keys) > 1 && (keyAuthRejection || isKeyRateLimitError(err)) {
 					markChannelKeyCooldown(channel.ID, selectedKey.ID, group.RelayConfig.MemberCooldownSeconds)
 					request.finishRound(AttemptFailed, classifyUpstreamStatus(err), brief)
 					request.releaseRoundLifecycle()
@@ -670,7 +679,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					continue
 				}
 				// 403/429 不惩罚成员, 换号同成员。
-				if proxyAccountRejection && opencodeAccountRetries[item.ID] < ocProxyMaxRetries {
+				if (proxyAccountRejection || warpRejection) && opencodeAccountRetries[item.ID] < ocProxyMaxRetries {
 					opencodeAccountRetries[item.ID]++
 					request.releaseRoundLifecycle()
 					releaseRefChainHops(hops)
