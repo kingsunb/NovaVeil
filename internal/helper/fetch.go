@@ -266,7 +266,7 @@ func applyOpencodeLaneUserAgent(req *http.Request, channel model.Channel) {
 	if !channel.OpencodeCompat || model.OpenCodeTier(channel.BaseURL) != "zen" {
 		return
 	}
-	if model.OpencodeV1Lane(channel.BaseURL) {
+	if model.OpencodeLaneOf(channel) == "v1" {
 		req.Header.Set("User-Agent", model.OpencodeV1UserAgent(model.UpstreamProtocolChat))
 		return
 	}

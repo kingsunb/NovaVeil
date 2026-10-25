@@ -840,6 +840,15 @@ func isInfrastructureError(err error) bool {
 // "upstream responded NNN" 两种既有包装格式; 不做无锚点的数字扫描以免误匹配正文。
 var statusTextPattern = regexp.MustCompile(`(?:with status|upstream responded)\s+(\d{3})`)
 
+// UpstreamRetryAfter 返回上游响应头 Retry-After 的原值; 取不到返回空串。
+func UpstreamRetryAfter(err error) string {
+	var httpErr *httpclient.Error
+	if errors.As(err, &httpErr) && httpErr.Headers != nil {
+		return httpErr.Headers.Get("Retry-After")
+	}
+	return ""
+}
+
 // classifyUpstreamStatus 依次从结构化错误(httpclient.Error / llm.ResponseError)和错误文本中解析状态码并归类。
 func classifyUpstreamStatus(err error) ErrClass {
 	if code, ok := UpstreamStatusCode(err); ok {

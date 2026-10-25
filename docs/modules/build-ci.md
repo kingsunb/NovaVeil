@@ -16,7 +16,7 @@
 
 - `run-local.sh`：找对应架构二进制 → 杀旧进程 → nohup 启动 → 端口等待 → `GET /` 必须 200 → 打印初始密码与版本；只换进程、保留 `data/`。
 - Compose 生产模板：`NOVAVEIL_IMAGE` 必填且建议 pin `@sha256:<digest>`；非 root 10001:10001、只读 rootfs + /tmp tmpfs、`cap_drop: ALL` + no-new-privileges、pids/mem/cpus 限额、宿主仅绑 `127.0.0.1:8888`、外部卷预置 0700@10001。
-- Dockerfile：Alpine 按 digest pin、二进制 0555 root 所有、entrypoint umask 0077、wget healthcheck。
+- Dockerfile：Alpine 按 digest pin、二进制 0555 root 所有、entrypoint umask 0077、wget healthcheck；另从 `oven/bun:1.4.4-alpine`（digest pin）复制 Bun 到 `/usr/local/bin/bun`，供 OpenCode 免费档 sidecar 使用。
 
 ### CI（7 个 workflow）
 

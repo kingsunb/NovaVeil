@@ -605,7 +605,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					if code, ok := UpstreamStatusCode(err); ok {
 						proxyAccountRejection = code == http.StatusForbidden || code == http.StatusTooManyRequests
 						if proxyAccountRejection {
-							markOpencodeProxyRejected(channel.ID, proxyAccount)
+							markOpencodeProxyRejected(channel.ID, proxyAccount, UpstreamRetryAfter(err))
 						}
 					}
 					if !errors.Is(err, context.Canceled) {

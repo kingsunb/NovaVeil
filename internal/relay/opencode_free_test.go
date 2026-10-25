@@ -153,14 +153,17 @@ func TestShapeOpencodeFreeBodyV1ReadTool(t *testing.T) {
 		}
 	})
 
-	t.Run("已有 read 时不动", func(t *testing.T) {
+	t.Run("已有 read 时保留定义并补齐默认字段", func(t *testing.T) {
 		body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[{"type":"function","function":{"name":"read","description":"client","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}]}`)
 		got, changed, _ := shapeOpencodeFreeBody(body, true, model.UpstreamProtocolChat)
-		if changed {
-			t.Fatalf("已有 read 时不应改写: %s", got)
+		if !changed {
+			t.Fatalf("应补齐官方默认字段: %s", got)
 		}
 		if !strings.Contains(string(got), `"description":"client"`) {
 			t.Fatalf("客户端 read 定义应原样保留: %s", got)
+		}
+		if gjson.GetBytes(got, "max_tokens").Int() != 32000 || gjson.GetBytes(got, "tool_choice").String() != "auto" {
+			t.Fatalf("v1 默认字段缺失: %s", got)
 		}
 	})
 
@@ -196,7 +199,7 @@ func TestShapeOpencodeFreeBodyV1ChatKeyOrder(t *testing.T) {
 	}
 
 	out, _, _ = shapeOpencodeFreeBody([]byte(`{"model":"x-free","stream":true,"messages":[]}`), true, model.UpstreamProtocolChat)
-	want = []string{"model", "messages", "tools", "stream", "stream_options"}
+	want = []string{"model", "max_tokens", "messages", "tools", "tool_choice", "stream", "stream_options"}
 	if got := topLevelKeyOrder(t, out); !reflect.DeepEqual(got, want) {
 		t.Fatalf("v1 缺省键序 = %v, 期望 %v", got, want)
 	}

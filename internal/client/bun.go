@@ -600,10 +600,9 @@ func validHeaderField(name, value string) bool {
 // 地址缓存而非每请求新建, 避免握手开销与连接池碎片化。
 var bunClients sync.Map // string → *http.Client
 
-// GetBunClient 返回走 Bun 伪装传输的 HTTP 客户端: TLS ClientHello 与 HTTP/1.1 头布局
-// 匹配 Bun 运行时(OpenCode 官方客户端运行环境), 规避上游按 JA3/JA4 指纹识别非官方客户端。
-// proxyURL 为 nil 时直连。客户端按代理地址缓存复用, CheckRedirect 与常规渠道一致。
-// 仅由 helper.ChannelHttpClient 对 OpenCode 免费档渠道(/zen, /inference)调用, 不影响其余渠道。
+// GetBunClient 返回 OpenCode 免费档的 HTTP 客户端: 配置了 Bun 时由常驻 sidecar 用真
+// BoringSSL 发送并保持流式响应, 未配置时回退 uTLS ClientHello 伪装。proxyURL 为 nil 时直连。
+// 客户端按代理地址缓存复用; sidecar 的代理按请求传入, 不随出口数量增加进程。
 func GetBunClient(proxyURL *url.URL) (*http.Client, error) {
 	key := "direct"
 	if proxyURL != nil {
@@ -611,6 +610,13 @@ func GetBunClient(proxyURL *url.URL) (*http.Client, error) {
 	}
 	if cached, ok := bunClients.Load(key); ok {
 		return cached.(*http.Client), nil
+	}
+	if sidecar, err := newBunSidecarClient(proxyURL); err != nil {
+		return nil, err
+	} else if sidecar != nil {
+		c := &http.Client{Transport: sidecar, CheckRedirect: upstreamCheckRedirect}
+		actual, _ := bunClients.LoadOrStore(key, c)
+		return actual.(*http.Client), nil
 	}
 	transport, err := NewBunTransport(BunOptions{
 		Proxy:                 proxyURL,

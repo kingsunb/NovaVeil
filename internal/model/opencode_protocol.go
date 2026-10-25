@@ -112,3 +112,17 @@ func OpencodeV2UserAgent() string {
 func OpencodeV1Lane(baseURL string) bool {
 	return OpenCodeTier(baseURL) == "zen" && strings.Contains(strings.ToLower(baseURL), "/zen")
 }
+
+// OpencodeLaneOf 返回免费档的客户端形态: "v1"(opencode 1.x) 或 "v2"(opencode 2.x)。
+// 两条形态自 2026-10-26 起都打 /inference(/zen 已关闭, 官方 1.x 客户端默认即 /inference),
+// 因此形态不能再由 BaseURL 推断, 改由渠道显式字段承载; 未设置时保留旧口径兼容存量。
+func OpencodeLaneOf(channel Channel) string {
+	switch channel.OpencodeLane {
+	case "v1", "v2":
+		return channel.OpencodeLane
+	}
+	if OpencodeV1Lane(channel.BaseURL) {
+		return "v1"
+	}
+	return "v2"
+}

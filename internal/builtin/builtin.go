@@ -84,6 +84,7 @@ var BuiltinFreeChannels = []model.Channel{
 		BaseURL:        "https://opencode.ai/inference",
 		Key:            "public",
 		OpencodeCompat: true,
+		OpencodeLane:   "v2",
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "cli"},
 			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.4/cli"},
@@ -104,23 +105,21 @@ var BuiltinFreeChannels = []model.Channel{
 		},
 	},
 	{
-		// OpenCode Free Old: legacy /zen/v1 通道(opencode2api 2026-10-16 双通道主通道)。
-		// BaseURL https://opencode.ai/zen → 转换器追加 /v1/chat/completions →
-		// https://opencode.ai/zen/v1/chat/completions, 即 legacy 免费档端点。
-		// 与 /inference 档的区别(由 applyOpencodeFreeLaneHeaders 在转发时动态设置):
+		// OpenCode Free Old: opencode 1.x 客户端形态(历史上对应 legacy /zen/v1 通道)。
+		// 2026-10-26 实测: /zen 已关闭(官方 1.19.4 客户端指向 /zen/v1 同样 429),
+		// 官方 1.x 默认 baseURL 就是 https://opencode.ai/inference。因此本渠道改为与
+		// OpenCode Free 同一端点, 仅保留 1.x 形态差异(由 OpencodeLane="v1" 承载):
 		//   - User-Agent 用 v1 模型请求格式 opencode/1.19.4 ai-sdk/provider-utils/<ver>
 		//     runtime/bun/1.4.4, <ver> 按出站协议(chat=4.0.23/responses=4.0.40/anthropic=4.0.46);
 		//   - x-opencode-project 用裸 40-hex(由 injectOpencodeCorrelationHeaders 注入);
-		//   - 额外发送 x-opencode-request(msg_ 递增 id), v2 档不发此头(网关 403);
-		//   - legacy 档只需单个 read 工具且不校验 schema, 比 /inference 的 5 工具
-		//     逐字节校验更鲁棒, 适合作为主通道; /inference 作为 fallback。
-		// OpenCodeTier 判定 https://opencode.ai/zen 为 "zen"(免费); 命中后 v1 档只保证
-		// 单个 read 工具存在, 客户端自带的其余工具原样保留(legacy 档不校验工具集合)。
+		//   - 额外发送 x-opencode-request(msg_ 递增 id), v2 形态不发此头。
+		// 两条渠道都打 /inference, 形态由 OpencodeLane 显式指定, 不再由 BaseURL 推断。
 		Name:           "OpenCode Free Old",
 		Type:           model.ChannelProviderOpenAI,
-		BaseURL:        "https://opencode.ai/zen",
+		BaseURL:        "https://opencode.ai/inference",
 		Key:            "public",
 		OpencodeCompat: true,
+		OpencodeLane:   "v1",
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "cli"},
 		},

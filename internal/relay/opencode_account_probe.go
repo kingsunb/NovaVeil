@@ -258,9 +258,19 @@ func ocProbeRawRequest(format llm.APIFormat, channel model.Channel, modelName, d
 		// 官方 v2 客户端恒发项目目录哈希, 从不发 global。
 		headers.Set(opencodeProjectHeader, ocProbeProjectID)
 	}
+	// 官方客户端在 /inference 上带协议族段(MITM 实抓: POST /inference/openai/v1/...),
+	// 体检必须同形, 否则探针打的是上游不认的路径。
+	path := "/v1" + upstreamPath(format)
+	if base := strings.TrimRight(strings.TrimSpace(channel.BaseURL), "/"); strings.HasSuffix(base, "/inference") {
+		family := "openai"
+		if format == llm.APIFormatAnthropicMessage {
+			family = "anthropic"
+		}
+		path = "/" + family + path
+	}
 	return &httpclient.Request{
 		Method:    http.MethodPost,
-		Path:      "/v1" + upstreamPath(format),
+		Path:      path,
 		Headers:   headers,
 		Body:      body,
 		APIFormat: format.String(),

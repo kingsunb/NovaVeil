@@ -320,12 +320,13 @@ func assertClientFormBody(t *testing.T, body []byte, lane string, modelName, dis
 }
 
 // TestOcProbeRawRequestMatchesRealClient 验证免费档体检请求与官方客户端实抓形态一致。
+// 2026-10-26 起两条形态都打 /inference, 路径带协议族段(官方实抓 POST /inference/openai/v1/...)。
 func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 	cases := []struct {
 		lane    string
 		baseURL string
 	}{
-		{"v1", "http://opencode.test/zen"},
+		{"v1", "http://opencode.test/inference"},
 		{"v2", "http://opencode.test/inference"},
 	}
 	for _, c := range cases {
@@ -334,13 +335,14 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 			BaseURL:        c.baseURL,
 			IsFree:         true,
 			OpencodeCompat: true,
+			OpencodeLane:   c.lane,
 			Models:         []model.ChannelModel{{Name: "probe-free-model"}},
 		}
 		raw, err := ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, channel, "probe-free-model", "Probe Free Model", defaultTestMessage, 0)
 		if err != nil {
 			t.Fatalf("%s 档构造失败: %v", c.lane, err)
 		}
-		if raw.Path != "/v1/chat/completions" {
+		if raw.Path != "/openai/v1/chat/completions" {
 			t.Fatalf("%s 档路径异常: %q", c.lane, raw.Path)
 		}
 		if c.lane == "v2" {

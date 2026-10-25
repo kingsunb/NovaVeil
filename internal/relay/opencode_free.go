@@ -131,9 +131,9 @@ func isOpencodeFreeModel(channel model.Channel, modelName string) bool {
 // opencodeV2CompletionLimit 是 v2 档默认输出上限。
 const opencodeV2CompletionLimit = 32000
 
-// isOpencodeV1Lane 判定渠道是否为 OpenCode v1 免费档(/zen)。
+// isOpencodeV1Lane 判定渠道是否走 opencode 1.x 客户端形态。
 func isOpencodeV1Lane(channel model.Channel) bool {
-	return model.OpencodeV1Lane(channel.BaseURL)
+	return model.OpencodeLaneOf(channel) == "v1"
 }
 
 // opencodeUpstreamFamily 返回 v2 family 段。
@@ -162,7 +162,7 @@ func opencodeFamilyForFormat(format llm.APIFormat) string {
 
 // opencodeV2FamilyBaseURL 仅补裸 /inference。
 func opencodeV2FamilyBaseURL(base string, channel model.Channel, family string) string {
-	if family == "" || !isOpencodeFreeLane(channel) || isOpencodeV1Lane(channel) ||
+	if family == "" || !isOpencodeFreeLane(channel) ||
 		strings.HasSuffix(strings.TrimSpace(channel.BaseURL), "##") {
 		return base
 	}
@@ -311,6 +311,18 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 		if protocol == model.UpstreamProtocolChat {
 			if sysNext, sysChanged := ensureOfficialOpencodeSystem(out, "v1", bodyModelName(out)); sysChanged {
 				out, changed = sysNext, true
+			}
+			// 官方 1.19.4 主请求恒带 max_tokens=32000 与 tool_choice="auto"(2026-10-26 MITM 实抓);
+			// 键序归一只能重排已存在的键, 缺字段必须在此补齐, 否则上游按正文形态判非官方客户端。
+			if !gjson.GetBytes(out, "max_tokens").Exists() && !gjson.GetBytes(out, "max_completion_tokens").Exists() {
+				if next, err := sjson.SetBytes(out, "max_tokens", opencodeV2CompletionLimit); err == nil {
+					out, changed = next, true
+				}
+			}
+			if !gjson.GetBytes(out, "tool_choice").Exists() {
+				if next, err := sjson.SetBytes(out, "tool_choice", "auto"); err == nil {
+					out, changed = next, true
+				}
 			}
 			if normalized := normalizeOpencodeChatBody(out, v1ChatKeyOrder); normalized != nil {
 				out = normalized

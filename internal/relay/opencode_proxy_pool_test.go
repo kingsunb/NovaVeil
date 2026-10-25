@@ -43,3 +43,28 @@ func TestOcProxyEvictFirstOrder(t *testing.T) {
 	assert.True(t, ocProxyEvictFirst(historicOld, historicFresh))
 	assert.False(t, ocProxyEvictFirst(historicOld, untested))
 }
+
+// TestOpencodeRejectCooldown 覆盖冷却时长的边界: 上游秒数优先, 缺失或不可信时
+// 回落到下一个 UTC 零点(免费档配额按 UTC 天重置), 上限 24 小时。
+func TestOpencodeRejectCooldown(t *testing.T) {
+	now := time.Date(2026, 10, 25, 20, 16, 28, 0, time.UTC)
+	toMidnight := 3*time.Hour + 43*time.Minute + 32*time.Second
+	cases := []struct {
+		name       string
+		retryAfter string
+		want       time.Duration
+	}{
+		{"上游秒数", "3600", time.Hour},
+		{"秒数带空白", " 3600 ", time.Hour},
+		{"超上限钳到 24 小时", "259200", 24 * time.Hour},
+		{"HTTP 日期回落到零点", "Wed, 21 Oct 2026 07:28:00 GMT", toMidnight},
+		{"空值回落到零点", "", toMidnight},
+		{"零秒回落到零点", "0", toMidnight},
+		{"负值回落到零点", "-1", toMidnight},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			assert.Equal(t, item.want, opencodeRejectCooldown(item.retryAfter, now))
+		})
+	}
+}

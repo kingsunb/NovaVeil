@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +19,7 @@ const (
 	ocProxyPerAccountLimit = 5
 	// ocProxySuccessTTL 内成功过的账号优先复用。
 	ocProxySuccessTTL = 7 * 24 * time.Hour
-	// 403/429 被拒账号统一冷却 24 小时。
+	// 403/429 被拒账号冷却上限, 无 Retry-After 时的回落值。
 	ocProxyRejectedCooldown = 24 * time.Hour
 	// ocProxyMaxAccounts 是每渠道账号数上限, 库内按此淘汰。
 	ocProxyMaxAccounts = 30000
@@ -230,9 +231,26 @@ func markOpencodeProxyRealFailure(channelID int, account string) {
 	}()
 }
 
-// 403/429 被拒后冷却账号 24 小时并异步落库, 不区分拒绝原因。
-func markOpencodeProxyRejected(channelID int, account string) {
-	markOpencodeProxyCooldown(channelID, account, ocProxyRejectedCooldown)
+// 403/429 被拒后冷却账号并异步落库, 不区分拒绝原因。
+func markOpencodeProxyRejected(channelID int, account, retryAfter string) {
+	markOpencodeProxyCooldown(channelID, account, opencodeRejectCooldown(retryAfter, time.Now()))
+}
+
+// opencodeRejectCooldown 按上游 Retry-After(秒)定冷却时长; 缺失时回落到下一个
+// UTC 零点——免费档配额按 UTC 天重置, 固定冷却会跨过重置点白白闲置出口。
+func opencodeRejectCooldown(retryAfter string, now time.Time) time.Duration {
+	if seconds, err := strconv.Atoi(strings.TrimSpace(retryAfter)); err == nil && seconds > 0 {
+		if cooldown := time.Duration(seconds) * time.Second; cooldown < ocProxyRejectedCooldown {
+			return cooldown
+		}
+		return ocProxyRejectedCooldown
+	}
+	utc := now.UTC()
+	next := utc.Truncate(24 * time.Hour).Add(24 * time.Hour)
+	if cooldown := next.Sub(utc); cooldown > 0 && cooldown < ocProxyRejectedCooldown {
+		return cooldown
+	}
+	return ocProxyRejectedCooldown
 }
 
 // 写入账号冷却并异步落库; 未成功过的账号同样入槽。
