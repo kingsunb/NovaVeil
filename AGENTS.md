@@ -91,6 +91,8 @@ bash scripts/run-local.sh    # 本地运行
 - **完全渠道透传不跳过路由**：透传指任意协议原样转发，不是绕过分组路由/failover/Key 轮询。见 [docs/CHANNEL_PASSTHROUGH.md](docs/CHANNEL_PASSTHROUGH.md)。
 - **会话粘合按 `X-Session-Id`**：多轮上下文一致性靠会话粘合渠道 + 三态熔断 + 非阻塞半开探测。见 [docs/DEVELOPMENT_routing.md](docs/DEVELOPMENT_routing.md)。
 - **OpenCode 官方指纹版本三处同步，升级先核对**：`internal/client/bun.go` 的 `bunRuntimeVersion`、`internal/client/bun_dial.go` 的 `bunClientHello` 指纹与注释、`internal/model/opencode_protocol.go` 的 `opencodeV1BunVersion` 必须同版本；改任何一处版本号前，先在真实官方客户端环境重抓 ClientHello 逐字段核对（核对口径见 [指纹笔记](.agents/notes/implemented/bug-fix/2026-10-24-bun-clienthello-sigalgs-update.md)）。
+- **OpenCode 形态对齐以官方最新客户端实抓为准**：对齐上游指纹、请求形态、工具集或头集合时，必须直接对最新官方 opencode CLI 实抓取证（复用指纹笔记的抓包口径）；opencode2api 等社区实现只作交叉参考与线索来源，不作为对齐依据——社区实现滞后于上游收紧且可能带自身偏差，跟在它后面会把它的过时形态抄进来。
+- **被惩罚状态下的阴性结果不作排除证据**：当上游存在按身份或窗口的惩罚机制（如 OpenCode 免费档 429 身份窗）时，被打标状态下「形态已对齐仍失败」不能推出该形态维度已对齐或可排除；形态实验前必须先确认身份干净（窗口过期后以最真实下游形态单发对照），被打标状态下的阴性结果要明确标注不可信。来源：2026-10-25 v2 排查复盘——官方模板实验注定发现不了「客户端自定义工具」维度的缺失，身份窗又让所有形态实验拿不到干净信号（见 [v2 调查笔记](.agents/notes/implemented/bug-fix/2026-10-25-opencode-v2-lane-investigation.md)）。
 - **Go 代码**：ESM 无关（Go）；后端错误显式处理，空 `catch`/`if err` 要命名错误与原因；公开函数加注释契约。
 - **前端**：UI 文案走 locale；改前端行为同步更新 web-next 测试。
 
