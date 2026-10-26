@@ -63,9 +63,10 @@ export const zhCN = {
     concurrency: "并发数",
     concurrencyHint: "1-20；同一时刻在途的体检请求数",
     run: "开始体检",
-    running: "体检中…",
+    running: "后台体检中…",
     bulkTest: "一键测试台账",
     bulkRunning: (done: number, total: number) => `一键测试中 ${done}/${total}`,
+    probeCancelled: "体检超时，未完成的账号已取消",
     runDone: (healthy: number, rejected: number, failed: number) =>
       `体检完成：健康 ${healthy}，被拒 ${rejected}，失败 ${failed}`,
     countInvalid: "生成数量须为 1-30000 的整数",

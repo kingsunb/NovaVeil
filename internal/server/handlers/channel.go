@@ -70,6 +70,10 @@ func init() {
 				Handle(probeProxyAccounts),
 		).
 		AddRoute(
+			router.NewRoute("/proxy-accounts/probe/:job_id", http.MethodGet).
+				Handle(getProxyAccountProbeJob),
+		).
+		AddRoute(
 			router.NewRoute("/proxy-accounts", http.MethodDelete).
 				Handle(deleteProxyAccounts),
 		).
@@ -371,26 +375,44 @@ type proxyAccountProbeRequest struct {
 	Model       string   `json:"model"`
 }
 
-// probeProxyAccounts 并发体检免费档渠道的代理账号: 健康→入池优先复用,
-// 403/429→冷却 24h, 与转发路径同一套池状态。
+// probeProxyAccounts 启动后台体检作业并立即返回。
+// 体检要逐账号发真实请求, 耗时可达分钟级; 同步等待会被反向代理按超时切断,
+// 因此改为后台作业 + 状态轮询, 未在时限内完成的账号由作业自行取消。
 func probeProxyAccounts(c *gin.Context) {
 	var request proxyAccountProbeRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
 	}
-	report, err := relay.ProbeOpencodeAccounts(c.Request.Context(), request.ChannelID, request.Accounts, request.Count, request.Concurrency, request.TimeoutMS, request.Model)
+	job, err := relay.StartOpencodeAccountProbe(c.Request.Context(), request.ChannelID, request.Accounts, request.Count, request.Concurrency, request.TimeoutMS, request.Model)
 	if err != nil {
 		resp.ErrorExposed(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	resp.Success(c, gin.H{
+		"job_id":    job.JobID,
+		"channel_id": job.ChannelID,
+		"model":     job.Model,
+		"state":     job.State,
+		"total":     job.Total,
+	})
+}
+
+// getProxyAccountProbeJob 返回后台体检作业状态; 作业结束后带完整结果。
+func getProxyAccountProbeJob(c *gin.Context) {
+	jobID := strings.TrimSpace(c.Param("job_id"))
+	job, ok := relay.GetOpencodeAccountProbeJob(jobID)
+	if !ok {
+		resp.Error(c, http.StatusNotFound, "体检作业不存在或已过期")
+		return
+	}
 	// 详情含上游响应片段, 抹掉渠道密钥明文再回显。
-	if channel, channelErr := op.ChannelGet(request.ChannelID); channelErr == nil {
-		for i := range report.Results {
-			report.Results[i].Detail = redactChannelCredentials(channel, report.Results[i].Detail)
+	if channel, channelErr := op.ChannelGet(job.ChannelID); channelErr == nil {
+		for i := range job.Results {
+			job.Results[i].Detail = redactChannelCredentials(channel, job.Results[i].Detail)
 		}
 	}
-	resp.Success(c, report)
+	resp.Success(c, job)
 }
 
 // listProxyAccounts 返回渠道账号台账, filter 取 all/usable/untested/unusable/error/historic。

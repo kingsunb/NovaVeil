@@ -25,11 +25,11 @@ const MAX_ACCOUNTS = 30000;
 const MAX_CONCURRENCY = 50;
 const DEFAULT_COUNT = 100;
 const DEFAULT_CONCURRENCY = 10;
-/** 一键测试时分批调用体检接口的批大小。 */
-const BULK_CHUNK_SIZE = 200;
 /** 台账分页: 默认每页 100, 可选最大 5000。 */
 const LEDGER_PAGE_SIZE_DEFAULT = 100;
 const LEDGER_PAGE_SIZE_OPTIONS = [100, 200, 500, 1000, 5000];
+/** 轮询后台体检作业的间隔。 */
+const PROBE_POLL_INTERVAL_MS = 2000;
 
 interface AccountProbeResult {
   account: string;
@@ -42,6 +42,22 @@ interface AccountProbeResult {
 interface AccountProbeReport {
   channel_id: number;
   model: string;
+  results: AccountProbeResult[];
+  summary: { total: number; healthy: number; rejected: number; failed: number };
+}
+
+/** 后台体检作业状态。 */
+interface AccountProbeJob {
+  job_id: string;
+  channel_id: number;
+  model: string;
+  state: string;
+  total: number;
+  probed: number;
+  healthy: number;
+  rejected: number;
+  failed: number;
+  message?: string;
   results: AccountProbeResult[];
   summary: { total: number; healthy: number; rejected: number; failed: number };
 }
@@ -131,22 +147,44 @@ function ChannelSection({ channel }: { channel: Channel }) {
     return { count: parsedCount, concurrency: parsedConcurrency };
   }
 
+  /** 轮询后台体检作业直到结束; 作业超时被取消时返回终态, 不再等待。 */
+  async function waitProbeJob(
+    jobId: string,
+    onProgress?: (job: AccountProbeJob) => void,
+  ): Promise<AccountProbeJob> {
+    for (;;) {
+      const job = await api.getProxyAccountProbeJob(jobId);
+      onProgress?.(job);
+      if (job.state !== "running") return job;
+      await new Promise((resolve) => setTimeout(resolve, PROBE_POLL_INTERVAL_MS));
+    }
+  }
+
   async function run() {
     const inputs = parseInputs();
     if (!inputs) return;
     setRunning(true);
     try {
-      const next = await api.probeProxyAccounts({
+      const started = await api.probeProxyAccounts({
         channel_id: channel.id,
         count: inputs.count,
         concurrency: inputs.concurrency,
         model: modelName || undefined,
       });
-      setReport(next);
+      const job = await waitProbeJob(started.job_id);
+      setReport({
+        channel_id: job.channel_id,
+        model: job.model,
+        results: job.results ?? [],
+        summary: job.summary,
+      });
       await queryClient.invalidateQueries({ queryKey: ["proxy-accounts"] });
       toast.success(
-        zhCN.proxyAccounts.runDone(next.summary.healthy, next.summary.rejected, next.summary.failed),
+        zhCN.proxyAccounts.runDone(job.summary.healthy, job.summary.rejected, job.summary.failed),
       );
+      if (job.state === "cancelled") {
+        toast.warning(job.message || zhCN.proxyAccounts.probeCancelled);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.requestFailed);
     } finally {
@@ -154,7 +192,7 @@ function ChannelSection({ channel }: { channel: Channel }) {
     }
   }
 
-  /** 一键测试: 勾选了账号时只测勾选的, 否则测台账全部; 按 200 个一批顺序体检。 */
+  /** 一键测试: 勾选了账号时只测勾选的, 否则测台账全部; 一次后台作业跑完。 */
   async function runBulkTest() {
     // 勾选测试与生成数量无关, 只校验并发数。
     const parsedConcurrency = Math.floor(Number(concurrency));
@@ -180,35 +218,29 @@ function ChannelSection({ channel }: { channel: Channel }) {
         return;
       }
       setBulk({ done: 0, total: accounts.length });
-      let healthy = 0;
-      let rejected = 0;
-      let failed = 0;
-      let model = "";
-      const results: AccountProbeResult[] = [];
-      for (let index = 0; index < accounts.length; index += BULK_CHUNK_SIZE) {
-        const chunk = accounts.slice(index, index + BULK_CHUNK_SIZE);
-        const part = await api.probeProxyAccounts({
-          channel_id: channel.id,
-          accounts: chunk,
-          concurrency: parsedConcurrency,
-          model: modelName || undefined,
-        });
-        model = part.model;
-        healthy += part.summary.healthy;
-        rejected += part.summary.rejected;
-        failed += part.summary.failed;
-        results.push(...part.results);
-        setBulk({ done: results.length, total: accounts.length });
-      }
-      setReport({
+      const started = await api.probeProxyAccounts({
         channel_id: channel.id,
-        model,
-        results,
-        summary: { total: results.length, healthy, rejected, failed },
+        accounts,
+        concurrency: parsedConcurrency,
+        model: modelName || undefined,
+      });
+      const job = await waitProbeJob(started.job_id, (current) =>
+        setBulk({ done: current.probed, total: current.total }),
+      );
+      setReport({
+        channel_id: job.channel_id,
+        model: job.model,
+        results: job.results ?? [],
+        summary: job.summary,
       });
       await queryClient.invalidateQueries({ queryKey: ["proxy-accounts"] });
       setSelectedAccounts(new Set());
-      toast.success(zhCN.proxyAccounts.runDone(healthy, rejected, failed));
+      toast.success(
+        zhCN.proxyAccounts.runDone(job.summary.healthy, job.summary.rejected, job.summary.failed),
+      );
+      if (job.state === "cancelled") {
+        toast.warning(job.message || zhCN.proxyAccounts.probeCancelled);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.requestFailed);
     } finally {

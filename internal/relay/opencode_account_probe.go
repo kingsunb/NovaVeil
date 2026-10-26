@@ -43,9 +43,10 @@ const (
 	// ocProbeClientIP 是账号体检请求在日志流里的客户端标识。
 	ocProbeClientIP = "账号体检"
 	// ocProbeOutcome* 是体检结论枚举。
-	ocProbeOutcomeHealthy  = "healthy"
-	ocProbeOutcomeRejected = "rejected"
-	ocProbeOutcomeError    = "error"
+	ocProbeOutcomeHealthy   = "healthy"
+	ocProbeOutcomeRejected  = "rejected"
+	ocProbeOutcomeError     = "error"
+	ocProbeOutcomeCancelled = "cancelled"
 )
 
 // ocProbeQuestions 是体检问题池: 全量账号用同一文案出站易被上游按消息指纹
@@ -96,11 +97,17 @@ type AccountProbeReport struct {
 	Summary   AccountProbeSummary  `json:"summary"`
 }
 
-// ProbeOpencodeAccounts 并发钉住账号探测免费档渠道。
-// accounts 非空时逐个探测(去重), 为空时生成 count 个随机账号; modelName 为空时
-// 自动选渠道首个 chat 协议模型。健康与 403/429 的入池/冷却由 probeOnceWithAccount
-// 的回填逻辑完成, 这里只汇总结论。
-func ProbeOpencodeAccounts(ctx context.Context, channelID int, accounts []string, count, concurrency, timeoutMS int, modelName string) (*AccountProbeReport, error) {
+// ocProbePlan 是一次体检的入参解算结果: 渠道、模型、账号列表与展示名。
+type ocProbePlan struct {
+	channel     model.Channel
+	modelName   string
+	displayName string
+	accounts    []string
+}
+
+// prepareAccountProbe 解算体检入参并把「生成即落账」写入台账, 不发起任何上游请求。
+// 校验失败要立即返回, 避免后台作业带着非法入参空跑。
+func prepareAccountProbe(ctx context.Context, channelID int, accounts []string, count int, modelName string) (*ocProbePlan, error) {
 	channel, err := op.ChannelGet(channelID)
 	if err != nil {
 		return nil, err
@@ -124,8 +131,78 @@ func ProbeOpencodeAccounts(ctx context.Context, channelID int, accounts []string
 	if err := op.UpsertOpencodeGeneratedAccounts(channelID, probing); err != nil {
 		return nil, err
 	}
-	// 展示名整批取一次目录, 供系统提示的 Name 行; 失败回退模型 ID。
-	displayName := ocProbeDisplayName(ctx, channel, modelName)
+	return &ocProbePlan{
+		channel:     channel,
+		modelName:   modelName,
+		displayName: ocProbeDisplayName(ctx, channel, modelName),
+		accounts:    probing,
+	}, nil
+}
+
+// runAccountProbe 按并发体检计划里的账号; ctx 结束后不再开始新账号, 未体检的记为已取消。
+// onProgress 在每个账号出结论时回调, 供后台作业回填进度。
+func runAccountProbe(ctx context.Context, plan *ocProbePlan, concurrency int, timeout time.Duration, onProgress func(AccountProbeResult)) *AccountProbeReport {
+	results := make([]AccountProbeResult, len(plan.accounts))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for index, account := range plan.accounts {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		go func(index int, account string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				return
+			}
+			result := ocProbeOne(ctx, plan.channel, plan.modelName, plan.displayName, account, timeout)
+			results[index] = result
+			if onProgress != nil {
+				onProgress(result)
+			}
+		}(index, account)
+	}
+	wg.Wait()
+	for index := range results {
+		if results[index].Account != "" {
+			continue
+		}
+		results[index] = AccountProbeResult{
+			Account: plan.accounts[index],
+			Outcome: ocProbeOutcomeCancelled,
+			Detail:  "体检已取消",
+		}
+	}
+	report := &AccountProbeReport{ChannelID: plan.channel.ID, Model: plan.modelName, Results: results}
+	for _, result := range results {
+		report.Summary.Total++
+		switch result.Outcome {
+		case ocProbeOutcomeHealthy:
+			report.Summary.Healthy++
+		case ocProbeOutcomeRejected:
+			report.Summary.Rejected++
+		default:
+			report.Summary.Failed++
+		}
+	}
+	return report
+}
+
+// ProbeOpencodeAccounts 并发钉住账号探测免费档渠道, 同步等到全部账号出结论。
+// accounts 非空时逐个探测(去重), 为空时生成 count 个随机账号; modelName 为空时
+// 自动选渠道首个 chat 协议模型。健康与 403/429 的入池/冷却由 probeOnceWithAccount
+// 的回填逻辑完成, 这里只汇总结论。
+func ProbeOpencodeAccounts(ctx context.Context, channelID int, accounts []string, count, concurrency, timeoutMS int, modelName string) (*AccountProbeReport, error) {
+	plan, err := prepareAccountProbe(ctx, channelID, accounts, count, modelName)
+	if err != nil {
+		return nil, err
+	}
 	if concurrency <= 0 {
 		concurrency = ocProbeDefaultConcurrency
 	}
@@ -138,35 +215,7 @@ func ProbeOpencodeAccounts(ctx context.Context, channelID int, accounts []string
 	if timeoutMS > ocProbeMaxTimeoutMS {
 		timeoutMS = ocProbeMaxTimeoutMS
 	}
-	timeout := time.Duration(timeoutMS) * time.Millisecond
-
-	results := make([]AccountProbeResult, len(probing))
-	sem := make(chan struct{}, concurrency)
-	var wg sync.WaitGroup
-	for i, account := range probing {
-		wg.Add(1)
-		go func(index int, account string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			results[index] = ocProbeOne(ctx, channel, modelName, displayName, account, timeout)
-		}(i, account)
-	}
-	wg.Wait()
-
-	report := &AccountProbeReport{ChannelID: channelID, Model: modelName, Results: results}
-	for _, result := range results {
-		report.Summary.Total++
-		switch result.Outcome {
-		case ocProbeOutcomeHealthy:
-			report.Summary.Healthy++
-		case ocProbeOutcomeRejected:
-			report.Summary.Rejected++
-		default:
-			report.Summary.Failed++
-		}
-	}
-	return report, nil
+	return runAccountProbe(ctx, plan, concurrency, time.Duration(timeoutMS)*time.Millisecond, nil), nil
 }
 
 // ocProbeChannelHasModel 报告模型名是否在该渠道的模型列表中。

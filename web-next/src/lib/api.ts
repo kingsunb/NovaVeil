@@ -806,7 +806,7 @@ export const api = {
   },
 
   // ----- OpenCode 账号体检 -----
-  /** 并发体检免费档渠道的代理账号: 健康→入池优先复用; 403/429→冷却 24h。model 留空由后端自动选。 */
+  /** 启动后台体检作业: 逐账号发真实请求耗时可达分钟级, 因此立即返回 job_id, 进度用 getProxyAccountProbeJob 轮询。model 留空由后端自动选。 */
   probeProxyAccounts: async (body: {
     channel_id: number;
     accounts?: string[];
@@ -820,8 +820,29 @@ export const api = {
       body,
     });
     return raw as {
+      job_id: string;
       channel_id: number;
       model: string;
+      state: string;
+      total: number;
+    };
+  },
+  /** 读取后台体检作业状态; 作业结束后带完整结果与汇总。 */
+  getProxyAccountProbeJob: async (jobId: string) => {
+    const raw = await http<unknown>(`/channel/proxy-accounts/probe/${jobId}`);
+    return raw as {
+      job_id: string;
+      channel_id: number;
+      model: string;
+      state: string;
+      total: number;
+      probed: number;
+      healthy: number;
+      rejected: number;
+      failed: number;
+      started_at: string;
+      finished_at: string;
+      message?: string;
       results: Array<{
         account: string;
         outcome: string;

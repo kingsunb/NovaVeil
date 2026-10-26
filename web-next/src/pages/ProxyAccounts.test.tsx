@@ -78,6 +78,28 @@ const report = {
   summary: { total: 3, healthy: 1, rejected: 1, failed: 1 },
 };
 
+/** 后台体检作业: 启动只回 job_id, 状态由轮询接口取。 */
+const jobStart = {
+  job_id: "probe-0123",
+  channel_id: 7,
+  model: "model-a",
+  state: "running",
+  total: 3,
+};
+
+const jobDone = {
+  ...jobStart,
+  state: "done",
+  probed: 3,
+  healthy: 1,
+  rejected: 1,
+  failed: 1,
+  started_at: "2026-10-26T04:00:00Z",
+  finished_at: "2026-10-26T04:00:05Z",
+  results: report.results,
+  summary: report.summary,
+};
+
 const ledger = {
   channel_id: 7,
   items: [
@@ -213,9 +235,10 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     const probeBodies: Array<Record<string, unknown>> = [];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes("/channel/proxy-accounts/probe/")) return jsonResponse(jobDone);
       if (url.includes("/channel/proxy-accounts/probe")) {
         probeBodies.push(JSON.parse(String(init?.body ?? "{}")));
-        return jsonResponse(report);
+        return jsonResponse(jobStart);
       }
       if (url.includes("/channel/list")) return jsonResponse([eligibleChannel({})]);
       if (url.includes("/channel/proxy-accounts?")) return ledgerFor(url);
@@ -245,9 +268,10 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     const probeBodies: Array<Record<string, unknown>> = [];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes("/channel/proxy-accounts/probe/")) return jsonResponse(jobDone);
       if (url.includes("/channel/proxy-accounts/probe")) {
         probeBodies.push(JSON.parse(String(init?.body ?? "{}")));
-        return jsonResponse(report);
+        return jsonResponse(jobStart);
       }
       if (url.includes("/channel/list")) return jsonResponse([eligibleChannel({})]);
       if (url.includes("/channel/proxy-accounts?")) return ledgerFor(url);
@@ -275,9 +299,10 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     const probeBodies: Array<Record<string, unknown>> = [];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes("/channel/proxy-accounts/probe/")) return jsonResponse(jobDone);
       if (url.includes("/channel/proxy-accounts/probe")) {
         probeBodies.push(JSON.parse(String(init?.body ?? "{}")));
-        return jsonResponse(report);
+        return jsonResponse(jobStart);
       }
       if (url.includes("/channel/list")) return jsonResponse([eligibleChannel({})]);
       if (url.includes("/channel/proxy-accounts?")) return ledgerFor(url);
@@ -315,9 +340,10 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     const ledgerEnabled = true;
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes("/channel/proxy-accounts/probe/")) return jsonResponse(jobDone);
       if (url.includes("/channel/proxy-accounts/probe")) {
         probeBodies.push(JSON.parse(String(init?.body ?? "{}")));
-        return jsonResponse(report);
+        return jsonResponse(jobStart);
       }
       if (url.includes("/channel/proxy-accounts?")) return ledgerFor(url);
       if (url.includes("/channel/proxy-accounts/auto-probe")) {
@@ -408,9 +434,10 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     const probeBodies: Array<Record<string, unknown>> = [];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes("/channel/proxy-accounts/probe/")) return jsonResponse(jobDone);
       if (url.includes("/channel/proxy-accounts/probe")) {
         probeBodies.push(JSON.parse(String(init?.body ?? "{}")));
-        return jsonResponse(report);
+        return jsonResponse(jobStart);
       }
       if (url.includes("/channel/list")) return jsonResponse([eligibleChannel({})]);
       if (url.includes("/channel/proxy-accounts?")) return ledgerFor(url);
