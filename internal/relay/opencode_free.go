@@ -381,6 +381,7 @@ func ensureOfficialOpencodeSystem(body []byte, lane, modelName string) ([]byte, 
 	official = strings.ReplaceAll(official, "{{MODEL_NAME}}", modelName)
 	official = strings.ReplaceAll(official, "{{MODEL_ID}}", modelName)
 	official = strings.ReplaceAll(official, "{{DATE}}", ocProbeDate(time.Now()))
+	official = strings.ReplaceAll(official, "{{WORKDIR}}", ocRuntimeWorkdir())
 	if strings.Contains(official, "{{") {
 		return body, false
 	}

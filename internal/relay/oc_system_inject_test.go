@@ -111,3 +111,37 @@ func bodyTopLevelKeys(body []byte) []string {
 	})
 	return keys
 }
+
+// TestEnsureOfficialOpencodeSystemUsesRuntimeWorkdir 验证系统提示写运行时工作目录,
+// 不再固定为抓包机器路径; 官方客户端写自身 cwd, 网关同理。
+func TestEnsureOfficialOpencodeSystemUsesRuntimeWorkdir(t *testing.T) {
+	body := []byte(`{"model":"m1","messages":[{"role":"user","content":"hi"}]}`)
+	out, changed := ensureOfficialOpencodeSystem(body, "v1", "m1")
+	if !changed {
+		t.Fatal("expected injection")
+	}
+	content := gjson.GetBytes(out, "messages.0.content").String()
+	want := "Working directory: " + ocRuntimeWorkdir()
+	if !strings.Contains(content, want) {
+		t.Fatalf("system prompt missing runtime workdir %q: %.200s", want, content)
+	}
+	if strings.Contains(content, "{{") {
+		t.Fatalf("unresolved template marker: %.200s", content)
+	}
+}
+
+// TestOcProbeClientBodyUsesRuntimeWorkdir 验证体检正文的系统提示同样写运行时工作目录。
+func TestOcProbeClientBodyUsesRuntimeWorkdir(t *testing.T) {
+	body, err := ocProbeClientBody("v1", "m1", "m1", defaultTestMessage, 0)
+	if err != nil {
+		t.Fatalf("build probe body: %v", err)
+	}
+	content := gjson.GetBytes(body, "messages.0.content").String()
+	want := "Working directory: " + ocRuntimeWorkdir()
+	if !strings.Contains(content, want) {
+		t.Fatalf("probe system missing runtime workdir %q: %.200s", want, content)
+	}
+	if strings.Contains(content, "{{") {
+		t.Fatalf("unresolved template marker: %.200s", content)
+	}
+}

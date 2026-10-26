@@ -22,6 +22,7 @@ Status: implemented
 4. 上游的所有 HTTP 响应（包括 429/403）原样透传；只有 sidecar 自身网络失败才返回带 `x-noveil-sidecar-error` 头的 502。这样 NovaVeil 能读到真实状态码与 `Retry-After`，账号池才会正确冷却、换号。
 5. sidecar 的响应体由 Bun fetch 自动解压，因此回传时删除上游的 `content-encoding` 与 `content-length`，避免长度/编码与已解压正文不一致。
 6. sidecar 启动时把父进程 PID 传入，父进程退出后自行退出；Go 侧在 sidecar 异常退出后按需重启。
+7. 免费档 system 提示的 `Working directory` 改为运行时进程 cwd（模板占位符 `{{WORKDIR}}`），与官方客户端写自身 cwd 同口径；`Today's date` 本就按 `{{DATE}}` + 本地时间动态生成。两处曾固化抓包机器值，会随时间与环境漂移。
 
 ## Alternatives considered
 

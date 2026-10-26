@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"os"
 	"regexp"
 	"runtime"
 	"sort"
@@ -337,6 +338,7 @@ func ocProbeClientBody(lane, modelName, displayName, question string, maxOutput 
 	system = strings.ReplaceAll(system, "{{MODEL_NAME}}", displayName)
 	system = strings.ReplaceAll(system, "{{MODEL_ID}}", modelName)
 	system = strings.ReplaceAll(system, "{{DATE}}", ocProbeDate(time.Now()))
+	system = strings.ReplaceAll(system, "{{WORKDIR}}", ocRuntimeWorkdir())
 	if strings.Contains(system, "{{") {
 		return nil, fmt.Errorf("体检系统提示存在未替换标记")
 	}
@@ -417,6 +419,14 @@ func ocProbeClientBody(lane, modelName, displayName, question string, maxOutput 
 // ocProbeDate 输出官方客户端的系统提示日期格式, 形如 Sat Oct 24 2026(日不补零)。
 func ocProbeDate(now time.Time) string {
 	return fmt.Sprintf("%s %s %d %d", now.Format("Mon"), now.Format("Jan"), now.Day(), now.Year())
+}
+
+// ocRuntimeWorkdir 返回进程工作目录, 与官方客户端写自身 cwd 同口径。
+func ocRuntimeWorkdir() string {
+	if wd, err := os.Getwd(); err == nil && wd != "" {
+		return wd
+	}
+	return "/"
 }
 
 // opencodeProbeCatalog 是体检取展示名的目录入口, 测试替换以免真实外呼。
