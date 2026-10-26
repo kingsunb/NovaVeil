@@ -19,6 +19,28 @@ func stubOcProbeCatalog(t *testing.T) {
 	t.Cleanup(func() { opencodeProbeCatalog = original })
 }
 
+// TestRunAccountProbeCancelsRemaining 验证作业时限到点后未体检的账号记为已取消,
+// 而不是静默消失。
+func TestRunAccountProbeCancelsRemaining(t *testing.T) {
+	plan := &ocProbePlan{
+		channel:     model.Channel{ID: 1},
+		modelName:   "m",
+		displayName: "m",
+		accounts:    []string{"cancel-a", "cancel-b", "cancel-c"},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	report := runAccountProbe(ctx, plan, 1, time.Second, nil)
+	if report.Summary.Total != len(plan.accounts) {
+		t.Fatalf("汇总总数异常: %+v", report.Summary)
+	}
+	for _, result := range report.Results {
+		if result.Outcome != ocProbeOutcomeCancelled {
+			t.Fatalf("未体检的账号应记为已取消: %+v", result)
+		}
+	}
+}
+
 // TestStartOpencodeAccountProbeRunsInBackground 验证体检改为后台作业:
 // 接口立即返回且作业仍在跑, 结束后状态与结论可查。
 func TestStartOpencodeAccountProbeRunsInBackground(t *testing.T) {
