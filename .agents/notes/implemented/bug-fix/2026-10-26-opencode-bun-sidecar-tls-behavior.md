@@ -56,6 +56,7 @@ go build ./... && go vet ./internal/client/ ./internal/helper/ ./internal/relay/
 - 2026-10-26 最终闭环：6 并发扫描 60 个 resin 账号，命中 `scan1792964122441530` / `65.111.26.69`（官方 CLI 200）；随后 `client.GetBunClient` 经同一账号的 Bun sidecar 返回 `STATUS=200`，耗时 2.104s，响应为真实 SSE。
 - 2026-10-26 形态终审：抓官方 CLI 实时主请求体（32600B）与 Nova 生产出站体（33025B）逐字节比对——顶层键序、`max_tokens=32000`、`tool_choice=auto`、`stream_options`、11 个工具定义字节完全一致，system 仅差 `Working directory` 与 `Today's date` 两行（后者由 `{{DATE}}` + 本地时间动态生成），user 文本按客户端输入。二者 sha256 相同的一对（`PROD_TODAY == V5_date`）在有额度节点上返回 200，证明生产出站形态可被上游放行。
 - 2026-10-26 运营结论：免费档额度按出口 IP 计且先到先得。官方 CLI 一次 `run` 消耗 title + main 两次额度，用它预扫描只为标记 1 个账号（效率 0.5），而业务请求消耗 1 次额度直接服务 1 个请求（效率 1）；**预扫描是负收益，不要用它预热账号池**。正确做法是让业务请求自己轮换出口，命中即记成功、403/429 即按 `Retry-After` 冷却该账号。
+- 2026-10-26 重试预算落地：免费档分组设 `member_max_attempts=1` + `max_request_rounds=3`，即首发 + 最多 2 次换号 = 单请求最多 3 次上游尝试。默认的 `member_max_attempts=3` 会与成员内换号（`ocProxyMaxRetries=3`）叠加，实测单请求可达 8-14 次尝试、90s 不结束，在按 IP 限额的免费档上会迅速烧尽出口池。实测 8 并发下平均 2.88 次尝试/请求、延迟 3.8-6.7s。
 
 Docker 验证：
 
