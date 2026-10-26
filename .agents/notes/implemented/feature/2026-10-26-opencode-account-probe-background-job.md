@@ -52,5 +52,5 @@ cd web-next && pnpm typecheck && pnpm vitest run src/pages/ProxyAccounts.test.ts
 
 ## 相关
 
-- 账号体检的出站形态与免费档整体对齐见 [Bun sidecar 真发](./2026-10-26-opencode-bun-sidecar-tls-behavior.md)。
-- 403/429 冷却与 `Retry-After` 口径见 [429 冷却锚定配额重置](./2026-10-26-opencode-429-retry-after-cooldown.md)。
+- 账号体检的出站形态与免费档整体对齐见 [Bun sidecar 真发](../bug-fix/2026-10-26-opencode-bun-sidecar-tls-behavior.md)。
+- 403/429 冷却与 `Retry-After` 口径见 [429 冷却锚定配额重置](../bug-fix/2026-10-26-opencode-429-retry-after-cooldown.md)。
