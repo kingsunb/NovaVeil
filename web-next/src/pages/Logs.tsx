@@ -129,6 +129,7 @@ const ERR_CLASS_OPTIONS = [
   "upstream_5xx",
   "upstream_network",
   "upstream_error",
+  "client_rejected",
 ];
 
 export default function LogsPage() {

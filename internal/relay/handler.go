@@ -102,7 +102,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		}
 
 		// 客户端请求的模型名称即分组名称; 分组不存在说明模型名错误, 等待也不会出现该分组。
-		if _, err := op.GroupGetByName(metadataModel); err != nil {
+		requestGroup, err := op.GroupGetByName(metadataModel)
+		if err != nil {
 			rejectRequest(c, inbound, errors.New("model not found"))
 			return
 		}
@@ -115,6 +116,12 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		apiKeyName := c.GetString("api_key_name")
 		request := newRequestState(metadataModel, requestBodyString, c.ClientIP(), apiKeyRaw, apiKeyName)
 		op.TrackClientStat(c.ClientIP())
+		// 分组开启拒绝时, 标题类请求不发起上游调用
+		if requestGroup.RelayConfig.RejectTitleRequests && isTitleGenerationRequest(raw.Body) {
+			request.markFailed(errTitleRequestRejected, "", nil)
+			rejectRequest(c, inbound, errTitleRequestRejected)
+			return
+		}
 		var hops []refHop             // 当轮引用链: 提升到循环外供 panic 兜底读取当轮占用, 每轮选路成功后重新赋值。
 		var lifecycle *roundLifecycle // 当轮生命周期: 提升到循环外供 panic 兜底释放上游响应与并发槽位。
 		// panic 兜底必须盖住脱敏: 脱敏失败若 panic, 全文已经在请求状态里。

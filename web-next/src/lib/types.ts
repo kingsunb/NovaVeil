@@ -282,6 +282,8 @@ export interface GroupRelayConfig {
   echo_response_model: boolean;
   /** 是否按手动窗口跳过装不下的成员，默认 false；同步窗口仅展示，未填手动窗口时照常尝试。 */
   context_fit_enabled: boolean;
+  /** 是否拒绝标题类轻请求（单轮、无工具、含标题提示词），默认 false。 */
+  reject_title_requests: boolean;
 }
 
 /**
@@ -313,6 +315,7 @@ export const DEFAULT_GROUP_RELAY_CONFIG: GroupRelayConfig = {
   auto_match_models: false,
   echo_response_model: false,
   context_fit_enabled: false,
+  reject_title_requests: false,
 };
 
 export interface GroupItem {
@@ -538,6 +541,7 @@ export type ErrClass =
   | "upstream_5xx"
   | "upstream_network"
   | "upstream_error"
+  | "client_rejected"
   | "rounds_exhausted";
 
 export interface AttemptRecord {
