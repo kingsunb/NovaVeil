@@ -541,6 +541,7 @@ export default function ProxyAccountsPage() {
   const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: () => api.listChannels() });
   const eligible = (channelsQuery.data ?? []).filter(
     (channel) =>
+      channel.is_free &&
       channel.enabled &&
       channel.opencode_compat &&
       !!channel.channel_proxy &&

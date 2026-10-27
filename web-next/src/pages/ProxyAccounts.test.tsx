@@ -206,6 +206,12 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
         return jsonResponse([
           eligibleChannel({}),
           eligibleChannel({ id: 9, name: "OpenCode Free Old", base_url: "https://opencode.ai/zen" }),
+          eligibleChannel({
+            id: 10,
+            name: "OpenCode",
+            is_free: false,
+            base_url: "https://opencode.ai/zen/v1",
+          }),
         ]);
       }
       return jsonResponse(null);
@@ -221,6 +227,8 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     expect(await screen.findByText("opencode0a1b2c3d")).toBeInTheDocument();
     expect(screen.getByText("https://opencode.ai/inference")).toBeInTheDocument();
     expect(screen.queryByText("Plain Channel")).not.toBeInTheDocument();
+    // 官方付费 OpenCode 不进账号池体检
+    expect(screen.queryByRole("option", { name: "OpenCode" })).not.toBeInTheDocument();
 
     // 切到 Old → 展示 Old 的台账
     const user = userEvent.setup();
