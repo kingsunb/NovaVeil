@@ -11,7 +11,7 @@
 - `supportsNativeFormat(channel, format)`：当 `channel.PassThroughBodyEnabled` 为 true 且渠道非 custom（固定回复）时，任意格式均返回 true，走 `sendPassthrough` 而非 `sendConverted`。
 - `buildPassthroughRequest`：当 `PassThroughBodyEnabled` 为 true 且非 `##` 完整 URL 时，用客户端原始请求路径 `raw.Path`（如 `/v1/messages`，剥去 `/v1` 前缀）替代 `upstreamPath(format)`，交给 `BuildRequestURL` 与 base 拼接。
 - Auth 按客户端协议（`format`）适配：Anthropic 格式用 `X-API-Key`，其余用 `Bearer`。完全透传下无需修改，auth 由 format 决定而非渠道类型。
-- 非流式响应：当 `PassThroughBodyEnabled` 为 true 时，`sendPassthrough` 跳过 `outbound.TransformResponse` / `validateResponse` / `validateRoundUsage` / `validateRoundAnswer`，直接返回原始响应体。outbound transformer 按渠道类型创建（如 OpenAI 渠道 → OpenAI outbound），但完全透传下响应格式由客户端协议决定（可能是 Anthropic），用渠道 outbound 解析会失败。
+- 非流式响应：当 `PassThroughBodyEnabled` 为 true 时，`sendPassthrough` 跳过 `outbound.TransformResponse` / `validateResponse` / `validateRoundUsage`，直接返回原始响应体。唯一例外是思考-only 空回答：仍调用 `validateRoundAnswer`，`finish_reason=stop` 且只产出 `reasoning_content` 的轮次判无效并换渠道重试。outbound transformer 按渠道类型创建（如 OpenAI 渠道 → OpenAI outbound），但完全透传下响应格式由客户端协议决定（可能是 Anthropic），用渠道 outbound 解析会失败，因此跳过解析。
 - 流式响应：`sendPassthroughStream` 用 `format`（客户端格式）调用 `analyzeStreamEvent` 和 `inboundForFormat`，不依赖 outbound transformer，多协议透传下流式事件分析天然正确。
 - custom 渠道：`supportsNativeFormat` 和 `buildOutbound` 对 custom 始终返回 `passthrough=false`，透传对它无意义。
 
@@ -75,7 +75,7 @@
 ## 边界情况
 
 1. **不计费**：完全透传下 `usage = nil`，不产生用量记录和扣费。需计费则要按客户端格式额外实现响应体解析。
-2. **不校验**：跳过 `validateResponse` / `validateRoundUsage` / `validateRoundAnswer`，上游返回的 200 下发错误、空输出、异常 finish_reason 均不会被拦截重试。
+2. **不校验**：跳过 `validateResponse` / `validateRoundUsage`，上游返回的 200 下发错误、空输出、异常 finish_reason 均不会被拦截重试。唯一例外是思考-only 空回答，非流式路径仍调用 `validateRoundAnswer` 拦截。
 3. **ParamOverride 仍生效**：`applyChannelConfig` 仍注入 `ParamOverride`，完全不动请求体需在 `applyChannelConfig` 中也检查 `PassThroughBodyEnabled`。
 4. **自定义头仍追加**：`CustomHeader` 仍会被追加到上游请求。
 5. **多 Key 轮询不受影响**：Key 选择和轮询在 `sendPassthrough` 之前完成。

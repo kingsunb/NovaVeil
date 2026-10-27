@@ -153,6 +153,13 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	// 完全渠道透传下, outbound transformer 按渠道类型创建(如 OpenAI), 但响应格式由客户端
 	// 协议决定(可能是 Anthropic), 用 OpenAI outbound 解析会失败, 因此也跳过。
 	if !isChatFormat(format) || channel.PassThroughBodyEnabled {
+		// 透传仍拦截思考-only 空回答
+		if channel.PassThroughBodyEnabled {
+			if err := validateRoundAnswer(format, response.Body); err != nil {
+				releaseConcurrency()
+				return nil, fmt.Errorf("%w: %s", err, errBodySnippet(response.Body))
+			}
+		}
 		return &upstreamResponse{body: response.Body, header: response.Headers.Clone(), release: releaseConcurrency}, nil
 	}
 	// 同协议下响应可原样回给客户端, 仍需解析一次以取得用量并识别以 200 下发的失败终态;

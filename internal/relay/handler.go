@@ -893,6 +893,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			roundAnswered := false            // 整轮是否出现过最终回答信号(文本增量/工具调用)。
 			roundReasoned := false            // 整轮是否出现过推理内容信号(reasoning_content)。
 			roundFinished := false            // 整轮是否出现过白名单内的非空终止原因(OpenAI Chat 的 finish_reason / Anthropic 的 message_delta.stop_reason)。
+			roundToolCall := false            // 整轮是否出现过工具调用增量。
+			roundFinish := ""                 // 整轮首个白名单内非空终止原因。
 			window := result.window
 			// 初始化必须为 false: 窗口内出现终止事件时(无内容流), 窗口可能携带多条事件
 			// (结构帧 + 终止帧 + usage 尾帧), 若以 terminated 起步会在写完第一帧后提前 break,
@@ -975,6 +977,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				roundAnswered = roundAnswered || verdict.hasAnswer
 				roundReasoned = roundReasoned || verdict.hasReasoning
 				roundFinished = roundFinished || verdict.finishSeen
+				roundToolCall = roundToolCall || verdict.toolCall
+				if roundFinish == "" && verdict.finishReason != "" {
+					roundFinish = verdict.finishReason
+				}
 				if verdict.inspectErr != nil || verdict.terminal {
 					last = true
 					terminalSeen = true
@@ -1007,6 +1013,13 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 						break
 					}
 					continue
+				}
+				// 工具轮次不得以自然结束下发, 否则下游当整轮完成。
+				if verdict.finishReason != "" {
+					corrected := resolveTerminalReason(format, verdict.finishReason, roundToolCall)
+					if corrected != verdict.finishReason {
+						event.Data = rewriteStreamFinishReason(event.Data, format, corrected)
+					}
 				}
 				// 脱敏还原: SSE 事件增量文本占位符→原文, StreamRestorer 跨 chunk 缓冲拼接(文档 01 §3.2、03)。
 				if streamRestorer != nil {
@@ -1124,7 +1137,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 否则客户端把残缺流当成正常结束。缺 [DONE] 哨兵但终止原因合法的完整流
 			// (frameFailure == nil 且未污染) 仍合成正常终止帧规范收尾。
 			if committed && !clientGone && ctx.Err() == nil && !polluted && frameFailure == nil && !terminalSeen {
-				for _, frame := range terminalStreamFrames(format) {
+				// 收尾帧继承真实终态, 保持工具轮次
+				terminalReason := resolveTerminalReason(format, roundFinish, roundToolCall)
+				for _, frame := range terminalStreamFrames(format, terminalReason) {
 					encoded.Reset()
 					if sse.Encode(&encoded, sse.Event{Id: frame.LastEventID, Event: frame.Type, Data: frame.Data}) != nil {
 						break
