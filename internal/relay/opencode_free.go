@@ -128,8 +128,11 @@ func isOpencodeFreeModel(channel model.Channel, modelName string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "free")
 }
 
-// opencodeV2CompletionLimit 是 v2 档默认输出上限。
-const opencodeV2CompletionLimit = 32000
+// opencodeV2CompletionLimit 是免费档转发路径补的输出上限。
+const opencodeV2CompletionLimit = 128000
+
+// opencodeProbeCompletionLimit 是体检模板默认输出上限。
+const opencodeProbeCompletionLimit = 64000
 
 // isOpencodeV1Lane 判定渠道是否走 opencode 1.x 客户端形态。
 func isOpencodeV1Lane(channel model.Channel) bool {
@@ -320,8 +323,7 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 			if sysNext, sysChanged := ensureOfficialOpencodeSystem(out, "v1", bodyModelName(out)); sysChanged {
 				out, changed = sysNext, true
 			}
-			// 官方 1.19.4 主请求恒带 max_tokens=32000 与 tool_choice="auto"(2026-10-26 MITM 实抓);
-			// 键序归一只能重排已存在的键, 缺字段必须在此补齐, 否则上游按正文形态判非官方客户端。
+			// 官方实抓 32000, 现放宽至 128000; 缺字段须在此补齐。
 			if !gjson.GetBytes(out, "max_tokens").Exists() && !gjson.GetBytes(out, "max_completion_tokens").Exists() {
 				if next, err := sjson.SetBytes(out, "max_tokens", opencodeV2CompletionLimit); err == nil {
 					out, changed = next, true

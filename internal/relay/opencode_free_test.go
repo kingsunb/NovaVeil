@@ -162,7 +162,7 @@ func TestShapeOpencodeFreeBodyV1ReadTool(t *testing.T) {
 		if !strings.Contains(string(got), `"description":"client"`) {
 			t.Fatalf("客户端 read 定义应原样保留: %s", got)
 		}
-		if gjson.GetBytes(got, "max_tokens").Int() != 32000 || gjson.GetBytes(got, "tool_choice").String() != "auto" {
+		if gjson.GetBytes(got, "max_tokens").Int() != 128000 || gjson.GetBytes(got, "tool_choice").String() != "auto" {
 			t.Fatalf("v1 默认字段缺失: %s", got)
 		}
 	})
@@ -344,7 +344,7 @@ func TestShapeOpencodeFreeBodyV2CompletionLimit(t *testing.T) {
 			name:      "v2 无上限时补默认值",
 			body:      `{"model":"x-free","messages":[]}`,
 			wantLimit: true,
-			wantValue: 32000,
+			wantValue: 128000,
 		},
 		{
 			name: "显式 max_tokens=0 不覆盖",

@@ -307,7 +307,7 @@ func assertClientFormBody(t *testing.T, body []byte, lane string, modelName, dis
 			t.Fatalf("v1 档 tool_choice 异常: %q", got)
 		}
 	}
-	if got := gjson.GetBytes(body, limitField).Int(); got != 32000 {
+	if got := gjson.GetBytes(body, limitField).Int(); got != 64000 {
 		t.Fatalf("%s 异常: %d", limitField, got)
 	}
 	phrase := "on Linux using bash"

@@ -10,7 +10,7 @@ OpenCode 免费档按客户端指纹放行。上游最新客户端是 v2 `2.1.3`
 
 - v1 档 `/zen` 的 UA 版本改为 `1.19.4`，仍按出站协议动态拼装 `opencode/<ver> ai-sdk/provider-utils/<ver> runtime/bun/<ver>`，不改成静态 CustomHeader。
 - v2 档 `/inference` 在 `applyOpencodeFreeLaneHeaders` 中无条件覆盖 `User-Agent: opencode/latest/2.1.3/cli`，位于设置 `Accept` 之后；因此存量库不需要迁移。内置三个 cli 种子更新为同一值，desktop 种子更新为 `opencode/latest/2.1.3/desktop`。
-- v2 Chat 免费档正文在 `max_tokens` 与 `max_completion_tokens` 都不存在时补 `max_completion_tokens: 32000`；显式值（含 `0`）一律保留。整形发生在 `applyChannelConfig` 之后，渠道 `model_limits` / `param_override` 优先。
+- v2 Chat 免费档正文在 `max_tokens` 与 `max_completion_tokens` 都不存在时补 `max_completion_tokens: 128000`；显式值（含 `0`）一律保留。整形发生在 `applyChannelConfig` 之后，渠道 `model_limits` / `param_override` 优先。放宽理由见 [completion limit 笔记](./2026-10-27-opencode-free-completion-limit-raise.md)。
 - v2 Chat 生成的工具 `function` 增加 `strict: false`；匹配器要求客户端工具显式 `strict=false`，否则替换为规范定义。v1 的 legacy `read` 占位不增加该字段。
 - 生成工具的 JSON 使用 `json.Encoder` 且 `SetEscapeHTML(false)`，去掉末尾换行；不使用字符串替换反解 `\u003c` / `\u003e` / `\u0026`。
 - 已有版本与头讨论见 [opencode2api 兼容跟进](../architecture/2026-10-19-opencode2api-compat-followup.md)、[免费档头集合对齐](2026-10-20-opencode-free-lane-header-parity.md)、[v2 免费档整形](../feature/2026-10-21-opencode-v2-free-tier-shaping.md)。

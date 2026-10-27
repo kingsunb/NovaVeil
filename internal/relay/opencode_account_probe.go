@@ -370,7 +370,7 @@ var ocProbeProjectID = func() string {
 }()
 
 // ocProbeClientBody 按官方客户端实抓形态装配体检正文: 键序、参数、工具与抓包一致,
-// 仅模型、展示名、日期与用户消息按当次探测填充。maxOutput 非正时回退 32000。
+// 仅模型、展示名、日期与用户消息按当次探测填充。maxOutput 非正时回退 64000。
 func ocProbeClientBody(lane, modelName, displayName, question string, maxOutput int) ([]byte, error) {
 	templates, err := loadOcProbeTemplates()
 	if err != nil {
@@ -381,7 +381,7 @@ func ocProbeClientBody(lane, modelName, displayName, question string, maxOutput 
 		return nil, fmt.Errorf("未知体检模板档位: %s", lane)
 	}
 	if maxOutput <= 0 {
-		maxOutput = opencodeV2CompletionLimit
+		maxOutput = opencodeProbeCompletionLimit
 	}
 	system := template.System
 	system = strings.ReplaceAll(system, "{{MODEL_NAME}}", displayName)
