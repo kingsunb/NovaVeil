@@ -13,9 +13,10 @@ TLS 指纹(sigalgs)修复后, v1 档(/zen)出现「账号体检 200 健康、真
 
 ## Decision
 
-1. **官方系统提示注入(`internal/relay/opencode_free.go`)**: `ensureOfficialOpencodeSystem` 在免费档 chat 整形链中保证首条 system 是官方模板——无 system 时插入, 有客户端 system 时以官方模板打头、客户端原文以空行追加到尾部(实测追加不影响门禁判定); 模板复用体检的 `loadOcProbeTemplates`(按 v1/v2 档位, MODEL/DATE 动态化)。首条 system 已是官方形态(前 64 字节前缀命中)时幂等跳过, 体检模板与重复整形不受影响。v1/v2 分支均在键序归一前调用。
-2. **派生会话号时间段修复(`internal/utils/opencodeid/opencodeid.go`)**: `SessionIDFromSignal` 的时间段从哈希构造改为当前时间的小时锚(`UnixMilli` 截断到小时再左移 12 位), 计数低位 12 bit 与 14 位随机段仍取自哈希——同一信号在同一小时内派生同一号(稳定性覆盖会话粘合 30 分钟 TTL), 跨小时等效新会话, 解码时间始终落在近期。
-3. **TLS 指纹锁定测试(`internal/client/bun_hello_test.go`)**: uTLS 本地 marshal 出 ClientHello 原始字节, 断言扩展顺序、签名算法完整序列(含 Ed25519/P-521)、密码套件、曲线首组 X25519MLKEM768、ALPN 与版本——TLS 回归不再静默通过 go test。
+1. **官方系统提示注入(`internal/relay/opencode_free.go`)**: `ensureOfficialOpencodeSystem` 在免费档 chat 整形链中保证首条 system 是官方模板——无 system 时插入, 有客户端 system 时以官方模板打头、客户端原文以空行追加到尾部(实测追加不影响门禁判定); 客户端 system 是 content parts 数组时, 官方提示作为首个 text part 前置, 客户端各 part 原样保留。模板复用体检的 `loadOcProbeTemplates`(按 v1/v2 档位, MODEL/DATE/WORKDIR 动态化), 渲染与幂等前缀统一由 `renderOfficialOpencodeTemplate` 提供。首条 system 已是官方形态(前 64 字节前缀命中)时幂等跳过, 体检模板与重复整形不受影响。v1/v2 分支均在键序归一前调用。
+2. **Responses 协议同口径(`ensureOfficialOpencodeInstructions`)**: Responses 的系统提示走 `instructions` 字段而非 messages, 免费档 Responses 出站(含转发与上下文探测两条路径)按同一门禁补齐——无 instructions 时写入官方模板, 已有则以官方模板打头、客户端原文追加到尾部, 前缀命中则幂等跳过。Chat 之外的其它出站协议(如 Anthropic)不注入。
+3. **派生会话号时间段修复(`internal/utils/opencodeid/opencodeid.go`)**: `SessionIDFromSignal` 的时间段从哈希构造改为当前时间的小时锚(`UnixMilli` 截断到小时再左移 12 位), 计数低位 12 bit 与 14 位随机段仍取自哈希——同一信号在同一小时内派生同一号(稳定性覆盖会话粘合 30 分钟 TTL), 跨小时等效新会话, 解码时间始终落在近期。
+4. **TLS 指纹锁定测试(`internal/client/bun_hello_test.go`)**: uTLS 本地 marshal 出 ClientHello 原始字节, 断言扩展顺序、签名算法完整序列(含 Ed25519/P-521)、密码套件、曲线首组 X25519MLKEM768、ALPN 与版本——TLS 回归不再静默通过 go test。
 
 ## Alternatives considered
 
@@ -36,6 +37,7 @@ TLS 指纹(sigalgs)修复后, v1 档(/zen)出现「账号体检 200 健康、真
 go build ./... && go test ./internal/relay/ ./internal/client/ ./internal/utils/opencodeid/
 ```
 
-- `TestEnsureOfficialOpencodeSystem*` / `TestShapeOpencodeFreeBodyInjectsOfficialSystem`: 注入/合并/幂等/体检模板直通。
+- `TestEnsureOfficialOpencodeSystem*` / `TestShapeOpencodeFreeBodyInjectsOfficialSystem`: 注入/合并/幂等/体检模板直通; `TestEnsureOfficialOpencodeSystemKeepsContentParts`: parts 数组前置官方 part 且原 parts 保留。
+- `TestEnsureOfficialOpencodeInstructions*`: Responses 正文 instructions 的缺失注入、客户端原文追加与重复整形幂等。
 - `TestBunClientHello*`: TLS 指纹 golden 锁定。
 - 远程在线验证(2026-10-24): v1 档有额度出口上, 朴素请求+整形从 429 变 200; 哈希派生号修复后时间段与官方号同窗(旧号 429 的隔离实验在先)。

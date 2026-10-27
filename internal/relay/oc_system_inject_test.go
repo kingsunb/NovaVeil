@@ -145,3 +145,75 @@ func TestOcProbeClientBodyUsesRuntimeWorkdir(t *testing.T) {
 		t.Fatalf("unresolved template marker: %.200s", content)
 	}
 }
+
+// TestEnsureOfficialOpencodeSystemKeepsContentParts 验证客户端 system 为 parts 数组时,
+// 官方提示作为首个 text part 前置, 原 parts 逐条保留且重复整形幂等。
+func TestEnsureOfficialOpencodeSystemKeepsContentParts(t *testing.T) {
+	body := []byte(`{"model":"m1","messages":[{"role":"system","content":[{"type":"text","text":"be brief"},{"type":"text","text":"no markdown"}]},{"role":"user","content":"hi"}]}`)
+	out, changed := ensureOfficialOpencodeSystem(body, "v2", "m1")
+	if !changed {
+		t.Fatal("expected injection")
+	}
+	parts := gjson.GetBytes(out, "messages.0.content").Array()
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 parts, got %d: %s", len(parts), out)
+	}
+	if !strings.HasPrefix(parts[0].Get("text").String(), officialPrefix(t, "v2")) {
+		t.Fatal("official part not prepended")
+	}
+	if parts[1].Get("text").String() != "be brief" || parts[2].Get("text").String() != "no markdown" {
+		t.Fatalf("client parts lost: %s", out)
+	}
+	if gjson.GetBytes(out, "messages.1.content").String() != "hi" {
+		t.Fatal("later messages changed")
+	}
+	again, changedAgain := ensureOfficialOpencodeSystem(out, "v2", "m1")
+	if changedAgain {
+		t.Fatal("second pass should be idempotent")
+	}
+	if len(gjson.GetBytes(again, "messages.0.content").Array()) != 3 {
+		t.Fatal("parts count changed on second pass")
+	}
+}
+
+// TestEnsureOfficialOpencodeInstructionsInjectsWhenMissing 验证 Responses 正文无 instructions 时写入官方模板。
+func TestEnsureOfficialOpencodeInstructionsInjectsWhenMissing(t *testing.T) {
+	body := []byte(`{"model":"m1","input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+	out, changed := ensureOfficialOpencodeInstructions(body, "v2", "m1")
+	if !changed {
+		t.Fatal("expected injection")
+	}
+	instructions := gjson.GetBytes(out, "instructions").String()
+	if !strings.HasPrefix(instructions, officialPrefix(t, "v2")) {
+		t.Fatalf("instructions lacks official prefix: %.120s", instructions)
+	}
+	if !strings.Contains(instructions, "Working directory: "+ocRuntimeWorkdir()) {
+		t.Fatal("instructions missing runtime workdir")
+	}
+	if got := gjson.GetBytes(out, "input.0.role").String(); got != "user" {
+		t.Fatalf("input changed: %q", got)
+	}
+}
+
+// TestEnsureOfficialOpencodeInstructionsMergesClient 验证客户端自带 instructions 时前置官方模板并幂等。
+func TestEnsureOfficialOpencodeInstructionsMergesClient(t *testing.T) {
+	body := []byte(`{"model":"m1","instructions":"be brief","input":[]}`)
+	out, changed := ensureOfficialOpencodeInstructions(body, "v1", "m1")
+	if !changed {
+		t.Fatal("expected merge")
+	}
+	instructions := gjson.GetBytes(out, "instructions").String()
+	if !strings.HasPrefix(instructions, officialPrefix(t, "v1")) {
+		t.Fatal("merged instructions lacks official prefix")
+	}
+	if !strings.HasSuffix(instructions, "\n\nbe brief") {
+		t.Fatal("client instructions not appended")
+	}
+	again, changedAgain := ensureOfficialOpencodeInstructions(out, "v1", "m1")
+	if changedAgain {
+		t.Fatal("second pass should be idempotent")
+	}
+	if gjson.GetBytes(again, "instructions").String() != instructions {
+		t.Fatal("instructions changed on second pass")
+	}
+}

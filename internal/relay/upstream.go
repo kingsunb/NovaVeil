@@ -103,6 +103,9 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 			var shaped bool
 			request.Body, shaped, toolAliases = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(channel), formatToProtocol(format))
 			collapsed = shaped && !streaming
+		} else if formatToProtocol(format) == model.UpstreamProtocolResponses {
+			// Responses 的系统提示走 instructions, 单独补齐官方形态。
+			request.Body, _ = ensureOfficialOpencodeInstructions(request.Body, opencodeLaneKey(channel), bodyModelName(request.Body))
 		}
 	}
 	if streaming {
@@ -330,6 +333,9 @@ func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *
 		applyOpencodeFreeLaneHeaders(m.channel, request, bodyModelName(request.Body))
 		if isChatFormat(m.format) {
 			request.Body, _, _ = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(m.channel), formatToProtocol(m.format))
+		} else if formatToProtocol(m.format) == model.UpstreamProtocolResponses {
+			// Responses 的系统提示走 instructions, 单独补齐官方形态。
+			request.Body, _ = ensureOfficialOpencodeInstructions(request.Body, opencodeLaneKey(m.channel), bodyModelName(request.Body))
 		}
 	}
 	// 角色归一与渠道参数覆盖之后再回写。Chat 归一会剥掉白名单外的顶层字段,

@@ -136,6 +136,14 @@ func isOpencodeV1Lane(channel model.Channel) bool {
 	return model.OpencodeLaneOf(channel) == "v1"
 }
 
+// opencodeLaneKey 返回渠道对应的体检模板档位键, 与模板 map 的键一致。
+func opencodeLaneKey(channel model.Channel) string {
+	if isOpencodeV1Lane(channel) {
+		return "v1"
+	}
+	return "v2"
+}
+
 // opencodeUpstreamFamily 返回 v2 family 段。
 func opencodeUpstreamFamily(provider model.ChannelProvider) string {
 	switch provider {
@@ -362,27 +370,37 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 // ocOfficialSystemPrefixLen 是官方系统提示幂等判定的前缀长度。
 const ocOfficialSystemPrefixLen = 64
 
-// ensureOfficialOpencodeSystem 保证免费档正文首条 system 消息是官方模板形态。
-// 上游对免费档做系统提示门禁: 缺失或非官方主体的 system 一律 429(2026-10-24 实测,
-// 话术 FreeUsageLimitError), 官方模板尾部追加客户端指令不影响通过。无 system 时
-// 直接插入; 有客户端 system 时以官方模板打头、客户端原文追加到尾部。
-// 首条 system 已是官方形态时幂等跳过, 保证体检模板与重复整形不受影响。
-func ensureOfficialOpencodeSystem(body []byte, lane, modelName string) ([]byte, bool) {
+// renderOfficialOpencodeTemplate 渲染官方系统提示, 第二返回值是幂等判定前缀。
+func renderOfficialOpencodeTemplate(lane, modelName string) (string, string, bool) {
 	templates, err := loadOcProbeTemplates()
 	if err != nil || templates[lane] == nil {
-		return body, false
+		return "", "", false
 	}
-	template := templates[lane]
-	prefix := template.System
+	raw := templates[lane].System
+	prefix := raw
 	if len(prefix) > ocOfficialSystemPrefixLen {
 		prefix = prefix[:ocOfficialSystemPrefixLen]
 	}
-	official := template.System
+	official := raw
 	official = strings.ReplaceAll(official, "{{MODEL_NAME}}", modelName)
 	official = strings.ReplaceAll(official, "{{MODEL_ID}}", modelName)
 	official = strings.ReplaceAll(official, "{{DATE}}", ocProbeDate(time.Now()))
 	official = strings.ReplaceAll(official, "{{WORKDIR}}", ocRuntimeWorkdir())
 	if strings.Contains(official, "{{") {
+		return "", "", false
+	}
+	return official, prefix, true
+}
+
+// ensureOfficialOpencodeSystem 保证免费档正文首条 system 消息是官方模板形态。
+// 上游对免费档做系统提示门禁: 缺失或非官方主体的 system 一律 429(2026-10-24 实测,
+// 话术 FreeUsageLimitError), 官方模板尾部追加客户端指令不影响通过。无 system 时
+// 直接插入; 有客户端 system 时以官方模板打头、客户端原文追加到尾部。
+// 客户端 system 是 content parts 数组时, 官方提示作为首个 text part 前置。
+// 首条 system 已是官方形态时幂等跳过, 保证体检模板与重复整形不受影响。
+func ensureOfficialOpencodeSystem(body []byte, lane, modelName string) ([]byte, bool) {
+	official, prefix, ok := renderOfficialOpencodeTemplate(lane, modelName)
+	if !ok {
 		return body, false
 	}
 	messages := gjson.GetBytes(body, "messages")
@@ -393,11 +411,15 @@ func ensureOfficialOpencodeSystem(body []byte, lane, modelName string) ([]byte, 
 	clientSystem := ""
 	for index, msg := range messages.Array() {
 		if index == 0 && msg.Get("role").String() == "system" {
-			content := msg.Get("content").String()
-			if strings.HasPrefix(content, prefix) {
+			content := msg.Get("content")
+			if content.IsArray() {
+				return prefixOfficialContentPart(body, official, prefix, content.Array())
+			}
+			text := content.String()
+			if strings.HasPrefix(text, prefix) {
 				return body, false
 			}
-			clientSystem = content
+			clientSystem = text
 			continue
 		}
 		items = append(items, msg.Raw)
@@ -414,6 +436,55 @@ func ensureOfficialOpencodeSystem(body []byte, lane, modelName string) ([]byte, 
 	parts = append(parts, `{"role":"system","content":`+string(sysJSON)+`}`)
 	parts = append(parts, items...)
 	next, err := sjson.SetRawBytes(body, "messages", []byte("["+strings.Join(parts, ",")+"]"))
+	if err != nil {
+		return body, false
+	}
+	return next, true
+}
+
+// prefixOfficialContentPart 把官方提示作为首个 text part 前置, 保留客户端其余 parts。
+func prefixOfficialContentPart(body []byte, official, prefix string, parts []gjson.Result) ([]byte, bool) {
+	if len(parts) > 0 && strings.HasPrefix(parts[0].Get("text").String(), prefix) {
+		return body, false
+	}
+	part, err := marshalOpencodeJSON(struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{Type: "text", Text: official})
+	if err != nil {
+		return body, false
+	}
+	var builder strings.Builder
+	builder.WriteString("[")
+	builder.Write(part)
+	for _, item := range parts {
+		builder.WriteString(",")
+		builder.WriteString(item.Raw)
+	}
+	builder.WriteString("]")
+	next, err := sjson.SetRawBytes(body, "messages.0.content", []byte(builder.String()))
+	if err != nil {
+		return body, false
+	}
+	return next, true
+}
+
+// ensureOfficialOpencodeInstructions 保证免费档 Responses 正文的 instructions 以官方模板打头。
+// Responses 的系统提示在 instructions 字段而非 messages, 上游门禁口径与 Chat 相同。
+func ensureOfficialOpencodeInstructions(body []byte, lane, modelName string) ([]byte, bool) {
+	official, prefix, ok := renderOfficialOpencodeTemplate(lane, modelName)
+	if !ok {
+		return body, false
+	}
+	current := gjson.GetBytes(body, "instructions").String()
+	if strings.HasPrefix(current, prefix) {
+		return body, false
+	}
+	merged := official
+	if strings.TrimSpace(current) != "" {
+		merged = official + "\n\n" + current
+	}
+	next, err := sjson.SetBytes(body, "instructions", merged)
 	if err != nil {
 		return body, false
 	}

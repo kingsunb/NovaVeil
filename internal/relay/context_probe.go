@@ -242,6 +242,8 @@ func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName,
 		applyOpencodeFreeLaneHeaders(effective, built, modelName)
 		if isChatFormat(format) {
 			built.Body, _, _ = shapeOpencodeFreeBody(built.Body, isOpencodeV1Lane(effective), formatToProtocol(format))
+		} else if formatToProtocol(format) == model.UpstreamProtocolResponses {
+			built.Body, _ = ensureOfficialOpencodeInstructions(built.Body, opencodeLaneKey(effective), modelName)
 		}
 	}
 	// 上下文探测收敛输出预算只测输入容量; 账号体检不收敛, 与下游出站形态一致。
