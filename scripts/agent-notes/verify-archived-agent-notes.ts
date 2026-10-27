@@ -58,8 +58,11 @@ if (existsSync(manifestPath)) {
   fail("archived/manifest.json missing — run with --write to seal existing archived notes");
 }
 
-const sealOf = (relFromRoot: string) =>
-  `sha256:${createHash("sha256").update(readFileSync(join(agentNoteRoot, relFromRoot))).digest("hex")}`;
+// 封印只算内容, 不受 CRLF 影响
+const sealOf = (relFromRoot: string) => {
+  const content = readFileSync(join(agentNoteRoot, relFromRoot), "utf8").replace(/\r\n?/g, "\n");
+  return `sha256:${createHash("sha256").update(content, "utf8").digest("hex")}`;
+};
 
 for (const rel of files) {
   const key = `archived/${rel}`;
