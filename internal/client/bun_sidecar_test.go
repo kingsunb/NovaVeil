@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newFakeBunSidecarManager(endpoint string) *bunSidecarManager {
@@ -209,5 +210,57 @@ func TestBunSidecarProcessRoundTrip(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK || string(body) != "data: live\n\n" {
 		t.Fatalf("live sidecar response: status=%d body=%q", resp.StatusCode, body)
+	}
+}
+
+// TestBunSidecarProcessStreamSurvivesIdleGap 回归: Bun.serve 默认 10 秒空闲
+// 会在响应流中途掐连接, 思考模型静默超过该阈值后 Go 侧只能读到 unexpected EOF。
+func TestBunSidecarProcessStreamSurvivesIdleGap(t *testing.T) {
+	binary, _, err := bunSidecarCommand()
+	if err != nil {
+		t.Fatalf("bun command: %v", err)
+	}
+	if binary == "" {
+		t.Skip("bun runtime not configured")
+	}
+	if testing.Short() {
+		t.Skip("skipping bun process test in short mode")
+	}
+	sidecar, err := startBunSidecar(binary)
+	if err != nil {
+		t.Fatalf("start sidecar: %v", err)
+	}
+	defer sidecar.Close()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: first\n\n"))
+		w.(http.Flusher).Flush()
+		time.Sleep(11 * time.Second)
+		_, _ = w.Write([]byte("data: second\n\n"))
+	}))
+	defer upstream.Close()
+
+	transport := &bunSidecarTransport{
+		manager: &bunSidecarManager{sidecar: sidecar},
+		client:  &http.Client{},
+	}
+	req, err := http.NewRequest(http.MethodPost, upstream.URL+"/v1/chat/completions", strings.NewReader(`{"model":"beam-free"}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "data: second") {
+		t.Fatalf("空档后的增量应照常到达, 实际 response=%q err=%v", body, readErr)
+	}
+	if readErr != nil {
+		t.Fatalf("流不得在空闲空档处被掐断: %v", readErr)
 	}
 }

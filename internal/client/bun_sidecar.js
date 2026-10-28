@@ -1,6 +1,8 @@
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
+  // 默认 10 秒空闲会掐断思考中的流
+  idleTimeout: 0,
   async fetch(req) {
     if (req.method !== "POST" || new URL(req.url).pathname !== "/forward") {
       return new Response("not found", { status: 404 })
