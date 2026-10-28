@@ -285,7 +285,7 @@ export interface GroupRelayConfig {
   /** 是否拒绝标题类轻请求（单轮、无工具、含标题提示词），默认 false。 */
   reject_title_requests: boolean;
   /** 是否把思考-only 轮次的 stop 终态改写为 tool_calls，默认 false。 */
-  reasoning_only_as_tool_calls: boolean;
+  reasoning_fallback_to_text: boolean;
 }
 
 /**
@@ -318,7 +318,7 @@ export const DEFAULT_GROUP_RELAY_CONFIG: GroupRelayConfig = {
   echo_response_model: false,
   context_fit_enabled: false,
   reject_title_requests: false,
-  reasoning_only_as_tool_calls: false,
+  reasoning_fallback_to_text: false,
 };
 
 export interface GroupItem {

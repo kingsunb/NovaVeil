@@ -10,7 +10,7 @@ OpenCode 免费档上的 DeepSeek 思考模型会间歇性产出「只思考、�
 
 ## 决定
 
-新增分组级开关 `reasoning_only_as_tool_calls`（`GroupRelayConfig.ReasoningOnlyAsToolCalls`），默认 false，旧分组 JSON 反序列化自动为关。
+复用原分组的旧键 `reasoning_fallback_to_text`（`GroupRelayConfig.ReasoningOnlyAsToolCalls`），只保留一个开关，默认 false。旧分组已保存的 `true` 继续生效，不新增第二个字段，也不做数据迁移。
 
 开启后，仅当 OpenAI Chat 客户端协议同时满足以下条件时改写终态：
 
@@ -25,6 +25,7 @@ OpenCode 免费档上的 DeepSeek 思考模型会间歇性产出「只思考、�
 ## 备选方案
 
 - **把推理内容降级为 `content`**：实现过，但依赖 `finish_reason` 续跑的客户端仍把它当自然结束，实际不继续，救不回坏轮次。
+- **新增第二个开关并保留旧开关**：部署后会出现两个语义相近的开关，旧值还需要迁移；直接复用旧键更符合「一个开关一个行为」。
 - **同时伪造一个 `tool_calls` 数组**：能让响应结构自洽，但会凭空创造一个工具调用，客户端可能执行不存在的工具或报参数错误，属于伪造上游行为。
 - **默认开启改写**：会把上游失败轮次伪装成工具轮次，存量分组行为突变，因此保持默认关闭。
 - **只做失败重试**：不改变协议，但每次坏轮次都要整轮重试，免费档成本与延迟都高。
@@ -45,4 +46,4 @@ cd web-next && pnpm test src/lib/types.test.ts
 ```
 
 - 前两组验证开关开启后的非流式与流式终态改写，以及开关关闭时既有失败语义不变。
-- 前端用例校验 `DEFAULT_GROUP_RELAY_CONFIG.reasoning_only_as_tool_calls` 默认 false。
+- 前端用例校验 `DEFAULT_GROUP_RELAY_CONFIG.reasoning_fallback_to_text` 默认 false。
