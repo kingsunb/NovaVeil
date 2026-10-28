@@ -30,6 +30,5 @@ describe("DEFAULT_GROUP_RELAY_CONFIG", () => {
     expect(DEFAULT_GROUP_RELAY_CONFIG.background_probe_interval_seconds).toBe(60);
     expect(DEFAULT_GROUP_RELAY_CONFIG.emergency_item_id).toBe(0);
     expect(DEFAULT_GROUP_RELAY_CONFIG.prefer_passthrough).toBe(false);
-    expect(DEFAULT_GROUP_RELAY_CONFIG.reasoning_fallback_to_text).toBe(false);
   });
 });

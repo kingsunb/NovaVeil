@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -20,7 +19,6 @@ import (
 	"github.com/looplj/axonhub/llm/transformer/openai"
 	"github.com/looplj/axonhub/llm/transformer/openai/responses"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // upstreamPath 返回客户端协议在标准上游中对应的请求路径。
@@ -165,16 +163,14 @@ func buildPassthroughRequest(format llm.APIFormat, raw *httpclient.Request, chan
 // 窗口预读与转发循环此前对同一事件各解 2-3 次(inspect/abnormal/hasContent 各自解码),
 // 长流下是转发协程的主要 CPU 开销; 统一由 analyzeStreamEvent 一次解码派生全部结论。
 type streamEventVerdict struct {
-	terminal     bool   // 事件是否结束整个响应流。
-	inspectErr   error  // 事件本身即失败(流内错误帧/解码失败/类型错乱)时给出错误。
-	abnormalErr  error  // 事件携带白名单之外的异常终止原因, 不可交付。
-	hasContent   bool   // 事件是否承载实际输出内容(文本/推理/工具调用)。
-	hasAnswer    bool   // 事件是否承载最终回答信号(文本增量/工具调用), 推理内容不算。
-	hasReasoning bool   // 事件是否承载推理内容信号(reasoning_content)。
-	stopFinish   bool   // 任一 choice 携带 finish_reason=="stop"(自然终止); 仅 OpenAI Chat 判定。
-	toolCall     bool   // 事件是否携带工具调用增量。
-	finishReason string // 事件携带的白名单内非空终止原因原文。
-	finishSeen   bool   // 上游已声明生成完整结束: OpenAI Chat 为白名单内的非空 finish_reason;
+	terminal     bool  // 事件是否结束整个响应流。
+	inspectErr   error // 事件本身即失败(流内错误帧/解码失败/类型错乱)时给出错误。
+	abnormalErr  error // 事件携带白名单之外的异常终止原因, 不可交付。
+	hasContent   bool  // 事件是否承载实际输出内容(文本/推理/工具调用)。
+	hasAnswer    bool  // 事件是否承载最终回答信号(文本增量/工具调用), 推理内容不算。
+	hasReasoning bool  // 事件是否承载推理内容信号(reasoning_content)。
+	stopFinish   bool  // 任一 choice 携带 finish_reason=="stop"(自然终止); 仅 OpenAI Chat 判定。
+	finishSeen   bool  // 上游已声明生成完整结束: OpenAI Chat 为白名单内的非空 finish_reason;
 	//               Anthropic 为 message_delta 携带的白名单内非空 stop_reason。
 	//               用于区分"缺终止哨兵([DONE]/message_stop)的完整响应"与"真截断",
 	//               避免把完整响应误判为提前关闭导致客户端无谓重试(断流)。
@@ -233,13 +229,6 @@ func analyzeStreamEvent(format llm.APIFormat, event *httpclient.StreamEvent) str
 		case "content_block_start", "content_block_delta":
 			verdict.hasContent = true
 		}
-		// 工具块与参数增量即工具调用信号
-		if parsed.ContentBlock != nil && parsed.ContentBlock.Type == "tool_use" {
-			verdict.toolCall = true
-		}
-		if parsed.Delta != nil && parsed.Delta.Type != nil && *parsed.Delta.Type == "input_json_delta" {
-			verdict.toolCall = true
-		}
 		// message_delta 携带 stop_reason 时应用白名单(与窗口期/转发期判定共用)。
 		if parsed.Type == "message_delta" && parsed.Delta != nil && parsed.Delta.StopReason != nil {
 			if !validAnthropicStopReason(*parsed.Delta.StopReason) {
@@ -250,9 +239,6 @@ func analyzeStreamEvent(format llm.APIFormat, event *httpclient.StreamEvent) str
 				// message_delta 直接关流、不发 message_stop 哨兵, 该信号用于区分"缺哨兵的
 				// 完整响应"与"真截断", 避免把完整响应误判为提前关闭导致客户端无谓重试(断流)。
 				verdict.finishSeen = true
-				if verdict.finishReason == "" {
-					verdict.finishReason = *parsed.Delta.StopReason
-				}
 			}
 		}
 		return verdict
@@ -424,19 +410,13 @@ func analyzeChatStreamEvent(event *httpclient.StreamEvent) streamEventVerdict {
 			// 响应"与"真截断", 避免把完整响应误判为提前关闭。
 			if reason != "" && validChatFinishReason(reason) {
 				verdict.finishSeen = true
-				if verdict.finishReason == "" {
-					verdict.finishReason = reason
-				}
 			}
 		}
-		toolCall := rawToolCallsPresent(choice.Delta.ToolCalls)
-		answer := rawStringBytes(choice.Delta.Content) || toolCall
+		answer := rawStringBytes(choice.Delta.Content) ||
+			rawToolCallsPresent(choice.Delta.ToolCalls)
 		reasoning := rawStringBytes(choice.Delta.ReasoningContent)
 		if answer {
 			verdict.hasAnswer = true
-		}
-		if toolCall {
-			verdict.toolCall = true
 		}
 		if reasoning {
 			verdict.hasReasoning = true
@@ -505,11 +485,6 @@ var errStreamWindowBudgetExceeded = errors.New("upstream stream window budget ex
 // 防止异常上游用无限事件流耗尽 relay 内存。已提交的流按失败定稿但不重发任何内容,
 // 以静默截断收尾(与其它提交后流失败语义一致)。0 表示不限, 维持既有长流语义。
 var errStreamBudgetExceeded = errors.New("upstream stream budget exceeded")
-
-// isStreamTruncation 判定读错误是否为连接层截断: 分块未收尾即断开。
-func isStreamTruncation(err error) bool {
-	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
-}
 
 // validChatFinishReason 判定 OpenAI Chat 协议的 choices[].finish_reason 是否为正常终止原因。
 // 白名单之外的取值(如 network_error/error/aborted)说明上游以非协议方式终止了生成,
@@ -615,29 +590,6 @@ func validateRoundAnswer(format llm.APIFormat, body []byte) error {
 	return fmt.Errorf("%w: finish_reason stop with reasoning_content only", errNoAnswerStop)
 }
 
-// 把思考-only轮次终态改为 tool_calls。
-func applyReasoningOnlyAsToolCalls(format llm.APIFormat, body []byte) ([]byte, bool) {
-	if format != llm.APIFormatOpenAIChatCompletion || len(body) == 0 {
-		return body, false
-	}
-	if gjson.GetBytes(body, "choices.0.finish_reason").String() != "stop" {
-		return body, false
-	}
-	message := gjson.GetBytes(body, "choices.0.message")
-	if !message.Exists() || chatMessageHasAnswer(message) {
-		return body, false
-	}
-	reasoning := message.Get("reasoning_content")
-	if reasoning.Type != gjson.String || reasoning.Str == "" {
-		return body, false
-	}
-	next, err := sjson.SetBytes(body, "choices.0.finish_reason", "tool_calls")
-	if err != nil {
-		return body, false
-	}
-	return next, true
-}
-
 // chatMessageHasAnswer 判定一条 OpenAI Chat 消息是否携带最终回答信号:
 // 非空文本内容(字符串或分片数组)或工具调用; reasoning_content 不算回答。
 func chatMessageHasAnswer(message gjson.Result) bool {
@@ -668,23 +620,19 @@ func streamEventHasContent(format llm.APIFormat, event *httpclient.StreamEvent) 
 
 // terminalStreamFrames 在客户端协议缺终止事件时合成正常终止事件序列, 让客户端 SDK 收到
 // 规范的收尾而不是悬挂到超时。只用于缺 [DONE] / message_stop 哨兵、但终止原因已经合法的完整流
-// (如 MiniMax)。reason 为本轮真实终态, 为空时按协议默认值兜底。
-// 污染流不走本函数: 异常 finish 被抑制后静默截断, 不再补成功的 stop/[DONE]。
+// (如 MiniMax)。污染流不走本函数: 异常 finish 被抑制后静默截断, 不再补成功的 stop/[DONE]。
 // 提交后的流失败同样不走本函数(见转发循环): 流内错误帧无法触发客户端自动重试,
 // 缺失终止事件反而可以(Codex/opencode 等按 stream disconnected 自动重连重试)。
-func terminalStreamFrames(format llm.APIFormat, reason string) []*httpclient.StreamEvent {
+func terminalStreamFrames(format llm.APIFormat) []*httpclient.StreamEvent {
 	now := time.Now().Unix()
 	switch format {
 	case llm.APIFormatOpenAIChatCompletion:
-		if reason == "" {
-			reason = "stop"
-		}
 		chunk := map[string]any{
 			"id":      "chatcmpl-novaveil-recovery",
 			"object":  "chat.completion.chunk",
 			"created": now,
 			"model":   "",
-			"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": reason}},
+			"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}},
 		}
 		done := &httpclient.StreamEvent{Data: []byte("[DONE]")}
 		if data, err := json.Marshal(chunk); err == nil {
@@ -693,12 +641,9 @@ func terminalStreamFrames(format llm.APIFormat, reason string) []*httpclient.Str
 		return []*httpclient.StreamEvent{done}
 
 	case llm.APIFormatAnthropicMessage:
-		if reason == "" {
-			reason = "end_turn"
-		}
 		delta := map[string]any{
 			"type":  "message_delta",
-			"delta": map[string]any{"stop_reason": reason, "stop_sequence": nil},
+			"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
 			"usage": map[string]any{"output_tokens": 0},
 		}
 		stop := map[string]any{"type": "message_stop"}
@@ -730,50 +675,6 @@ func terminalStreamFrames(format llm.APIFormat, reason string) []*httpclient.Str
 	default:
 		return nil
 	}
-}
-
-// resolveTerminalReason 校正本轮终态: 出现过工具调用时不得以自然结束收尾,
-// 否则下游把工具轮次当作整轮完成而不再派发调用。
-func resolveTerminalReason(format llm.APIFormat, reason string, sawToolCall bool) string {
-	if format == llm.APIFormatOpenAIResponse {
-		return reason
-	}
-	naturalStop, toolStop := "stop", "tool_calls"
-	if format == llm.APIFormatAnthropicMessage {
-		naturalStop, toolStop = "end_turn", "tool_use"
-	}
-	if reason == "" || reason == naturalStop {
-		if sawToolCall {
-			return toolStop
-		}
-		return naturalStop
-	}
-	return reason
-}
-
-// rewriteStreamFinishReason 原位改写事件终止原因, 仅用于上述工具轮次校正。
-func rewriteStreamFinishReason(data []byte, format llm.APIFormat, reason string) []byte {
-	switch format {
-	case llm.APIFormatOpenAIChatCompletion:
-		choices := gjson.GetBytes(data, "choices")
-		if !choices.IsArray() {
-			return data
-		}
-		out := data
-		for i := range choices.Array() {
-			next, err := sjson.SetBytes(out, fmt.Sprintf("choices.%d.finish_reason", i), reason)
-			if err != nil {
-				return data
-			}
-			out = next
-		}
-		return out
-	case llm.APIFormatAnthropicMessage:
-		if next, err := sjson.SetBytes(data, "delta.stop_reason", reason); err == nil {
-			return next
-		}
-	}
-	return data
 }
 
 // isTerminalStreamEvent 以低成本方式判断一个客户端协议事件是否为协议终止事件。

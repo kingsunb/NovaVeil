@@ -115,18 +115,18 @@ func TestIsTerminalStreamEvent(t *testing.T) {
 
 func TestTerminalStreamFrames(t *testing.T) {
 	// 缺 [DONE] 哨兵的完整流仍合成 finish chunk + [DONE]。污染流不再走这条收尾。
-	openaiOk := terminalStreamFrames(llm.APIFormatOpenAIChatCompletion, "")
+	openaiOk := terminalStreamFrames(llm.APIFormatOpenAIChatCompletion)
 	if len(openaiOk) != 2 || gjson.GetBytes(openaiOk[0].Data, "choices.0.finish_reason").String() != "stop" {
 		t.Fatalf("chat 正常收尾应为 stop finish chunk + [DONE], 得到 %d 帧", len(openaiOk))
 	}
 
-	anthropicFrames := terminalStreamFrames(llm.APIFormatAnthropicMessage, "")
+	anthropicFrames := terminalStreamFrames(llm.APIFormatAnthropicMessage)
 	if len(anthropicFrames) != 2 ||
 		anthropicFrames[0].Type != "message_delta" || anthropicFrames[1].Type != "message_stop" {
 		t.Fatalf("anthropic 终止序列应为 message_delta + message_stop, 得到 %+v", anthropicFrames)
 	}
 
-	okFrames := terminalStreamFrames(llm.APIFormatOpenAIResponse, "")
+	okFrames := terminalStreamFrames(llm.APIFormatOpenAIResponse)
 	if len(okFrames) != 1 || okFrames[0].Type != "response.completed" {
 		t.Fatalf("responses 收尾应为 response.completed, 得到 %v", okFrames)
 	}

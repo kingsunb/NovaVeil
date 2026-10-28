@@ -2,44 +2,8 @@ package model
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 )
-
-// TestGroupRelayConfigReasoningOnlyKeyCompat 校验新旧开关键指向同一字段:
-// 旧键优先, 旧键缺省时才采纳 reasoning_only_as_tool_calls, 避免配置值静默丢失。
-func TestGroupRelayConfigReasoningOnlyKeyCompat(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		config string
-		want   bool
-	}{
-		{"默认关闭", `{}`, false},
-		{"旧键开启", `{"reasoning_fallback_to_text":true}`, true},
-		{"新键开启", `{"reasoning_only_as_tool_calls":true}`, true},
-		{"新键显式关闭", `{"reasoning_only_as_tool_calls":false}`, false},
-		{"两键冲突取旧键", `{"reasoning_fallback_to_text":true,"reasoning_only_as_tool_calls":false}`, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var config GroupRelayConfig
-			if err := json.Unmarshal([]byte(tc.config), &config); err != nil {
-				t.Fatalf("解析配置失败: %v", err)
-			}
-			if got := config.ReasoningOnlyAsToolCalls; got != tc.want {
-				t.Fatalf("开关应为 %v, 实际 %v", tc.want, got)
-			}
-		})
-	}
-
-	// 序列化仍写旧键, 前端与既有配置文件键名不变。
-	encoded, err := json.Marshal(GroupRelayConfig{ReasoningOnlyAsToolCalls: true})
-	if err != nil {
-		t.Fatalf("序列化配置失败: %v", err)
-	}
-	if !strings.Contains(string(encoded), `"reasoning_fallback_to_text":true`) {
-		t.Fatalf("序列化应仍写旧键, 实际: %s", encoded)
-	}
-}
 
 func TestNormalizeGroupRelayConfigRetryInterval(t *testing.T) {
 	defaults := DefaultGroupRelayConfig()

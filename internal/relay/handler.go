@@ -585,9 +585,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			if err == nil {
 				// 客户端与渠道协议一致时直接透传, 其余组合通过 pipeline 转换。
 				if passthrough {
-					result, err = sendPassthrough(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, relayConfig.ReasoningOnlyAsToolCalls, requestOpencodeSession)
+					result, err = sendPassthrough(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, requestOpencodeSession)
 				} else {
-					result, err = sendConverted(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, relayConfig.ReasoningOnlyAsToolCalls, requestOpencodeSession)
+					result, err = sendConverted(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, requestOpencodeSession)
 				}
 			}
 			if result != nil {
@@ -884,17 +884,15 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			}
 			var encoded bytes.Buffer
 			var chunks []*httpclient.StreamEvent
-			committed := false                 // 已向客户端写出至少一个事件。
-			terminalSeen := result.terminated  // 有效性窗口内已出现协议终止事件。
-			clientGone := false                // 因客户端写失败退出转发, 客户端已不可达, 无需补发终止帧。
-			polluted := false                  // 上游下发了携带异常终止原因的块: 该块被抑制, 流静默截断并按失败记账。
-			var polluteErr error               // 首个污染块的异常原因, 用于请求终态留档。
-			noAnswerStop := false              // 思考-only 自然终止已命中: 终止块及其后尾帧不再写给客户端。
-			roundAnswered := false             // 整轮是否出现过最终回答信号(文本增量/工具调用)。
-			roundReasoned := false             // 整轮是否出现过推理内容信号(reasoning_content)。
-			roundFinished := false             // 整轮是否出现过白名单内的非空终止原因(OpenAI Chat 的 finish_reason / Anthropic 的 message_delta.stop_reason)。
-			roundToolCall := false             // 整轮是否出现过工具调用增量。
-			roundFinish := ""                  // 整轮首个白名单内非空终止原因。
+			committed := false                // 已向客户端写出至少一个事件。
+			terminalSeen := result.terminated // 有效性窗口内已出现协议终止事件。
+			clientGone := false               // 因客户端写失败退出转发, 客户端已不可达, 无需补发终止帧。
+			polluted := false                 // 上游下发了携带异常终止原因的块: 该块被抑制, 流静默截断并按失败记账。
+			var polluteErr error              // 首个污染块的异常原因, 用于请求终态留档。
+			noAnswerStop := false             // 思考-only 自然终止已命中: 终止块及其后尾帧不再写给客户端。
+			roundAnswered := false            // 整轮是否出现过最终回答信号(文本增量/工具调用)。
+			roundReasoned := false            // 整轮是否出现过推理内容信号(reasoning_content)。
+			roundFinished := false            // 整轮是否出现过白名单内的非空终止原因(OpenAI Chat 的 finish_reason / Anthropic 的 message_delta.stop_reason)。
 			window := result.window
 			// 初始化必须为 false: 窗口内出现终止事件时(无内容流), 窗口可能携带多条事件
 			// (结构帧 + 终止帧 + usage 尾帧), 若以 terminated 起步会在写完第一帧后提前 break,
@@ -977,10 +975,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				roundAnswered = roundAnswered || verdict.hasAnswer
 				roundReasoned = roundReasoned || verdict.hasReasoning
 				roundFinished = roundFinished || verdict.finishSeen
-				roundToolCall = roundToolCall || verdict.toolCall
-				if roundFinish == "" && verdict.finishReason != "" {
-					roundFinish = verdict.finishReason
-				}
 				if verdict.inspectErr != nil || verdict.terminal {
 					last = true
 					terminalSeen = true
@@ -1005,20 +999,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 流结束后由 frameFailure 分支合成协议内错误帧, 下游 SDK 感知失败并自动重试。
 				// 仅 OpenAI Chat 事件会置 stopFinish, 其余客户端协议不受影响。
 				if !polluted && verdict.stopFinish && roundReasoned && !roundAnswered {
-					if relayConfig.ReasoningOnlyAsToolCalls {
-						// 显式开关: 终止帧终态改为 tool_calls。
-						next, setErr := sjson.SetBytes(event.Data, "choices.0.finish_reason", "tool_calls")
-						if setErr == nil {
-							event.Data = next
-							verdict.finishReason = "tool_calls"
-							roundFinish = "tool_calls"
-							roundAnswered = true
-						} else {
-							noAnswerStop = true
-						}
-					} else {
-						noAnswerStop = true
-					}
+					noAnswerStop = true
 				}
 				if noAnswerStop {
 					chunks = append(chunks, event)
@@ -1026,13 +1007,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 						break
 					}
 					continue
-				}
-				// 工具轮次不得以自然结束下发, 否则下游当整轮完成。
-				if verdict.finishReason != "" {
-					corrected := resolveTerminalReason(format, verdict.finishReason, roundToolCall)
-					if corrected != verdict.finishReason {
-						event.Data = rewriteStreamFinishReason(event.Data, format, corrected)
-					}
 				}
 				// 脱敏还原: SSE 事件增量文本占位符→原文, StreamRestorer 跨 chunk 缓冲拼接(文档 01 §3.2、03)。
 				if streamRestorer != nil {
@@ -1101,10 +1075,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					firstErr = streamErr
 				}
 			}
-			// 已见终止原因后断流: 缺的只是哨兵, 按完整响应收尾。
-			if firstErr != nil && roundFinished && !polluted && isStreamTruncation(firstErr) {
-				firstErr = nil
-			}
 			result.Close()
 			request.releaseRoundLifecycle()
 			// 使用客户端协议转换器聚合已转发事件, 统一取得最终响应正文和用量。
@@ -1154,9 +1124,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 否则客户端把残缺流当成正常结束。缺 [DONE] 哨兵但终止原因合法的完整流
 			// (frameFailure == nil 且未污染) 仍合成正常终止帧规范收尾。
 			if committed && !clientGone && ctx.Err() == nil && !polluted && frameFailure == nil && !terminalSeen {
-				// 收尾帧继承真实终态, 保持工具轮次
-				terminalReason := resolveTerminalReason(format, roundFinish, roundToolCall)
-				for _, frame := range terminalStreamFrames(format, terminalReason) {
+				for _, frame := range terminalStreamFrames(format) {
 					encoded.Reset()
 					if sse.Encode(&encoded, sse.Event{Id: frame.LastEventID, Event: frame.Type, Data: frame.Data}) != nil {
 						break
