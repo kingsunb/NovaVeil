@@ -225,7 +225,7 @@
 | `prefer_passthrough` | bool | false | 故障转移时是否把与客户端协议相同的成员整体前移。分类内部仍按优先级升序，同协议没有健康成员时回退到其它协议。 |
 | `mask_enabled` | bool | false | 是否对本分组启用请求脱敏。还要全局脱敏开关为 true 才生效。 |
 | `auto_match_models` | bool | false | 是否按分组名称自动纳入名称包含该关键词的渠道模型。 |
-| `reasoning_fallback_to_text` | bool | false | 是否把思考-only 轮次的 `stop` 终态改写为 `tool_calls`。仅 OpenAI Chat；响应中没有真实 `tool_calls`。 |
+| `reasoning_fallback_to_text` | bool | false | 是否把思考-only 轮次的 `stop` 终态改写为 `tool_calls`。仅 OpenAI Chat；响应中没有真实 `tool_calls`。上游上报 `output==0` 时同样先改写再校验，反序列化兼容 `reasoning_only_as_tool_calls`，序列化仍写旧键。 |
 | `max_request_rounds` | int | 600 | 单个请求的最大选路轮次（含引用跳过与等待重试）。超限后以错误收尾，防止空转。 |
 | `max_request_seconds` | int | 0 | 单个请求的整体时长上限秒数。超时后不再开始新一轮尝试。0 表示不限。 |
 

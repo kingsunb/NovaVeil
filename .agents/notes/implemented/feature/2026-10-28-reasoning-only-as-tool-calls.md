@@ -20,7 +20,9 @@ OpenCode 免费档上的 DeepSeek 思考模型会间歇性产出「只思考、�
 
 非流式与折叠流路径由 `applyReasoningOnlyAsToolCalls` 把 `finish_reason` 改为 `tool_calls`，`content`、`reasoning_content` 与用量原样保留，再走既有校验。流式路径在终止块直接改写 `finish_reason`，并同步终态跟踪值，避免后续收尾逻辑又把它恢复成 `stop`；不再置 `noAnswerStop`。
 
-改写只改终态，不伪造 `tool_calls` 数组。开关只认顶层分组配置，探测与渠道测试路径固定传 false。
+改写必须排在零输出校验之前。上游把思考轮次如实记成 `usage.completion_tokens: 0` 时，`validateRoundUsage` 会先按 `stop` 判 `errZeroOutput`，改写函数根本不会被调用；顺序颠倒后开关对这类整数轮次完全失效。改写生效时用量校验改按 `tool_calls` 终态判定，流式窗口预读的零输出判定同样先改写再判定，并同步改写窗口内 `stop` 终止帧，保证校验口径与交付口径一致。
+
+改写只改终态，不伪造 `tool_calls` 数组。开关只认顶层分组配置，探测与渠道测试路径固定传 false。配置反序列化同时接受 `reasoning_fallback_to_text` 与 `reasoning_only_as_tool_calls`，旧键优先，序列化仍写旧键。
 
 ## 备选方案
 
@@ -29,6 +31,7 @@ OpenCode 免费档上的 DeepSeek 思考模型会间歇性产出「只思考、�
 - **同时伪造一个 `tool_calls` 数组**：能让响应结构自洽，但会凭空创造一个工具调用，客户端可能执行不存在的工具或报参数错误，属于伪造上游行为。
 - **默认开启改写**：会把上游失败轮次伪装成工具轮次，存量分组行为突变，因此保持默认关闭。
 - **只做失败重试**：不改变协议，但每次坏轮次都要整轮重试，免费档成本与延迟都高。
+- **把 `stop` 加进 `validEmptyOutputTerminal` 白名单**：同样能让零输出思考轮次通过，但会连真正的空回答一起放行，客户端收到空成功比收到失败更糟；放行条件必须同时满足开关开启、`stop`、无正文与工具调用、推理内容非空。
 
 ## 后果
 
@@ -41,9 +44,14 @@ OpenCode 免费档上的 DeepSeek 思考模型会间歇性产出「只思考、�
 
 ```sh
 go test ./internal/relay/ -run 'TestApplyReasoningOnlyAsToolCalls|TestForwardNonStreamReasoningOnlyAsToolCalls|TestForwardStreamingReasoningOnlyAsToolCalls' -v
+go test ./internal/relay/ -run 'TestForwardNonStreamReasoningOnlyZeroOutput|TestForwardStreamingReasoningOnlyZeroOutput|TestForwardNonStreamReasoningOnlySwitchKeepsEmptyRoundFailing|TestRejectZeroOutputRewritesReasoningOnlyWindow' -v
 go test ./internal/relay/ -run 'TestForwardStreamingNoAnswerStopSilentTruncation|TestForwardNonStreamNoAnswerStopFailoverToHealthyMember' -v
+go test ./internal/model/ -run TestGroupRelayConfigReasoningOnlyKeyCompat -v
 cd web-next && pnpm test src/lib/types.test.ts
 ```
 
-- 前两组验证开关开启后的非流式与流式终态改写，以及开关关闭时既有失败语义不变。
+- 第一条验证开关开启后的非流式与流式终态改写（上游用量非零）。
+- 第二条覆盖上游上报 `completion_tokens: 0` 的思考轮次：开关开启放行并改写终态，关闭仍判 `zero_output`，无推理内容的空轮次与有正文的零输出轮次都不放行。
+- 第三条验证开关关闭时的既有失败语义不变。
+- 模型层用例校验新旧开关键都能读到同一个字段，序列化仍写旧键。
 - 前端用例校验 `DEFAULT_GROUP_RELAY_CONFIG.reasoning_fallback_to_text` 默认 false。

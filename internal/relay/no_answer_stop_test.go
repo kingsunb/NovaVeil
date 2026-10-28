@@ -19,6 +19,8 @@ import (
 
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/looplj/axonhub/llm"
+	"github.com/looplj/axonhub/llm/httpclient"
+	"github.com/looplj/axonhub/llm/transformer/openai"
 	"github.com/tidwall/gjson"
 )
 
@@ -372,5 +374,255 @@ func TestForwardStreamingReasoningOnlyAsToolCalls(t *testing.T) {
 	state := requestStateOf(t, expectedID)
 	if state.Status != StatusSuccess {
 		t.Fatalf("请求应以成功终态定稿, 实际 %s(%s)", state.Status, state.Error)
+	}
+}
+
+// reasoningOnlyZeroUsageBody 是上游把思考轮次记为 output==0 的响应体:
+// 思考内容非空、没有正文与工具调用, 终态仍是 stop。
+func reasoningOnlyZeroUsageBody() string {
+	return `{"id":"chatcmpl-zero","object":"chat.completion","created":1700000000,"model":"integration","choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning_content":"think-only"},"finish_reason":"stop"}],"usage":{"prompt_tokens":45446,"completion_tokens":0,"total_tokens":45446}}`
+}
+
+// TestForwardNonStreamReasoningOnlyZeroOutputAsToolCalls 回归: 零输出校验必须排在
+// 终态改写之后。否则 0 输出 + stop 的思考轮次先被判 errZeroOutput, 开关永不生效。
+func TestForwardNonStreamReasoningOnlyZeroOutputAsToolCalls(t *testing.T) {
+	setupFailoverTest(t)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(reasoningOnlyZeroUsageBody()))
+	}))
+	defer upstream.Close()
+
+	channel := createIntegrationChannel(t, hardeningName("it-noans-zero-ch"), model.ChannelProviderOpenAI, upstream.URL, "it-model-noans-zero")
+	config := hardeningGroupConfig()
+	config.ReasoningOnlyAsToolCalls = true
+	group := createIntegrationGroup(t, hardeningName("it-noans-zero"), config,
+		integrationLeafItem(t, channel, "it-model-noans-zero"))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, group.Name)
+	expectedID := nextRequestID()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("开关开启时零输出思考轮次应成功交付, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if reason := gjson.GetBytes(recorder.Body.Bytes(), "choices.0.finish_reason").String(); reason != "tool_calls" {
+		t.Fatalf("交付终态应为 tool_calls, 实际 %q", reason)
+	}
+	if reasoning := gjson.GetBytes(recorder.Body.Bytes(), "choices.0.message.reasoning_content").String(); reasoning != "think-only" {
+		t.Fatalf("推理原文应原样交付, 实际 %q", reasoning)
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusSuccess {
+		t.Fatalf("请求应以成功终态定稿, 实际 %s(%s)", state.Status, state.Error)
+	}
+}
+
+// TestForwardNonStreamReasoningOnlyZeroOutputFailsWhenDisabled 校验同一响应在开关
+// 关闭时保持既有口径: 明确上报 output==0 仍判整轮无效, 并换健康成员交付。
+func TestForwardNonStreamReasoningOnlyZeroOutputFailsWhenDisabled(t *testing.T) {
+	setupFailoverTest(t)
+
+	var badHits atomic.Int64
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		badHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(reasoningOnlyZeroUsageBody()))
+	}))
+	defer bad.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(chatCompletionBody("chatcmpl-good", "healthy-answer", 5, 9))
+	}))
+	defer good.Close()
+
+	badChannel := createIntegrationChannel(t, hardeningName("it-noans-zero-off-ch"), model.ChannelProviderOpenAI, bad.URL, "it-model-noans-zero-off")
+	goodChannel := createIntegrationChannel(t, hardeningName("it-noans-zero-off-ok-ch"), model.ChannelProviderOpenAI, good.URL, "it-model-noans-zero-off-ok")
+	group := createIntegrationGroup(t, hardeningName("it-noans-zero-off"), hardeningGroupConfig(),
+		integrationLeafItem(t, badChannel, "it-model-noans-zero-off"),
+		integrationLeafItem(t, goodChannel, "it-model-noans-zero-off-ok"))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, group.Name)
+	expectedID := nextRequestID()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "healthy-answer") {
+		t.Fatalf("应换健康成员交付, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := badHits.Load(); got != 1 {
+		t.Fatalf("零输出成员应恰好尝试一次, 实际 %d 次", got)
+	}
+	state := requestStateOf(t, expectedID)
+	if len(state.Attempts) != 2 || state.Attempts[0].ErrClass != ErrClassZeroOutput {
+		t.Fatalf("首轮尝试应归入 zero_output 分类, 实际: %+v", state.Attempts)
+	}
+}
+
+// TestForwardNonStreamReasoningOnlySwitchKeepsEmptyRoundFailing 守卫硬性边界:
+// 开关不得放行没有任何推理内容的空轮次, 否则客户端拿到的是空成功。
+func TestForwardNonStreamReasoningOnlySwitchKeepsEmptyRoundFailing(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "纯空白轮次",
+			body: `{"choices":[{"index":0,"message":{"role":"assistant","content":null},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":0,"total_tokens":5}}`,
+		},
+		{
+			name: "有正文但零输出",
+			body: `{"choices":[{"index":0,"message":{"role":"assistant","content":"ok","reasoning_content":"think"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":0,"total_tokens":5}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setupFailoverTest(t)
+
+			bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer bad.Close()
+			good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(chatCompletionBody("chatcmpl-good", "healthy-answer", 5, 9))
+			}))
+			defer good.Close()
+
+			badChannel := createIntegrationChannel(t, hardeningName("it-noans-empty-ch"), model.ChannelProviderOpenAI, bad.URL, "it-model-noans-empty")
+			goodChannel := createIntegrationChannel(t, hardeningName("it-noans-empty-ok-ch"), model.ChannelProviderOpenAI, good.URL, "it-model-noans-empty-ok")
+			config := hardeningGroupConfig()
+			config.ReasoningOnlyAsToolCalls = true
+			group := createIntegrationGroup(t, hardeningName("it-noans-empty"), config,
+				integrationLeafItem(t, badChannel, "it-model-noans-empty"),
+				integrationLeafItem(t, goodChannel, "it-model-noans-empty-ok"))
+
+			engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+			body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, group.Name)
+			expectedID := nextRequestID()
+			recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+			if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "healthy-answer") {
+				t.Fatalf("该形态不得被开关放行, 应换健康成员交付, 实际 %d: %s", recorder.Code, recorder.Body.String())
+			}
+			state := requestStateOf(t, expectedID)
+			if len(state.Attempts) != 2 || state.Attempts[0].ErrClass != ErrClassZeroOutput {
+				t.Fatalf("该形态仍应判 zero_output, 实际: %+v", state.Attempts)
+			}
+		})
+	}
+}
+
+// TestForwardStreamingReasoningOnlyZeroOutputAsToolCalls 校验流式零输出思考轮次
+// 在开关开启时改成 tool_calls 交付并成功定稿。
+func TestForwardStreamingReasoningOnlyZeroOutputAsToolCalls(t *testing.T) {
+	setupFailoverTest(t)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeUpstreamSSE(t, w, "", `{"id":"c-zero","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"}}]}`)
+		writeUpstreamSSE(t, w, "", `{"id":"c-zero","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"think-only"}}]}`)
+		writeUpstreamSSE(t, w, "", `{"id":"c-zero","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":45446,"completion_tokens":0,"total_tokens":45446}}`)
+		writeUpstreamSSE(t, w, "", "[DONE]")
+	}))
+	defer upstream.Close()
+
+	channel := createIntegrationChannel(t, hardeningName("it-noans-zero-stream-ch"), model.ChannelProviderOpenAI, upstream.URL, "it-model-noans-zero-stream")
+	config := hardeningGroupConfig()
+	config.ReasoningOnlyAsToolCalls = true
+	group := createIntegrationGroup(t, hardeningName("it-noans-zero-stream"), config,
+		integrationLeafItem(t, channel, "it-model-noans-zero-stream"))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":true}`, group.Name)
+	expectedID := nextRequestID()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("开关开启时流式零输出思考轮次应成功交付, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	rewritten := false
+	for _, frame := range parseSSEFrames(t, recorder.Body.Bytes()) {
+		if strings.Contains(frame.data, `"error"`) {
+			t.Fatalf("改写轮次不应合成错误帧, 实际: %s", frame.data)
+		}
+		if gjson.Get(frame.data, "choices.0.finish_reason").String() == "tool_calls" {
+			rewritten = true
+		}
+	}
+	if !rewritten {
+		t.Fatal("终止块 finish_reason 应改写为 tool_calls")
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusSuccess {
+		t.Fatalf("请求应以成功终态定稿, 实际 %s(%s)", state.Status, state.Error)
+	}
+}
+
+// TestForwardStreamingReasoningOnlyZeroOutputFailsWhenDisabled 校验流式同一形态
+// 在开关关闭时保持既有失败口径: 抑制终止帧、静默截断、按 no_answer 定稿。
+func TestForwardStreamingReasoningOnlyZeroOutputFailsWhenDisabled(t *testing.T) {
+	setupFailoverTest(t)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeUpstreamSSE(t, w, "", `{"id":"c-zero-off","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"}}]}`)
+		writeUpstreamSSE(t, w, "", `{"id":"c-zero-off","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"think-only"}}]}`)
+		writeUpstreamSSE(t, w, "", `{"id":"c-zero-off","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":45446,"completion_tokens":0,"total_tokens":45446}}`)
+		writeUpstreamSSE(t, w, "", "[DONE]")
+	}))
+	defer upstream.Close()
+
+	channel := createIntegrationChannel(t, hardeningName("it-noans-zero-off-stream-ch"), model.ChannelProviderOpenAI, upstream.URL, "it-model-noans-zero-off-stream")
+	group := createIntegrationGroup(t, hardeningName("it-noans-zero-off-stream"), hardeningGroupConfig(),
+		integrationLeafItem(t, channel, "it-model-noans-zero-off-stream"))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":true}`, group.Name)
+	expectedID := nextRequestID()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	for _, frame := range parseSSEFrames(t, recorder.Body.Bytes()) {
+		if gjson.Get(frame.data, "choices.0.finish_reason").String() == "tool_calls" {
+			t.Fatalf("开关关闭时不得改写终态, 实际: %s", frame.data)
+		}
+		if frame.data == "[DONE]" {
+			t.Fatalf("思考-only 轮次不得以 [DONE] 收尾, 实际帧序列: %s", recorder.Body.String())
+		}
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusFailed || state.Class != ErrClassNoAnswer {
+		t.Fatalf("应以 no_answer 失败定稿, 实际 %s/%s(%s)", state.Status, state.Class, state.Error)
+	}
+}
+
+// TestRejectZeroOutputRewritesReasoningOnlyWindow 校验窗口判定与交付口径一致:
+// 开关开启时先改写终态再判零输出, 同时把窗口内的 stop 终止帧改为 tool_calls。
+func TestRejectZeroOutputRewritesReasoningOnlyWindow(t *testing.T) {
+	newWindow := func() []*httpclient.StreamEvent {
+		return []*httpclient.StreamEvent{
+			sseEvent(`{"choices":[{"index":0,"delta":{"role":"assistant"}}]}`),
+			sseEvent(`{"choices":[{"index":0,"delta":{"reasoning_content":"think"}}]}`),
+			sseEvent(`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":0,"total_tokens":5}}`),
+		}
+	}
+
+	window := newWindow()
+	if err := rejectZeroOutput(context.Background(), llm.APIFormatOpenAIChatCompletion, openai.NewInboundTransformer(), window, streamWindowOptions{reasoningOnlyAsToolCalls: true}); err != nil {
+		t.Fatalf("开关开启时思考-only 窗口不应判零输出: %v", err)
+	}
+	if reason := gjson.GetBytes(window[2].Data, "choices.0.finish_reason").String(); reason != "tool_calls" {
+		t.Fatalf("窗口内终止帧应同步改写为 tool_calls, 实际 %q", reason)
+	}
+
+	window = newWindow()
+	if err := rejectZeroOutput(context.Background(), llm.APIFormatOpenAIChatCompletion, openai.NewInboundTransformer(), window, streamWindowOptions{}); !errors.Is(err, errZeroOutput) {
+		t.Fatalf("开关关闭时应仍判 errZeroOutput, 得到: %v", err)
+	}
+	if reason := gjson.GetBytes(window[2].Data, "choices.0.finish_reason").String(); reason != "stop" {
+		t.Fatalf("开关关闭时窗口内终止帧不得改写, 实际 %q", reason)
 	}
 }

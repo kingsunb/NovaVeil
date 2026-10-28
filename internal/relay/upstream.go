@@ -110,7 +110,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		}
 	}
 	if streaming {
-		resp, streamErr := sendPassthroughStream(ctx, format, request, client, opencodeAccept)
+		resp, streamErr := sendPassthroughStream(ctx, format, request, client, opencodeAccept, reasoningOnlyAsToolCalls)
 		if streamErr != nil {
 			releaseConcurrency()
 			return nil, streamErr
@@ -122,7 +122,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		return resp, nil
 	}
 	if collapsed {
-		resp, err := sendPassthroughStream(ctx, format, request, client, opencodeAccept)
+		resp, err := sendPassthroughStream(ctx, format, request, client, opencodeAccept, reasoningOnlyAsToolCalls)
 		if err != nil {
 			releaseConcurrency()
 			return nil, err
@@ -182,16 +182,21 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		releaseConcurrency()
 		return nil, fmt.Errorf("%w: %s", err, errBodySnippet(response.Body))
 	}
+	// 先改写终态再校验零输出, 否则开关失效。
+	terminal := unifiedFinishReason(parsed)
+	if reasoningOnlyAsToolCalls {
+		if rewritten, changed := applyReasoningOnlyAsToolCalls(format, response.Body); changed {
+			response.Body = rewritten
+			terminal = "tool_calls"
+		}
+	}
 	// 输出 token 明确为 0 的响应按无效处理, 在提交前换目标重试;
 	// 截断/工具调用等合法空输出终态放行交付。
-	if err := validateRoundUsage(parsed.Usage, unifiedFinishReason(parsed)); err != nil {
+	if err := validateRoundUsage(parsed.Usage, terminal); err != nil {
 		releaseConcurrency()
 		return nil, fmt.Errorf("%w: %s", err, errBodySnippet(response.Body))
 	}
-	// 思考-only 空回答轮次(stop 终态但只有推理内容)同样在提交前整轮判无效换目标重试。
-	if reasoningOnlyAsToolCalls {
-		response.Body, _ = applyReasoningOnlyAsToolCalls(format, response.Body)
-	}
+	// 思考-only 空回答轮次同样在提交前整轮判无效换目标重试。
 	if err := validateRoundAnswer(format, response.Body); err != nil {
 		releaseConcurrency()
 		return nil, fmt.Errorf("%w: %s", err, errBodySnippet(response.Body))
@@ -236,7 +241,8 @@ func (s *toolAliasStream) Err() error   { return s.inner.Err() }
 
 // sendPassthroughStream 发起同协议流式请求并预读有效性窗口, 窗口通过验证才算本轮取得可提交响应。
 // accept 非空时用它作为出站 Accept(OpenCode 免费档的官方值), 否则用默认 text/event-stream。
-func sendPassthroughStream(ctx context.Context, format llm.APIFormat, request *httpclient.Request, client *http.Client, accept string) (*upstreamResponse, error) {
+// reasoningOnlyAsToolCalls 传入窗口预读, 使思考-only 轮次在零输出判定前先改写终态。
+func sendPassthroughStream(ctx context.Context, format llm.APIFormat, request *httpclient.Request, client *http.Client, accept string, reasoningOnlyAsToolCalls bool) (*upstreamResponse, error) {
 	rawRequest, err := httpclient.BuildHttpRequest(ctx, request)
 	if err != nil {
 		return nil, err
@@ -268,7 +274,7 @@ func sendPassthroughStream(ctx context.Context, format llm.APIFormat, request *h
 	}
 
 	events := httpclient.NewDefaultSSEDecoder(ctx, response.Body)
-	window, ended, terminated, err := readStreamWindow(ctx, format, inboundForFormat(format), events)
+	window, ended, terminated, err := readStreamWindowWithOptions(ctx, format, inboundForFormat(format), events, streamWindowOptions{reasoningOnlyAsToolCalls: reasoningOnlyAsToolCalls})
 	if err != nil {
 		events.Close()
 		return nil, err
@@ -653,7 +659,7 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 	if collapse {
 		// 与流式分支相同的窗口预读校验, 再把完整事件流折叠成非流式正文。
 		events := result.EventStream
-		window, ended, terminated, err := readStreamWindow(ctx, format, inbound, events)
+		window, ended, terminated, err := readStreamWindowWithOptions(ctx, format, inbound, events, streamWindowOptions{reasoningOnlyAsToolCalls: reasoningOnlyAsToolCalls})
 		if err != nil {
 			_ = events.Close()
 			releaseConcurrency()
@@ -674,16 +680,21 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		return &upstreamResponse{body: body, usage: usage, release: releaseConcurrency}, nil
 	}
 	if !streaming {
+		// 先改写终态再校验零输出, 否则开关失效。
+		terminal := middleware.terminal
+		if reasoningOnlyAsToolCalls {
+			if rewritten, changed := applyReasoningOnlyAsToolCalls(format, result.Response.Body); changed {
+				result.Response.Body = rewritten
+				terminal = "tool_calls"
+			}
+		}
 		// 输出 token 明确为 0 的响应按无效处理, 在提交前换目标重试;
 		// 截断/工具调用等合法空输出终态放行交付。
-		if err := validateRoundUsage(middleware.usage, middleware.terminal); err != nil {
+		if err := validateRoundUsage(middleware.usage, terminal); err != nil {
 			releaseConcurrency()
 			return nil, fmt.Errorf("%w: %s", err, middleware.rawBody)
 		}
-		// 思考-only 空回答轮次(stop 终态但只有推理内容)同样在提交前整轮判无效换目标重试。
-		if reasoningOnlyAsToolCalls {
-			result.Response.Body, _ = applyReasoningOnlyAsToolCalls(format, result.Response.Body)
-		}
+		// 思考-only 空回答轮次同样在提交前整轮判无效换目标重试。
 		if err := validateRoundAnswer(format, result.Response.Body); err != nil {
 			releaseConcurrency()
 			return nil, fmt.Errorf("%w: %s", err, middleware.rawBody)
@@ -693,7 +704,7 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 	}
 
 	events := result.EventStream
-	window, ended, terminated, err := readStreamWindow(ctx, format, inbound, events)
+	window, ended, terminated, err := readStreamWindowWithOptions(ctx, format, inbound, events, streamWindowOptions{reasoningOnlyAsToolCalls: reasoningOnlyAsToolCalls})
 	if err != nil {
 		_ = events.Close()
 		releaseConcurrency()
@@ -702,7 +713,18 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 	return &upstreamResponse{events: events, window: window, last: ended, terminated: terminated, release: releaseConcurrency}, nil
 }
 
-// readStreamWindow 预读流式事件直到出现首个内容承载信号(提交点)或流结束(有效性窗口关闭)。
+// readStreamWindow 以默认策略预读窗口; 生产路径须用 readStreamWindowWithOptions。
+func readStreamWindow(ctx context.Context, format llm.APIFormat, inbound transformer.Inbound, events streams.Stream[*httpclient.StreamEvent]) ([]*httpclient.StreamEvent, bool, bool, error) {
+	return readStreamWindowWithOptions(ctx, format, inbound, events, streamWindowOptions{})
+}
+
+// streamWindowOptions 是窗口预读的判定开关。
+type streamWindowOptions struct {
+	// reasoningOnlyAsToolCalls 零输出判定前先改写思考-only 终态。
+	reasoningOnlyAsToolCalls bool
+}
+
+// readStreamWindowWithOptions 预读流式事件直到出现首个内容承载信号(提交点)或流结束(有效性窗口关闭)。
 // 返回的窗口内事件按序写给客户端; ended 为 true 表示事件流已在窗口内耗尽;
 // terminated 为 true 表示窗口内出现了协议终止事件。
 // 窗口内任一事件携带白名单之外的异常终止原因时返回包装 errAbnormalFinish 的错误:
@@ -719,7 +741,7 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 // 窗口内累计事件数/字节数超过 streamWindowMaxEvents/streamWindowMaxBytes 时返回
 // errStreamWindowBudgetExceeded: 首个内容信号前的结构帧通常只有 1-3 个, 超过固定预算
 // 说明上游在持续发送无内容事件(心跳/keepalive/空 ping), 本轮尚未写给客户端, 可安全换目标重试。
-func readStreamWindow(ctx context.Context, format llm.APIFormat, inbound transformer.Inbound, events streams.Stream[*httpclient.StreamEvent]) ([]*httpclient.StreamEvent, bool, bool, error) {
+func readStreamWindowWithOptions(ctx context.Context, format llm.APIFormat, inbound transformer.Inbound, events streams.Stream[*httpclient.StreamEvent], opts streamWindowOptions) ([]*httpclient.StreamEvent, bool, bool, error) {
 	var window []*httpclient.StreamEvent
 	var windowedBytes int
 	sawContent := false    // 窗口内是否出现过任何内容承载信号(文本增量/工具调用/推理内容)
@@ -751,7 +773,7 @@ func readStreamWindow(ctx context.Context, format llm.APIFormat, inbound transfo
 		if verdict.terminal {
 			// 先检查上游是否明确上报了 0 输出用量(errZeroOutput), 该错误比 early_eof 更具体,
 			// 需在合成终止事件拦截之前返回以保留正确的错误分类。
-			if uerr := rejectZeroOutput(ctx, format, inbound, window); uerr != nil {
+			if uerr := rejectZeroOutput(ctx, format, inbound, window, opts); uerr != nil {
 				return nil, false, false, uerr
 			}
 			// 终止事件前未出现任何内容信号且未出现白名单内的非空终止原因:
@@ -818,7 +840,8 @@ func errBodySnippet(data []byte) string {
 
 // rejectZeroOutput 在有效性窗口内出现协议终止事件后判定是否为零输出响应:
 // 仅当上游明确上报 output==0 且聚合出的终止原因不在合法空输出终态白名单内时判无效。
-func rejectZeroOutput(ctx context.Context, format llm.APIFormat, inbound transformer.Inbound, window []*httpclient.StreamEvent) error {
+// 开关开启时先改写终态再判定, 并同步交付帧。
+func rejectZeroOutput(ctx context.Context, format llm.APIFormat, inbound transformer.Inbound, window []*httpclient.StreamEvent, opts streamWindowOptions) error {
 	if len(window) == 0 {
 		return errors.New("upstream stream ended without events")
 	}
@@ -827,8 +850,40 @@ func rejectZeroOutput(ctx context.Context, format llm.APIFormat, inbound transfo
 		// 聚合失败无法证明输出为零, 不触发重试。
 		return nil
 	}
-	if uerr := validateRoundUsage(meta.Usage, gjson.GetBytes(body, "choices.0.finish_reason").String()); uerr != nil {
+	terminal := gjson.GetBytes(body, "choices.0.finish_reason").String()
+	if opts.reasoningOnlyAsToolCalls {
+		if _, changed := applyReasoningOnlyAsToolCalls(format, body); changed {
+			terminal = "tool_calls"
+			rewriteWindowStopFinish(window)
+		}
+	}
+	if uerr := validateRoundUsage(meta.Usage, terminal); uerr != nil {
 		return fmt.Errorf("%w: %s", uerr, errBodySnippet(window[len(window)-1].Data))
 	}
 	return nil
+}
+
+// rewriteWindowStopFinish 把窗口内 stop 终止帧改为 tool_calls。
+func rewriteWindowStopFinish(window []*httpclient.StreamEvent) {
+	for _, event := range window {
+		if event == nil || len(event.Data) == 0 {
+			continue
+		}
+		choices := gjson.GetBytes(event.Data, "choices")
+		if !choices.IsArray() {
+			continue
+		}
+		out := event.Data
+		for i, choice := range choices.Array() {
+			if choice.Get("finish_reason").String() != "stop" {
+				continue
+			}
+			next, err := sjson.SetBytes(out, fmt.Sprintf("choices.%d.finish_reason", i), "tool_calls")
+			if err != nil {
+				break
+			}
+			out = next
+		}
+		event.Data = out
+	}
 }
