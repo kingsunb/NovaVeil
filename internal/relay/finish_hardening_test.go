@@ -25,6 +25,7 @@ import (
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/looplj/axonhub/llm/transformer/openai"
+	"github.com/tidwall/gjson"
 )
 
 // hardeningGroupConfig 返回加固测试通用的故障转移分组配置。
