@@ -19,6 +19,7 @@ import (
 
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/looplj/axonhub/llm"
+	"github.com/tidwall/gjson"
 )
 
 // TestAnalyzeChatStreamEventAnswerSplit 校验 chat 流事件的回答/推理信号拆分与 stop 终止标记:
@@ -252,6 +253,119 @@ func TestForwardStreamingReasoningWithAnswerDelivered(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"finish_reason":"stop"`) {
 		t.Fatal("stop 终止帧应照常交付")
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusSuccess {
+		t.Fatalf("请求应以成功终态定稿, 实际 %s(%s)", state.Status, state.Error)
+	}
+}
+
+// TestApplyReasoningFallback 校验显式降级只改写思考-only 的 stop 轮次:
+// 推理写入 content 且原文保留; 有回答、工具调用、截断及非 Chat 协议均不改写。
+func TestApplyReasoningFallback(t *testing.T) {
+	reasoningOnly := []byte(`{"choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning_content":"think-only"},"finish_reason":"stop"}]}`)
+	got, changed := applyReasoningFallback(llm.APIFormatOpenAIChatCompletion, reasoningOnly)
+	if !changed {
+		t.Fatal("思考-only 的 stop 轮次应被降级")
+	}
+	if content := gjson.GetBytes(got, "choices.0.message.content").String(); content != "think-only" {
+		t.Fatalf("content 应为推理原文, 实际 %q", content)
+	}
+	if reasoning := gjson.GetBytes(got, "choices.0.message.reasoning_content").String(); reasoning != "think-only" {
+		t.Fatalf("reasoning_content 应保留, 实际 %q", reasoning)
+	}
+
+	unchanged := []struct {
+		name   string
+		format llm.APIFormat
+		body   string
+	}{
+		{"已有回答", llm.APIFormatOpenAIChatCompletion, `{"choices":[{"message":{"role":"assistant","content":"ok","reasoning_content":"think"},"finish_reason":"stop"}]}`},
+		{"工具调用", llm.APIFormatOpenAIChatCompletion, `{"choices":[{"message":{"role":"assistant","reasoning_content":"think","tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":"stop"}]}`},
+		{"长度截断", llm.APIFormatOpenAIChatCompletion, `{"choices":[{"message":{"role":"assistant","reasoning_content":"think"},"finish_reason":"length"}]}`},
+		{"非 Chat 协议", llm.APIFormatAnthropicMessage, string(reasoningOnly)},
+	}
+	for _, tc := range unchanged {
+		if next, ok := applyReasoningFallback(tc.format, []byte(tc.body)); ok || string(next) != tc.body {
+			t.Fatalf("%s 不应降级", tc.name)
+		}
+	}
+}
+
+// TestForwardNonStreamReasoningFallbackToText 校验开关开启时非流式思考-only 轮次
+// 以推理原文作为正文正常交付, 请求按成功定稿。
+func TestForwardNonStreamReasoningFallbackToText(t *testing.T) {
+	setupFailoverTest(t)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-fallback","object":"chat.completion","created":1700000000,"model":"integration","choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning_content":"think-only"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":9,"total_tokens":14}}`))
+	}))
+	defer upstream.Close()
+
+	channel := createIntegrationChannel(t, hardeningName("it-noans-fb-ch"), model.ChannelProviderOpenAI, upstream.URL, "it-model-noans-fb")
+	config := hardeningGroupConfig()
+	config.ReasoningFallbackToText = true
+	group := createIntegrationGroup(t, hardeningName("it-noans-fb"), config,
+		integrationLeafItem(t, channel, "it-model-noans-fb"))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, group.Name)
+	expectedID := nextRequestID()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("开关开启时应成功交付, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if content := gjson.GetBytes(recorder.Body.Bytes(), "choices.0.message.content").String(); content != "think-only" {
+		t.Fatalf("交付正文应为推理原文, 实际 %q", content)
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusSuccess {
+		t.Fatalf("请求应以成功终态定稿, 实际 %s(%s)", state.Status, state.Error)
+	}
+}
+
+// TestForwardStreamingReasoningFallbackToText 校验开关开启时流式思考-only 轮次
+// 在终止块补发推理正文并保留 stop 收尾, 请求按成功定稿。
+func TestForwardStreamingReasoningFallbackToText(t *testing.T) {
+	setupFailoverTest(t)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeUpstreamSSE(t, w, "", `{"id":"c-fb","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"}}]}`)
+		writeUpstreamSSE(t, w, "", `{"id":"c-fb","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"think-only"}}]}`)
+		writeUpstreamSSE(t, w, "", `{"id":"c-fb","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":21,"total_tokens":24}}`)
+		writeUpstreamSSE(t, w, "", "[DONE]")
+	}))
+	defer upstream.Close()
+
+	channel := createIntegrationChannel(t, hardeningName("it-noans-fb-stream-ch"), model.ChannelProviderOpenAI, upstream.URL, "it-model-noans-fb-stream")
+	config := hardeningGroupConfig()
+	config.ReasoningFallbackToText = true
+	group := createIntegrationGroup(t, hardeningName("it-noans-fb-stream"), config,
+		integrationLeafItem(t, channel, "it-model-noans-fb-stream"))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":true}`, group.Name)
+	expectedID := nextRequestID()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("开关开启时应成功交付, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	fallbackSeen := false
+	for _, frame := range parseSSEFrames(t, recorder.Body.Bytes()) {
+		if strings.Contains(frame.data, `"error"`) {
+			t.Fatalf("降级轮次不应合成错误帧, 实际: %s", frame.data)
+		}
+		if gjson.Get(frame.data, "choices.0.delta.content").String() == "think-only" &&
+			gjson.Get(frame.data, "choices.0.finish_reason").String() == "stop" {
+			fallbackSeen = true
+		}
+	}
+	if !fallbackSeen {
+		t.Fatal("终止块应补发推理正文并保留 finish_reason=stop")
 	}
 	state := requestStateOf(t, expectedID)
 	if state.Status != StatusSuccess {

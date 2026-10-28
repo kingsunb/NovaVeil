@@ -284,6 +284,8 @@ export interface GroupRelayConfig {
   context_fit_enabled: boolean;
   /** 是否拒绝标题类轻请求（单轮、无工具、含标题提示词），默认 false。 */
   reject_title_requests: boolean;
+  /** 是否把思考-only 自然终止轮次的推理内容降级为正文，默认 false。 */
+  reasoning_fallback_to_text: boolean;
 }
 
 /**
@@ -316,6 +318,7 @@ export const DEFAULT_GROUP_RELAY_CONFIG: GroupRelayConfig = {
   echo_response_model: false,
   context_fit_enabled: false,
   reject_title_requests: false,
+  reasoning_fallback_to_text: false,
 };
 
 export interface GroupItem {

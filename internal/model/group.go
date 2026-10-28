@@ -38,6 +38,7 @@ type GroupRelayConfig struct {
 	EchoResponseModel              bool    `json:"echo_response_model"`                                         // 是否把响应里的模型名改写回客户端请求的分组名, 避免聚合分组把真实上游模型名透传给下游, 默认关闭, 旧分组 JSON 反序列化自动得关, 无需数据迁移。
 	ContextFitEnabled              bool    `json:"context_fit_enabled"`                                         // 默认关闭; 按手动窗口跳过装不下的成员, 未填窗口照常尝试。
 	RejectTitleRequests            bool    `json:"reject_title_requests"`                                       // 默认关闭; 命中标题类轻请求直接拒绝, 不消耗上游额度。
+	ReasoningFallbackToText        bool    `json:"reasoning_fallback_to_text"`                                  // 默认关闭; 把思考-only 自然终止轮次的推理内容降级为正文交付。
 }
 
 // DefaultGroupRelayConfig 返回新分组使用的 Relay 默认配置。
@@ -66,6 +67,7 @@ func DefaultGroupRelayConfig() GroupRelayConfig {
 		BackgroundProbeIntervalSeconds: 60,
 		EmergencyItemID:                0,
 		PreferPassthrough:              false,
+		ReasoningFallbackToText:        false,
 	}
 }
 

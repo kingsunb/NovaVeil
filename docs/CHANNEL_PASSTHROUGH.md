@@ -75,7 +75,7 @@
 ## 边界情况
 
 1. **不计费**：完全透传下 `usage = nil`，不产生用量记录和扣费。需计费则要按客户端格式额外实现响应体解析。
-2. **不校验**：跳过 `validateResponse` / `validateRoundUsage`，上游返回的 200 下发错误、空输出、异常 finish_reason 均不会被拦截重试。唯一例外是思考-only 空回答，非流式路径仍调用 `validateRoundAnswer` 拦截。
+2. **不校验**：跳过 `validateResponse` / `validateRoundUsage`，上游返回的 200 下发错误、空输出、异常 finish_reason 均不会被拦截重试。唯一例外是思考-only 空回答：非流式路径仍调用 `validateRoundAnswer` 拦截；分组开启 `reasoning_fallback_to_text` 时改为把推理降级为正文后放行。
 3. **ParamOverride 仍生效**：`applyChannelConfig` 仍注入 `ParamOverride`，完全不动请求体需在 `applyChannelConfig` 中也检查 `PassThroughBodyEnabled`。
 4. **自定义头仍追加**：`CustomHeader` 仍会被追加到上游请求。
 5. **多 Key 轮询不受影响**：Key 选择和轮询在 `sendPassthrough` 之前完成。

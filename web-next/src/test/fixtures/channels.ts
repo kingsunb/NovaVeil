@@ -71,6 +71,7 @@ export const sampleGroup: Group = {
     echo_response_model: false,
     context_fit_enabled: false,
     reject_title_requests: false,
+    reasoning_fallback_to_text: false,
   },
   items: [
     { id: 1, group_id: 10, channel_model_id: 100, ref_group_name: "", priority: 1 },

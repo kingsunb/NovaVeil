@@ -49,9 +49,9 @@ func probeChannel(ctx context.Context, channel model.Channel, modelName string) 
 	opencodeSession := generateOpencodeSessionID()
 	result, err := sendDiagnosticUpstream(ctx, func() (*upstreamResponse, error) {
 		if passthrough {
-			return sendPassthrough(ctx, llm.APIFormatOpenAIChatCompletion, raw, channel, outbound, false, "", opencodeSession)
+			return sendPassthrough(ctx, llm.APIFormatOpenAIChatCompletion, raw, channel, outbound, false, "", false, opencodeSession)
 		}
-		return sendConverted(ctx, llm.APIFormatOpenAIChatCompletion, raw, channel, outbound, false, "", opencodeSession)
+		return sendConverted(ctx, llm.APIFormatOpenAIChatCompletion, raw, channel, outbound, false, "", false, opencodeSession)
 	})
 	if result != nil {
 		result.Close()

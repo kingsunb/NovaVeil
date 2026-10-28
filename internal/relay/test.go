@@ -546,9 +546,9 @@ func sendTestRequest(ctx context.Context, channel model.Channel, clientModel, mo
 		var response *upstreamResponse
 		var sendErr error
 		if passthrough {
-			response, sendErr = sendPassthrough(testCtx, format, raw, channel, outbound, false, randomValue, opencodeSession)
+			response, sendErr = sendPassthrough(testCtx, format, raw, channel, outbound, false, randomValue, false, opencodeSession)
 		} else {
-			response, sendErr = sendConverted(testCtx, format, raw, channel, outbound, false, randomValue, opencodeSession)
+			response, sendErr = sendConverted(testCtx, format, raw, channel, outbound, false, randomValue, false, opencodeSession)
 		}
 		if sendErr == nil {
 			request.finishRound(AttemptSuccess, "", "")

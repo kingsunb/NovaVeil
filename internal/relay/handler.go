@@ -585,9 +585,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			if err == nil {
 				// 客户端与渠道协议一致时直接透传, 其余组合通过 pipeline 转换。
 				if passthrough {
-					result, err = sendPassthrough(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, requestOpencodeSession)
+					result, err = sendPassthrough(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, relayConfig.ReasoningFallbackToText, requestOpencodeSession)
 				} else {
-					result, err = sendConverted(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, requestOpencodeSession)
+					result, err = sendConverted(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, relayConfig.ReasoningFallbackToText, requestOpencodeSession)
 				}
 			}
 			if result != nil {
@@ -884,17 +884,18 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			}
 			var encoded bytes.Buffer
 			var chunks []*httpclient.StreamEvent
-			committed := false                // 已向客户端写出至少一个事件。
-			terminalSeen := result.terminated // 有效性窗口内已出现协议终止事件。
-			clientGone := false               // 因客户端写失败退出转发, 客户端已不可达, 无需补发终止帧。
-			polluted := false                 // 上游下发了携带异常终止原因的块: 该块被抑制, 流静默截断并按失败记账。
-			var polluteErr error              // 首个污染块的异常原因, 用于请求终态留档。
-			noAnswerStop := false             // 思考-only 自然终止已命中: 终止块及其后尾帧不再写给客户端。
-			roundAnswered := false            // 整轮是否出现过最终回答信号(文本增量/工具调用)。
-			roundReasoned := false            // 整轮是否出现过推理内容信号(reasoning_content)。
-			roundFinished := false            // 整轮是否出现过白名单内的非空终止原因(OpenAI Chat 的 finish_reason / Anthropic 的 message_delta.stop_reason)。
-			roundToolCall := false            // 整轮是否出现过工具调用增量。
-			roundFinish := ""                 // 整轮首个白名单内非空终止原因。
+			committed := false                 // 已向客户端写出至少一个事件。
+			terminalSeen := result.terminated  // 有效性窗口内已出现协议终止事件。
+			clientGone := false                // 因客户端写失败退出转发, 客户端已不可达, 无需补发终止帧。
+			polluted := false                  // 上游下发了携带异常终止原因的块: 该块被抑制, 流静默截断并按失败记账。
+			var polluteErr error               // 首个污染块的异常原因, 用于请求终态留档。
+			noAnswerStop := false              // 思考-only 自然终止已命中: 终止块及其后尾帧不再写给客户端。
+			roundAnswered := false             // 整轮是否出现过最终回答信号(文本增量/工具调用)。
+			roundReasoned := false             // 整轮是否出现过推理内容信号(reasoning_content)。
+			var roundReasoning strings.Builder // 累计推理文本, 供降级使用。
+			roundFinished := false             // 整轮是否出现过白名单内的非空终止原因(OpenAI Chat 的 finish_reason / Anthropic 的 message_delta.stop_reason)。
+			roundToolCall := false             // 整轮是否出现过工具调用增量。
+			roundFinish := ""                  // 整轮首个白名单内非空终止原因。
 			window := result.window
 			// 初始化必须为 false: 窗口内出现终止事件时(无内容流), 窗口可能携带多条事件
 			// (结构帧 + 终止帧 + usage 尾帧), 若以 terminated 起步会在写完第一帧后提前 break,
@@ -976,6 +977,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				verdict := analyzeStreamEvent(format, event)
 				roundAnswered = roundAnswered || verdict.hasAnswer
 				roundReasoned = roundReasoned || verdict.hasReasoning
+				if verdict.hasReasoning {
+					roundReasoning.WriteString(chatReasoningDelta(event.Data))
+				}
 				roundFinished = roundFinished || verdict.finishSeen
 				roundToolCall = roundToolCall || verdict.toolCall
 				if roundFinish == "" && verdict.finishReason != "" {
@@ -1005,7 +1009,21 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 流结束后由 frameFailure 分支合成协议内错误帧, 下游 SDK 感知失败并自动重试。
 				// 仅 OpenAI Chat 事件会置 stopFinish, 其余客户端协议不受影响。
 				if !polluted && verdict.stopFinish && roundReasoned && !roundAnswered {
-					noAnswerStop = true
+					if relayConfig.ReasoningFallbackToText {
+						// 显式降级: 终止块补发正文。
+						if text := roundReasoning.String(); text != "" {
+							if next, setErr := sjson.SetBytes(event.Data, "choices.0.delta.content", text); setErr == nil {
+								event.Data = next
+								roundAnswered = true
+							} else {
+								noAnswerStop = true
+							}
+						} else {
+							noAnswerStop = true
+						}
+					} else {
+						noAnswerStop = true
+					}
 				}
 				if noAnswerStop {
 					chunks = append(chunks, event)
