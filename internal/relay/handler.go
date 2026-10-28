@@ -1101,6 +1101,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					firstErr = streamErr
 				}
 			}
+			// 已见终止原因后断流: 缺的只是哨兵, 按完整响应收尾。
+			if firstErr != nil && roundFinished && !polluted && isStreamTruncation(firstErr) {
+				firstErr = nil
+			}
 			result.Close()
 			request.releaseRoundLifecycle()
 			// 使用客户端协议转换器聚合已转发事件, 统一取得最终响应正文和用量。

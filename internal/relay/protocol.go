@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -504,6 +505,11 @@ var errStreamWindowBudgetExceeded = errors.New("upstream stream window budget ex
 // 防止异常上游用无限事件流耗尽 relay 内存。已提交的流按失败定稿但不重发任何内容,
 // 以静默截断收尾(与其它提交后流失败语义一致)。0 表示不限, 维持既有长流语义。
 var errStreamBudgetExceeded = errors.New("upstream stream budget exceeded")
+
+// isStreamTruncation 判定读错误是否为连接层截断: 分块未收尾即断开。
+func isStreamTruncation(err error) bool {
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
+}
 
 // validChatFinishReason 判定 OpenAI Chat 协议的 choices[].finish_reason 是否为正常终止原因。
 // 白名单之外的取值(如 network_error/error/aborted)说明上游以非协议方式终止了生成,

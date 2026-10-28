@@ -511,3 +511,107 @@ func TestLegalEmptyTerminalDeliveredIllegalStillBlocked(t *testing.T) {
 		t.Fatal("stop+output0 的脏响应不得被判成功交付")
 	}
 }
+
+// writeTruncatedSSE 以分块编码写出 SSE 帧后直接断开连接: 不发结束分块,
+// 客户端读到的是 unexpected EOF 而非干净 EOF。
+func writeTruncatedSSE(t *testing.T, w http.ResponseWriter, payloads ...string) {
+	t.Helper()
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		return
+	}
+	conn, buf, err := hijacker.Hijack()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
+	for _, payload := range payloads {
+		frame := "data: " + payload + "\n\n"
+		_, _ = fmt.Fprintf(buf, "%x\r\n%s\r\n", len(frame), frame)
+	}
+	_ = buf.Flush()
+}
+
+// TestForwardTruncationAfterFinishDeliversSentinel 验证生成已完整结束(已见
+// finish_reason)后连接才被截断时按完整响应收尾: 补发终止帧、按成功定稿,
+// 避免客户端把完整回答当成断流整体重试。
+func TestForwardTruncationAfterFinishDeliversSentinel(t *testing.T) {
+	setupFailoverTest(t)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeTruncatedSSE(t, w,
+			`{"id":"c-trunc","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"}}]}`,
+			`{"id":"c-trunc","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"answer"}}]}`,
+			`{"id":"c-trunc","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":7,"total_tokens":10}}`,
+		)
+	}))
+	defer upstream.Close()
+
+	channel := createIntegrationChannel(t, hardeningName("it-trunc-finish-ch"), model.ChannelProviderOpenAI, upstream.URL, "it-model-trunc-finish")
+	group := createIntegrationGroup(t, hardeningName("it-trunc-finish"), hardeningGroupConfig(),
+		integrationLeafItem(t, channel, "it-model-trunc-finish"))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":true}`, group.Name)
+	expectedID := nextRequestID()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("客户端应收到 200 流式响应, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	}
+	frames := parseSSEFrames(t, recorder.Body.Bytes())
+	sawDone, sawFinish := false, false
+	for _, frame := range frames {
+		if frame.data == "[DONE]" {
+			sawDone = true
+		}
+		if gjson.Get(frame.data, "choices.0.finish_reason").String() == "stop" {
+			sawFinish = true
+		}
+	}
+	if !sawFinish {
+		t.Fatalf("上游终止帧应照常交付, 实际帧序列: %+v", frames)
+	}
+	if !sawDone {
+		t.Fatalf("缺哨兵的完整响应应补发 [DONE], 实际帧序列: %+v", frames)
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusSuccess {
+		t.Fatalf("生成已完整结束应以成功定稿, 实际 %s(%s)", state.Status, state.Error)
+	}
+}
+
+// TestForwardTruncationBeforeFinishStillFails 验证守卫: 未出现任何终止原因就断流
+// 属于真截断, 仍按失败定稿并静默截断, 不补发终止帧。
+func TestForwardTruncationBeforeFinishStillFails(t *testing.T) {
+	setupFailoverTest(t)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeTruncatedSSE(t, w,
+			`{"id":"c-cut","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"}}]}`,
+			`{"id":"c-cut","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"partial"}}]}`,
+		)
+	}))
+	defer upstream.Close()
+
+	channel := createIntegrationChannel(t, hardeningName("it-trunc-cut-ch"), model.ChannelProviderOpenAI, upstream.URL, "it-model-trunc-cut")
+	group := createIntegrationGroup(t, hardeningName("it-trunc-cut"), hardeningGroupConfig(),
+		integrationLeafItem(t, channel, "it-model-trunc-cut"))
+
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":true}`, group.Name)
+	expectedID := nextRequestID()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+
+	frames := parseSSEFrames(t, recorder.Body.Bytes())
+	for _, frame := range frames {
+		if frame.data == "[DONE]" || gjson.Get(frame.data, "choices.0.finish_reason").String() != "" {
+			t.Fatalf("真截断不得补发终止帧, 实际: %s", frame.data)
+		}
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusFailed {
+		t.Fatalf("未完成生成应以失败定稿, 实际 %s(%s)", state.Status, state.Error)
+	}
+}
