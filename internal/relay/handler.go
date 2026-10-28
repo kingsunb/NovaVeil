@@ -585,9 +585,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			if err == nil {
 				// 客户端与渠道协议一致时直接透传, 其余组合通过 pipeline 转换。
 				if passthrough {
-					result, err = sendPassthrough(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, relayConfig.ReasoningFallbackToText, requestOpencodeSession)
+					result, err = sendPassthrough(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, relayConfig.ReasoningOnlyAsToolCalls, requestOpencodeSession)
 				} else {
-					result, err = sendConverted(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, relayConfig.ReasoningFallbackToText, requestOpencodeSession)
+					result, err = sendConverted(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, relayConfig.ReasoningOnlyAsToolCalls, requestOpencodeSession)
 				}
 			}
 			if result != nil {
@@ -892,7 +892,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			noAnswerStop := false              // 思考-only 自然终止已命中: 终止块及其后尾帧不再写给客户端。
 			roundAnswered := false             // 整轮是否出现过最终回答信号(文本增量/工具调用)。
 			roundReasoned := false             // 整轮是否出现过推理内容信号(reasoning_content)。
-			var roundReasoning strings.Builder // 累计推理文本, 供降级使用。
 			roundFinished := false             // 整轮是否出现过白名单内的非空终止原因(OpenAI Chat 的 finish_reason / Anthropic 的 message_delta.stop_reason)。
 			roundToolCall := false             // 整轮是否出现过工具调用增量。
 			roundFinish := ""                  // 整轮首个白名单内非空终止原因。
@@ -977,9 +976,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				verdict := analyzeStreamEvent(format, event)
 				roundAnswered = roundAnswered || verdict.hasAnswer
 				roundReasoned = roundReasoned || verdict.hasReasoning
-				if verdict.hasReasoning {
-					roundReasoning.WriteString(chatReasoningDelta(event.Data))
-				}
 				roundFinished = roundFinished || verdict.finishSeen
 				roundToolCall = roundToolCall || verdict.toolCall
 				if roundFinish == "" && verdict.finishReason != "" {
@@ -1009,15 +1005,14 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 流结束后由 frameFailure 分支合成协议内错误帧, 下游 SDK 感知失败并自动重试。
 				// 仅 OpenAI Chat 事件会置 stopFinish, 其余客户端协议不受影响。
 				if !polluted && verdict.stopFinish && roundReasoned && !roundAnswered {
-					if relayConfig.ReasoningFallbackToText {
-						// 显式降级: 终止块补发正文。
-						if text := roundReasoning.String(); text != "" {
-							if next, setErr := sjson.SetBytes(event.Data, "choices.0.delta.content", text); setErr == nil {
-								event.Data = next
-								roundAnswered = true
-							} else {
-								noAnswerStop = true
-							}
+					if relayConfig.ReasoningOnlyAsToolCalls {
+						// 显式开关: 终止帧终态改为 tool_calls。
+						next, setErr := sjson.SetBytes(event.Data, "choices.0.finish_reason", "tool_calls")
+						if setErr == nil {
+							event.Data = next
+							verdict.finishReason = "tool_calls"
+							roundFinish = "tool_calls"
+							roundAnswered = true
 						} else {
 							noAnswerStop = true
 						}

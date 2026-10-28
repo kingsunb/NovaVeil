@@ -104,10 +104,11 @@ describe("GroupEditor relay_config 默认值契约", () => {
     expect(cooldown.value).toBe("60");
     expect(screen.getByLabelText(/^重试间隔/)).toHaveValue(2);
     // 路由策略页有 会话粘合 / 后台定时探测 / 协议透传偏好 / 启用脱敏 / 回显请求模型名 /
-    // 上下文窗口过滤 / 拒绝标题类请求 七个开关；粘合默认开
+    // 上下文窗口过滤 / 拒绝标题类请求 / 思考轮次标记为工具调用 八个开关；粘合默认开
     const switches = screen.getAllByRole("switch");
-    expect(switches.length).toBe(7);
+    expect(switches.length).toBe(8);
     expect(switches[0]).toHaveAttribute("aria-checked", "true");
+    expect(switches[7]).toHaveAttribute("aria-checked", "false");
   });
 
   it("编辑已有分组：读服务端 relay_config，不被默认值覆盖", async () => {

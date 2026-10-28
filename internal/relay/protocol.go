@@ -609,8 +609,8 @@ func validateRoundAnswer(format llm.APIFormat, body []byte) error {
 	return fmt.Errorf("%w: finish_reason stop with reasoning_content only", errNoAnswerStop)
 }
 
-// 把思考-only轮次降级为正文, 不改终态。
-func applyReasoningFallback(format llm.APIFormat, body []byte) ([]byte, bool) {
+// 把思考-only轮次终态改为 tool_calls。
+func applyReasoningOnlyAsToolCalls(format llm.APIFormat, body []byte) ([]byte, bool) {
 	if format != llm.APIFormatOpenAIChatCompletion || len(body) == 0 {
 		return body, false
 	}
@@ -625,20 +625,11 @@ func applyReasoningFallback(format llm.APIFormat, body []byte) ([]byte, bool) {
 	if reasoning.Type != gjson.String || reasoning.Str == "" {
 		return body, false
 	}
-	next, err := sjson.SetBytes(body, "choices.0.message.content", reasoning.Str)
+	next, err := sjson.SetBytes(body, "choices.0.finish_reason", "tool_calls")
 	if err != nil {
 		return body, false
 	}
 	return next, true
-}
-
-// 提取首条推理增量。
-func chatReasoningDelta(data []byte) string {
-	reasoning := gjson.GetBytes(data, "choices.0.delta.reasoning_content")
-	if reasoning.Type != gjson.String {
-		return ""
-	}
-	return reasoning.Str
 }
 
 // chatMessageHasAnswer 判定一条 OpenAI Chat 消息是否携带最终回答信号:

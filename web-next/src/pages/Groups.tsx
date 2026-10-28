@@ -1565,11 +1565,11 @@ function GroupEditor({
                 onChange={(v) => updateRelay("reject_title_requests", v)}
               />
               <Toggle
-                label="思考降级为正文"
-                description="上游只输出思考、以 stop 结束且没有正文或工具调用时，把思考内容降级为正文交付，避免整轮失败；可能把思考中的计划当作回答"
-                checked={relayConfig.reasoning_fallback_to_text}
+                label="思考轮次标记为工具调用"
+                description="上游只输出思考、以 stop 结束且没有正文或工具调用时，把 finish_reason 改写为 tool_calls；响应中没有真实 tool_calls，仅供需要该终态才继续的客户端使用"
+                checked={relayConfig.reasoning_only_as_tool_calls}
                 onChange={(v) =>
-                  updateRelay("reasoning_fallback_to_text", v)
+                  updateRelay("reasoning_only_as_tool_calls", v)
                 }
               />
             </div>

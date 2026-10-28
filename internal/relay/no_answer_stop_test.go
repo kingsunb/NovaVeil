@@ -260,16 +260,19 @@ func TestForwardStreamingReasoningWithAnswerDelivered(t *testing.T) {
 	}
 }
 
-// TestApplyReasoningFallback 校验显式降级只改写思考-only 的 stop 轮次:
-// 推理写入 content 且原文保留; 有回答、工具调用、截断及非 Chat 协议均不改写。
-func TestApplyReasoningFallback(t *testing.T) {
+// TestApplyReasoningOnlyAsToolCalls 校验显式开关只改写思考-only 的 stop 轮次:
+// 终态改为 tool_calls 且推理原文保留; 有回答、工具调用、截断及非 Chat 协议均不改写。
+func TestApplyReasoningOnlyAsToolCalls(t *testing.T) {
 	reasoningOnly := []byte(`{"choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning_content":"think-only"},"finish_reason":"stop"}]}`)
-	got, changed := applyReasoningFallback(llm.APIFormatOpenAIChatCompletion, reasoningOnly)
+	got, changed := applyReasoningOnlyAsToolCalls(llm.APIFormatOpenAIChatCompletion, reasoningOnly)
 	if !changed {
-		t.Fatal("思考-only 的 stop 轮次应被降级")
+		t.Fatal("思考-only 的 stop 轮次应改写终态")
 	}
-	if content := gjson.GetBytes(got, "choices.0.message.content").String(); content != "think-only" {
-		t.Fatalf("content 应为推理原文, 实际 %q", content)
+	if reason := gjson.GetBytes(got, "choices.0.finish_reason").String(); reason != "tool_calls" {
+		t.Fatalf("finish_reason 应为 tool_calls, 实际 %q", reason)
+	}
+	if content := gjson.GetBytes(got, "choices.0.message.content"); content.Type != gjson.Null {
+		t.Fatalf("content 应保持 null, 实际 %s", content.Raw)
 	}
 	if reasoning := gjson.GetBytes(got, "choices.0.message.reasoning_content").String(); reasoning != "think-only" {
 		t.Fatalf("reasoning_content 应保留, 实际 %q", reasoning)
@@ -286,15 +289,15 @@ func TestApplyReasoningFallback(t *testing.T) {
 		{"非 Chat 协议", llm.APIFormatAnthropicMessage, string(reasoningOnly)},
 	}
 	for _, tc := range unchanged {
-		if next, ok := applyReasoningFallback(tc.format, []byte(tc.body)); ok || string(next) != tc.body {
-			t.Fatalf("%s 不应降级", tc.name)
+		if next, ok := applyReasoningOnlyAsToolCalls(tc.format, []byte(tc.body)); ok || string(next) != tc.body {
+			t.Fatalf("%s 不应改写", tc.name)
 		}
 	}
 }
 
-// TestForwardNonStreamReasoningFallbackToText 校验开关开启时非流式思考-only 轮次
-// 以推理原文作为正文正常交付, 请求按成功定稿。
-func TestForwardNonStreamReasoningFallbackToText(t *testing.T) {
+// TestForwardNonStreamReasoningOnlyAsToolCalls 校验开关开启时非流式思考-only 轮次
+// 以 finish_reason=tool_calls 正常交付, 请求按成功定稿。
+func TestForwardNonStreamReasoningOnlyAsToolCalls(t *testing.T) {
 	setupFailoverTest(t)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -305,7 +308,7 @@ func TestForwardNonStreamReasoningFallbackToText(t *testing.T) {
 
 	channel := createIntegrationChannel(t, hardeningName("it-noans-fb-ch"), model.ChannelProviderOpenAI, upstream.URL, "it-model-noans-fb")
 	config := hardeningGroupConfig()
-	config.ReasoningFallbackToText = true
+	config.ReasoningOnlyAsToolCalls = true
 	group := createIntegrationGroup(t, hardeningName("it-noans-fb"), config,
 		integrationLeafItem(t, channel, "it-model-noans-fb"))
 
@@ -317,8 +320,8 @@ func TestForwardNonStreamReasoningFallbackToText(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("开关开启时应成功交付, 实际 %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if content := gjson.GetBytes(recorder.Body.Bytes(), "choices.0.message.content").String(); content != "think-only" {
-		t.Fatalf("交付正文应为推理原文, 实际 %q", content)
+	if reason := gjson.GetBytes(recorder.Body.Bytes(), "choices.0.finish_reason").String(); reason != "tool_calls" {
+		t.Fatalf("交付终态应为 tool_calls, 实际 %q", reason)
 	}
 	state := requestStateOf(t, expectedID)
 	if state.Status != StatusSuccess {
@@ -326,9 +329,9 @@ func TestForwardNonStreamReasoningFallbackToText(t *testing.T) {
 	}
 }
 
-// TestForwardStreamingReasoningFallbackToText 校验开关开启时流式思考-only 轮次
-// 在终止块补发推理正文并保留 stop 收尾, 请求按成功定稿。
-func TestForwardStreamingReasoningFallbackToText(t *testing.T) {
+// TestForwardStreamingReasoningOnlyAsToolCalls 校验开关开启时流式思考-only 轮次
+// 终止块改写为 finish_reason=tool_calls, 请求按成功定稿。
+func TestForwardStreamingReasoningOnlyAsToolCalls(t *testing.T) {
 	setupFailoverTest(t)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -342,7 +345,7 @@ func TestForwardStreamingReasoningFallbackToText(t *testing.T) {
 
 	channel := createIntegrationChannel(t, hardeningName("it-noans-fb-stream-ch"), model.ChannelProviderOpenAI, upstream.URL, "it-model-noans-fb-stream")
 	config := hardeningGroupConfig()
-	config.ReasoningFallbackToText = true
+	config.ReasoningOnlyAsToolCalls = true
 	group := createIntegrationGroup(t, hardeningName("it-noans-fb-stream"), config,
 		integrationLeafItem(t, channel, "it-model-noans-fb-stream"))
 
@@ -354,18 +357,17 @@ func TestForwardStreamingReasoningFallbackToText(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("开关开启时应成功交付, 实际 %d: %s", recorder.Code, recorder.Body.String())
 	}
-	fallbackSeen := false
+	rewritten := false
 	for _, frame := range parseSSEFrames(t, recorder.Body.Bytes()) {
 		if strings.Contains(frame.data, `"error"`) {
-			t.Fatalf("降级轮次不应合成错误帧, 实际: %s", frame.data)
+			t.Fatalf("改写轮次不应合成错误帧, 实际: %s", frame.data)
 		}
-		if gjson.Get(frame.data, "choices.0.delta.content").String() == "think-only" &&
-			gjson.Get(frame.data, "choices.0.finish_reason").String() == "stop" {
-			fallbackSeen = true
+		if gjson.Get(frame.data, "choices.0.finish_reason").String() == "tool_calls" {
+			rewritten = true
 		}
 	}
-	if !fallbackSeen {
-		t.Fatal("终止块应补发推理正文并保留 finish_reason=stop")
+	if !rewritten {
+		t.Fatal("终止块 finish_reason 应改写为 tool_calls")
 	}
 	state := requestStateOf(t, expectedID)
 	if state.Status != StatusSuccess {

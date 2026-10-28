@@ -64,10 +64,10 @@ func (r *upstreamResponse) Close() {
 
 // sendPassthrough 以同协议透传方式请求上游, 取得的响应无需转换即可回给客户端。
 // randomValue 为请求级一次性解析的随机头值, 同一请求的普通动态头与所有重试复用此值。
-// reasoningFallback 控制思考降级。
+// reasoningOnlyAsToolCalls 控制 stop 改 tool_calls。
 // opencodeSession 可选, 是同一请求已经解析好的 x-opencode-session; 未传时不覆盖该头。
 // 透传不改写请求体, prompt_cache_key 随正文原样上送。
-func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool, randomValue string, reasoningFallback bool, opencodeSession ...string) (*upstreamResponse, error) {
+func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool, randomValue string, reasoningOnlyAsToolCalls bool, opencodeSession ...string) (*upstreamResponse, error) {
 	// 渠道整体并发上限: 发起上游前领取槽位并把释放函数交给调用方持有整个生命周期
 	// (含流式窗口预读与剩余事件流的逐帧消费); 满载等待期间上下文结束立即以 ctx 错误返回,
 	// 不发起任何上游请求。释放语义由 Close 统一收口, 不再依赖 defer, 避免流式分支在
@@ -133,8 +133,8 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		if err != nil {
 			return nil, err
 		}
-		if reasoningFallback {
-			body, _ = applyReasoningFallback(format, body)
+		if reasoningOnlyAsToolCalls {
+			body, _ = applyReasoningOnlyAsToolCalls(format, body)
 		}
 		if err := validateCollapsedFreeBody(format, body, usage); err != nil {
 			return nil, err
@@ -160,8 +160,8 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		// 透传仍拦截思考-only 空回答
 		if channel.PassThroughBodyEnabled {
 			body := response.Body
-			if reasoningFallback {
-				body, _ = applyReasoningFallback(format, body)
+			if reasoningOnlyAsToolCalls {
+				body, _ = applyReasoningOnlyAsToolCalls(format, body)
 			}
 			if err := validateRoundAnswer(format, body); err != nil {
 				releaseConcurrency()
@@ -189,8 +189,8 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		return nil, fmt.Errorf("%w: %s", err, errBodySnippet(response.Body))
 	}
 	// 思考-only 空回答轮次(stop 终态但只有推理内容)同样在提交前整轮判无效换目标重试。
-	if reasoningFallback {
-		response.Body, _ = applyReasoningFallback(format, response.Body)
+	if reasoningOnlyAsToolCalls {
+		response.Body, _ = applyReasoningOnlyAsToolCalls(format, response.Body)
 	}
 	if err := validateRoundAnswer(format, response.Body); err != nil {
 		releaseConcurrency()
@@ -578,10 +578,10 @@ func (m *conversionMiddleware) OnOutboundLlmResponse(_ context.Context, response
 
 // sendConverted 经 axonhub pipeline 把客户端请求转换成渠道协议后请求上游, 响应再转换回客户端协议。
 // randomValue 为请求级一次性解析的随机头值, 同一请求的普通动态头与所有重试复用此值。
-// reasoningFallback 控制思考降级。
+// reasoningOnlyAsToolCalls 控制 stop 改 tool_calls。
 // opencodeSession 可选, 是同一请求已经解析好的 x-opencode-session; 未传时不覆盖该头。
 // prompt_cache_key 从当前 raw.Body 读取。调用方必须传入脱敏之后的正文, 不得回写脱敏前原文。
-func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool, randomValue string, reasoningFallback bool, opencodeSession ...string) (*upstreamResponse, error) {
+func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool, randomValue string, reasoningOnlyAsToolCalls bool, opencodeSession ...string) (*upstreamResponse, error) {
 	// 协议转换追踪: 关闭时仅一次缓存查询即短路, 不创建 ConvTrace, 不捕获转换体, 零开销。
 	traceOn := convTraceOn()
 	var ct *ConvTrace
@@ -665,8 +665,8 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		if err != nil {
 			return nil, err
 		}
-		if reasoningFallback {
-			body, _ = applyReasoningFallback(format, body)
+		if reasoningOnlyAsToolCalls {
+			body, _ = applyReasoningOnlyAsToolCalls(format, body)
 		}
 		if err := validateCollapsedFreeBody(format, body, usage); err != nil {
 			return nil, fmt.Errorf("%w: %s", err, middleware.rawBody)
@@ -681,8 +681,8 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 			return nil, fmt.Errorf("%w: %s", err, middleware.rawBody)
 		}
 		// 思考-only 空回答轮次(stop 终态但只有推理内容)同样在提交前整轮判无效换目标重试。
-		if reasoningFallback {
-			result.Response.Body, _ = applyReasoningFallback(format, result.Response.Body)
+		if reasoningOnlyAsToolCalls {
+			result.Response.Body, _ = applyReasoningOnlyAsToolCalls(format, result.Response.Body)
 		}
 		if err := validateRoundAnswer(format, result.Response.Body); err != nil {
 			releaseConcurrency()
