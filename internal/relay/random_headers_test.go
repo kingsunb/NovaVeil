@@ -710,9 +710,10 @@ func TestInjectOpencodeCorrelationHeadersV1Unchanged(t *testing.T) {
 	if got := req.Headers.Get(opencodeSessionIDHeader); got != validSesA {
 		t.Fatalf("v1 x-opencode-session-id = %q, 期望 root %q", got, validSesA)
 	}
+	// 2026-10-30 实抓: 官方 v1 客户端同样发送 affinity 与 X-Session-Id
 	for _, h := range []string{opencodeAffinityHeader, opencodeUpstreamSessID} {
-		if got := req.Headers.Get(h); got != "" {
-			t.Fatalf("v1 不应注入 %s, 实际 %q", h, got)
+		if got := req.Headers.Get(h); got != validSesA {
+			t.Fatalf("v1 %s = %q, 期望 %q", h, got, validSesA)
 		}
 	}
 	if got := req.Headers.Get(opencodeParentHeader); got != parent {

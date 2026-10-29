@@ -70,18 +70,24 @@ func TestRestoreToolAliasesInEventAndBody(t *testing.T) {
 	}
 }
 
-// TestShapeV2KeepsV1LaneUntouched 锁定 v1 档不引入 clint_ 改名(回归)。
-func TestShapeV2KeepsV1LaneUntouched(t *testing.T) {
+// TestShapeV1AlsoAlignsToolset 锁定 v1 档同样做官方工具集对齐(2026-10-30 起)。
+// 此前 v1 只补 read 占位不改名, 与 v2 行为不一致; 实抓证明 v1 客户端工具集形态
+// 与 v2 同源, 因此两档统一走 ensureOfficialToolset。
+func TestShapeV1AlsoAlignsToolset(t *testing.T) {
 	out, changed, aliases := shapeOpencodeFreeBody(
 		[]byte(`{"model":"x-free","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"mytool","description":"c","parameters":{"type":"object","properties":{}}}}]}`),
 		true, model.UpstreamProtocolChat)
 	_ = out
 	if !changed {
-		t.Fatal("v1 应注入 read 占位")
+		t.Fatal("v1 应改写工具集")
 	}
-	for name := range aliases {
-		if strings.HasPrefix(name, "clint_") {
-			t.Fatalf("v1 档不应出现 clint_ 别名: %v", aliases)
+	found := false
+	for name, orig := range aliases {
+		if strings.HasPrefix(name, "clint_") && orig == "mytool" {
+			found = true
 		}
+	}
+	if !found {
+		t.Fatalf("v1 应把客户端工具改名为 clint_ 前缀: %v", aliases)
 	}
 }

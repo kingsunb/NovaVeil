@@ -215,11 +215,38 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 	}
 }
 
-// ocProbeExpectedV1Tools / ocProbeExpectedV2Tools 是官方客户端实抓的工具名与顺序。
+// ocProbeExpectedV1Tools / ocProbeExpectedV2Tools 是官方客户端实抓的工具名与顺序,
+// 末尾附加 2026-10-30 补齐的 29 个 chrome-devtools。
+// ocProbeChromeTools 是官方客户端实抓的 29 个 chrome-devtools 工具,
+// 2026-10-30 起并入体检模板(纯官方 11 个不足以支撑混入自定义工具的请求)。
+var ocProbeChromeTools = []string{
+	"chrome-devtools_click", "chrome-devtools_close_page", "chrome-devtools_drag",
+	"chrome-devtools_emulate", "chrome-devtools_evaluate_script", "chrome-devtools_fill",
+	"chrome-devtools_fill_form", "chrome-devtools_get_console_message",
+	"chrome-devtools_get_network_request", "chrome-devtools_handle_dialog",
+	"chrome-devtools_hover", "chrome-devtools_lighthouse_audit",
+	"chrome-devtools_list_console_messages", "chrome-devtools_list_network_requests",
+	"chrome-devtools_list_pages", "chrome-devtools_navigate_page", "chrome-devtools_new_page",
+	"chrome-devtools_performance_analyze_insight", "chrome-devtools_performance_start_trace",
+	"chrome-devtools_performance_stop_trace", "chrome-devtools_press_key",
+	"chrome-devtools_resize_page", "chrome-devtools_select_page",
+	"chrome-devtools_take_heapsnapshot", "chrome-devtools_take_screenshot",
+	"chrome-devtools_take_snapshot", "chrome-devtools_type_text",
+	"chrome-devtools_upload_file", "chrome-devtools_wait_for",
+}
+
 var (
-	ocProbeExpectedV1Tools = []string{"bash", "edit", "glob", "grep", "read", "skill", "task", "todowrite", "webfetch", "websearch", "write"}
-	ocProbeExpectedV2Tools = []string{"edit", "glob", "grep", "question", "read", "shell", "skill", "subagent", "webfetch", "websearch", "write", "execute"}
+	ocProbeExpectedV1Tools = concatToolNames([]string{"bash", "edit", "glob", "grep", "read", "skill", "task", "todowrite", "webfetch", "websearch", "write"}, ocProbeChromeTools)
+	ocProbeExpectedV2Tools = concatToolNames([]string{"edit", "glob", "grep", "question", "read", "shell", "skill", "subagent", "webfetch", "websearch", "write", "execute"}, ocProbeChromeTools)
 )
+
+// concatToolNames 拼接工具名切片, 不改动入参底层数组。
+func concatToolNames(base, extra []string) []string {
+	out := make([]string, 0, len(base)+len(extra))
+	out = append(out, base...)
+	out = append(out, extra...)
+	return out
+}
 
 // topLevelJSONKeys 按出现顺序返回 JSON 对象的顶层键。
 func topLevelJSONKeys(t *testing.T, body []byte) []string {

@@ -140,27 +140,37 @@ func TestShapeOpencodeFreeBodyNonArrayToolsUntouched(t *testing.T) {
 	_ = changed
 }
 
-// TestShapeOpencodeFreeBodyV1ReadTool 验证 v1 档只保证单个 read 工具, 且不改名客户端工具。
+// TestShapeOpencodeFreeBodyV1ReadTool 验证 v1 档补齐官方全集并替换同名工具定义。
+// 2026-10-30 起 v1 与 v2 统一走 ensureOfficialToolset: 客户端同名工具用官方定义覆盖。
 func TestShapeOpencodeFreeBodyV1ReadTool(t *testing.T) {
-	t.Run("无工具时补 read 占位", func(t *testing.T) {
+	t.Run("无工具时补官方全集", func(t *testing.T) {
 		body, changed, _ := shapeOpencodeFreeBody([]byte(`{"model":"x-free","messages":[]}`), true, model.UpstreamProtocolChat)
 		if !changed {
-			t.Fatalf("v1 档缺工具时应注入 read")
+			t.Fatalf("v1 档缺工具时应补齐官方全集")
 		}
 		tools := gjson.GetBytes(body, "tools").Array()
-		if len(tools) != 1 || tools[0].Get("function.name").String() != v1ReadToolName {
-			t.Fatalf("应只注入单个 %q, 实际 %s", v1ReadToolName, gjson.GetBytes(body, "tools").Raw)
+		if len(tools) < 40 {
+			t.Fatalf("v1 应补齐官方全集(>=40), 实际 %d", len(tools))
+		}
+		found := false
+		for _, tool := range tools {
+			if tool.Get("function.name").String() == v1ReadToolName {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("补齐后应包含 %q", v1ReadToolName)
 		}
 	})
 
-	t.Run("已有 read 时保留定义并补齐默认字段", func(t *testing.T) {
+	t.Run("同名工具用官方定义覆盖", func(t *testing.T) {
 		body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[{"type":"function","function":{"name":"read","description":"client","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}]}`)
 		got, changed, _ := shapeOpencodeFreeBody(body, true, model.UpstreamProtocolChat)
 		if !changed {
 			t.Fatalf("应补齐官方默认字段: %s", got)
 		}
-		if !strings.Contains(string(got), `"description":"client"`) {
-			t.Fatalf("客户端 read 定义应原样保留: %s", got)
+		if strings.Contains(string(got), `"description":"client"`) {
+			t.Fatalf("客户端 read 定义应被官方定义替换: %s", got)
 		}
 		if gjson.GetBytes(got, "max_tokens").Int() != 128000 || gjson.GetBytes(got, "tool_choice").String() != "auto" {
 			t.Fatalf("v1 默认字段缺失: %s", got)
@@ -273,7 +283,8 @@ func TestOpencodeToolDescriptionPlatform(t *testing.T) {
 }
 
 // TestShapeOpencodeFreeBodyCorrectsClientPatch 锁定 patch 的新语义: patch 不在
-// 官方 12 工具集内, 客户端 patch 改名为 clint_patch 且定义原样保留, 响应侧还原。
+// 官方工具集内, 客户端 patch 改名为 clint_patch 且定义原样保留, 响应侧还原。
+// 官方 v2 全集为 41 个(12 核心 + 29 chrome-devtools), 客户端工具排在其后。
 func TestShapeOpencodeFreeBodyCorrectsClientPatch(t *testing.T) {
 	def, ok := knownOpencodeTool("patch")
 	if !ok {
@@ -287,11 +298,11 @@ func TestShapeOpencodeFreeBodyCorrectsClientPatch(t *testing.T) {
 	if aliases["clint_patch"] != "patch" {
 		t.Fatalf("别名表应含 clint_patch→patch, 实际 %v", aliases)
 	}
-	if gjson.GetBytes(got, "tools.12.function.name").String() != "clint_patch" {
+	if gjson.GetBytes(got, "tools.41.function.name").String() != "clint_patch" {
 		t.Fatalf("patch 应排在官方集之后并改名: %s", gjson.GetBytes(got, "tools.#").Raw)
 	}
 	var parameters map[string]any
-	if err := json.Unmarshal([]byte(gjson.GetBytes(got, "tools.12.function.parameters").Raw), &parameters); err != nil {
+	if err := json.Unmarshal([]byte(gjson.GetBytes(got, "tools.41.function.parameters").Raw), &parameters); err != nil {
 		t.Fatalf("解析 clint_patch parameters: %v", err)
 	}
 	// ensureOpencodeFreeTools 先把已知工具校正为真实定义, 再由改名层改名出站。
