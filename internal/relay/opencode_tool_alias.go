@@ -20,7 +20,11 @@ const ocToolAliasPrefix = "clint_"
 // 上游对工具总量敏感: 官方全集 40 + 自定义 30 可过, 再多即失败, 预留 3 个余量。
 const ocToolAliasMaxTools = 33
 
-// ocToolAliasWhitelist 是优先占位的客户端工具名(按功能重要性挑选)。
+// extraToolDescLimit 是溢出工具描述的最大字符数, 控制文本块体积。
+const extraToolDescLimit = 80
+
+// ocToolAliasWhitelist 是优先占位的客户端工具名, 按客户端分组维护。
+// 每个请求只携带单一客户端的工具集, 跨组重名(如 read/Agent)对匹配无影响。
 var ocToolAliasWhitelist = map[string]bool{
 	"pwsh": true, "read": true, "write": true, "edit": true,
 	"glob": true, "grep": true, "read_image": true,
@@ -41,6 +45,41 @@ var ocToolAliasWhitelist = map[string]bool{
 
 	"ask_user_question": true, "exit_plan_mode": true, "present": true,
 	"skill": true, "working_directory": true,
+
+	// LiveAgent(首字母大写风格)
+	"Image": true, "Write": true, "Edit": true, "Delete": true, "List": true,
+	"Glob": true, "Grep": true, "Bash": true, "ProcessWait": true, "ProcessStop": true,
+	"ManagedProcess": true, "SkillsManager": true, "CronTaskManager": true,
+	"McpManager": true, "MemoryManager": true, "ReadTerminal": true, "Browser": true,
+	"SendMessage": true, "TaskCreate": true, "TaskUpdate": true, "TaskList": true,
+	"AskUserQuestion": true, "Agent": true,
+
+	// Codex(下划线 + 双下划线命名空间)
+	"exec_command": true, "write_stdin": true, "request_user_input": true,
+	"view_image": true, "list_mcp_resources": true,
+	"list_mcp_resource_templates": true, "read_mcp_resource": true,
+	"multi_agent_v1__close_agent": true, "multi_agent_v1__resume_agent": true,
+	"multi_agent_v1__send_input": true, "multi_agent_v1__spawn_agent": true,
+	"multi_agent_v1__wait_agent": true,
+	"mcp__codex_tui__create_thread": true, "mcp__codex_tui__create_worktree": true,
+	"mcp__codex_tui__fork_thread": true, "mcp__codex_tui__get_worktree_creation_status": true,
+	"mcp__codex_tui__list_archived_threads": true, "mcp__codex_tui__list_threads": true,
+	"mcp__codex_tui__list_worktrees": true, "mcp__codex_tui__read_thread": true,
+	"mcp__codex_tui__send_message_to_thread": true,
+	"mcp__codex_tui__set_thread_archived": true, "mcp__codex_tui__set_thread_title": true,
+	"mcp__codex_tui__wait_threads": true,
+
+	// Claude Code(首字母大写, 带计划/工作树/Cron 系列)
+	"CronCreate": true, "CronDelete": true, "CronList": true, "DesignSync": true,
+	"EnterPlanMode": true, "ExitPlanMode": true, "EnterWorktree": true, "ExitWorktree": true,
+	"ListAgents": true, "NotebookEdit": true, "ReportFindings": true,
+	"ScheduleWakeup": true, "TaskStop": true, "WebFetch": true, "WebSearch": true,
+	"Workflow": true, "Skill": true,
+
+	// Pi(核心 17 个, MCP 工具集不占名额)
+	"bash": true, "find": true, "ls": true, "todo": true,
+	"plan_mode_question": true, "plan_mode_complete": true,
+	"source_check": true, "fetch_content": true, "get_search_content": true,
 }
 
 // ensureOfficialToolset 把免费档正文的工具集规范成官方会话形态(lane 取 v1/v2):
@@ -134,6 +173,8 @@ func ensureOfficialToolset(body []byte, lane string) ([]byte, map[string]string)
 
 // appendExtraToolsNote 把超出上限的客户端工具渲染成文本追加到 system 消息。
 // 这些工具不在 tools 数组内, 模型无法发起结构化 tool_calls, 只能作为能力说明保留。
+// 描述截断、参数只列属性名: 部分客户端(Pi)单请求上百个 MCP 工具, 渲染 schema 原文
+// 会让 system 膨胀上百 KB, 反而拖垮请求。
 func appendExtraToolsNote(body []byte, tools []string) []byte {
 	content := gjson.GetBytes(body, "messages.0.content")
 	if content.Type != gjson.String {
@@ -145,15 +186,25 @@ func appendExtraToolsNote(body []byte, tools []string) []byte {
 	b.WriteString(`If one is needed, reply with a JSON object: {"tool": "<name>", "arguments": {...}}`)
 	for _, raw := range tools {
 		t := gjson.Parse(raw)
-		b.WriteString("\n\n- name: ")
+		b.WriteString("\n- ")
 		b.WriteString(t.Get("function.name").String())
 		if d := t.Get("function.description").String(); d != "" {
-			b.WriteString("\n  description: ")
+			d = strings.ReplaceAll(d, "\n", " ")
+			if r := []rune(d); len(r) > extraToolDescLimit {
+				d = string(r[:extraToolDescLimit]) + "…"
+			}
+			b.WriteString(": ")
 			b.WriteString(d)
 		}
-		if p := t.Get("function.parameters"); p.Exists() {
-			b.WriteString("\n  parameters: ")
-			b.WriteString(p.Raw)
+		var keys []string
+		t.Get("function.parameters.properties").ForEach(func(k, _ gjson.Result) bool {
+			keys = append(keys, k.String())
+			return true
+		})
+		if len(keys) > 0 {
+			b.WriteString(" [params: ")
+			b.WriteString(strings.Join(keys, ", "))
+			b.WriteString("]")
 		}
 	}
 	b.WriteString("\n</additional_tools>")

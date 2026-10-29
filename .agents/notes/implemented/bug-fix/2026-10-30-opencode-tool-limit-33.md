@@ -114,3 +114,26 @@ for l in open('/root/capture.log'):
 处理：把 29 个 chrome-devtools 定义追加进两个模板（v1 11→40，v2 12→41），原有工具顺序与定义不动，只做尾部追加。定义来源为官方客户端抓包，已确认不含本地路径、URL 等环境痕迹。
 
 副作用：体检 body 增大约 22 KB，prompt tokens 相应增加；若体检对体积敏感需关注。
+
+## 追加：多客户端白名单与溢出精简渲染
+
+抓包实测补入四个第三方客户端后，工具集风格差异极大，白名单从「只服务 dsh」扩为按客户端分组维护，共 106 条：
+
+| 客户端 | 工具数 | 命名风格 | 白名单命中 |
+| --- | --- | --- | --- |
+| dsh | 46 | 全小写 | 33 |
+| LiveAgent | 26 | 首字母大写 | 26 |
+| Codex | 28 | 全小写 + 双下划线命名空间 | 28 |
+| Claude Code | 26 | 首字母大写 | 26 |
+| Pi | 107 | 小写核心 + 大量 `mcp_*` | 17 |
+
+每个请求只携带单一客户端的工具集，跨组重名（`read`、`Agent`、`AskUserQuestion`、`SendMessage`）对匹配无影响；同名工具在改名 `clint_` 阶段由 `taken` 集合追加下划线去重。
+
+Pi 是首个工具数破百的客户端（107 个，body 170KB），其中 `mcp_ida_*` 约 70 个、`mcp_playwright_*` 约 25 个。白名单只收 17 个核心工具，按顺序补足到 33 后仍有 74 个溢出。若按原方案渲染完整 schema，system 会膨胀 100KB 以上，因此 `appendExtraToolsNote` 改为精简渲染：
+
+- 描述截断到 80 字符（常量 `extraToolDescLimit`）
+- 参数只输出属性名列表，不输出 schema 原文
+
+74 个工具的文本块从约 100KB 降到约 12KB，system 总量约 182KB，仍在可控范围。
+
+需要注意：溢出的工具不在 `tools` 数组内，模型无法发起结构化 `tool_calls`，只能按 `<additional_tools>` 里的约定输出 JSON 文本，由客户端解析。Pi 的 `mcp_playwright_*` 全部落在此列。
