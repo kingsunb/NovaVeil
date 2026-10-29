@@ -13,7 +13,7 @@ import (
 // 自定义工具改名 clint_ 前缀, 官方全集在前, 别名表齐全。
 func TestEnsureOfficialV2ToolsetRenamesAndMerges(t *testing.T) {
 	body := []byte(`{"model":"m","tools":[{"type":"function","function":{"name":"my_tool.x","description":"c","parameters":{"type":"object","properties":{}}}}]}`)
-	out, aliases := ensureOfficialV2Toolset(body)
+	out, aliases := ensureOfficialToolset(body, "v2")
 	if aliases["clint_my_tool_x"] != "my_tool.x" {
 		t.Fatalf("别名表异常: %v", aliases)
 	}
@@ -42,7 +42,7 @@ func TestEnsureOfficialV2ToolsetRewritesToolCalls(t *testing.T) {
 	body := []byte(`{"model":"m","tool_choice":{"type":"function","function":{"name":"patcher"}},
 		"tools":[{"type":"function","function":{"name":"patcher","description":"c","parameters":{"type":"object","properties":{}}}}],
 		"messages":[{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"patcher","arguments":"{}"}}]}]}`)
-	out, aliases := ensureOfficialV2Toolset(body)
+	out, aliases := ensureOfficialToolset(body, "v2")
 	if aliases["clint_patcher"] != "patcher" {
 		t.Fatalf("别名表异常: %v", aliases)
 	}

@@ -112,7 +112,7 @@ var BuiltinFreeChannels = []model.Channel{
 		//   - User-Agent 用 v1 模型请求格式 opencode/1.19.5 ai-sdk/provider-utils/<ver>
 		//     runtime/bun/1.4.4, <ver> 按出站协议(chat=4.0.23/responses=4.0.40/anthropic=4.0.46);
 		//   - x-opencode-project 用裸 40-hex(由 injectOpencodeCorrelationHeaders 注入);
-		//   - 额外发送 x-opencode-request(msg_ 递增 id), v2 形态不发此头。
+		//   - 额外发送 x-opencode-request(msg_ 递增 id), v2 形态也发此头(2026-10-30 实抓)。
 		// 两条渠道都打 /inference, 形态由 OpencodeLane 显式指定, 不再由 BaseURL 推断。
 		Name:           "OpenCode Free Old",
 		Type:           model.ChannelProviderOpenAI,

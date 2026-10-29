@@ -24,7 +24,7 @@ const opencodeSessionHeader = "x-opencode-session"
 // opencode 关联头名。opencode v2 官方客户端(packages/core/src/session/model-request.ts:282-292)
 // 在每个 model 请求上注入: x-opencode-session-id(= session.id)、x-session-affinity(= affinity)、
 // X-Session-Id(= affinity, 大写 X)、x-opencode-project(= projectID)、x-opencode-session(= affinity)、
-// x-opencode-client(= app.name)。官方不发送 x-opencode-request(客户端发送路径无此头)。
+// x-opencode-client(= app.name)。x-opencode-request(msg_ 形态)两档都发(2026-10-30 实抓)。
 // 对顶层会话, affinity == session.id, 故 x-opencode-session-id / x-session-affinity / X-Session-Id
 // 三者同值, 均镜像 x-opencode-session。
 const (
@@ -247,8 +247,8 @@ func applyResolvedOpencodeSession(channel model.Channel, session string, request
 // injectOpencodeCorrelationHeaders 在 OpencodeCompat 渠道上补充 opencode 关联头。
 // 调用方应在 x-opencode-session 最终写入之后调用(applyChannelConfig 里紧跟
 // applyResolvedOpencodeSession), 这样关联头镜像的是最终会话号而非占位值。
-// v1 档只镜像 x-opencode-session-id 且不发 affinity/X-Session-Id; v2 档保留客户端
-// child session, root 会话用于 x-opencode-session/affinity/X-Session-Id。
+// v1 档镜像 x-opencode-session-id 并同样发 affinity/X-Session-Id(2026-10-30 实抓);
+// v2 档保留客户端 child session, root 会话用于 x-opencode-session/affinity/X-Session-Id。
 // 非空父会话规范化为官方会话号并写双 parent 头; v2 同时把 root 切到父会话。
 // v2 免费档补 b3/traceparent。
 func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient.Request) error {
@@ -279,6 +279,9 @@ func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient
 	if session != "" {
 		if v1 {
 			request.Headers.Set(opencodeSessionIDHeader, session)
+			// 实抓 v1 客户端同样发送 affinity 与 X-Session-Id
+			request.Headers.Set(opencodeAffinityHeader, session)
+			request.Headers.Set(opencodeUpstreamSessID, session)
 		} else {
 			if childSession == "" {
 				childSession = childFallback

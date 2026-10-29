@@ -36,6 +36,44 @@ func blockedCustomHeader(name string) bool {
 	}
 }
 
+// opencodeOfficialHeaders 是官方 CLI 会发的请求头白名单, 其余客户端头一律丢弃。
+// 除抓包实证的官方头外, 仅额外放行鉴权与协议必需头。
+var opencodeOfficialHeaders = map[string]struct{}{
+	"accept":                       {},
+	"accept-encoding":              {},
+	"authorization":                {},
+	"content-type":                 {},
+	"content-length":               {},
+	"connection":                   {},
+	"host":                         {},
+	"user-agent":                   {},
+	"x-opencode-client":            {},
+	"x-opencode-project":           {},
+	"x-opencode-request":           {},
+	"x-opencode-session":           {},
+	"x-opencode-session-id":        {},
+	"x-opencode-parent-session-id": {},
+	"x-opencode-parent-id":         {},
+	"x-session-affinity":           {},
+	"x-session-id":                 {},
+	"x-api-key":                    {},
+	"x-goog-api-key":               {},
+	"api-key":                      {},
+	"anthropic-version":            {},
+	"anthropic-beta":               {},
+	"traceparent":                  {},
+	"b3":                           {},
+}
+
+// stripNonOfficialHeaders 只保留白名单内的头, 不让第三方客户端的私有标识透给上游。
+func stripNonOfficialHeaders(request *httpclient.Request) {
+	for name := range request.Headers {
+		if _, ok := opencodeOfficialHeaders[strings.ToLower(name)]; !ok {
+			request.Headers.Del(name)
+		}
+	}
+}
+
 // supportsNativeFormat 判断客户端协议是否为这一跳的原生格式; 同协议时可整包透传, 否则需经 pipeline 转换。
 // 当渠道开启 PassThroughBodyEnabled (完全渠道透传) 时, 任意客户端协议均视为原生格式, 直接原样透传至上游。
 // channelModel 提供 OpenCode 模型行上的上游协议; 为空或协议为空时仍按渠道类型判断。
@@ -361,6 +399,10 @@ func applyChannelModelLimits(channel model.Channel, request *httpclient.Request)
 // 未传入时保持探测路径的旧行为(由 injectRandomHeaders 用 randomValue 占位)。
 func applyChannelConfig(channel model.Channel, request *httpclient.Request, randomValue string, opencodeSession ...string) error {
 	contentType := request.Headers.Get("Content-Type")
+	// opencode 渠道只保留官方头
+	if channel.OpencodeCompat {
+		stripNonOfficialHeaders(request)
+	}
 	// multipart/form-data 请求(图片编辑/变体、语音转写/翻译): 跳过全部 JSON 参数改写
 	// (sjson 对 multipart 体会产生垃圾), 仅应用自定义 Header 与动态头。
 	// 非对话类 JSON 接口(图片生成/视频/语音合成/嵌入): 跳过 max_tokens/reasoning_effort

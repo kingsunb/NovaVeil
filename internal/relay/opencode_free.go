@@ -231,8 +231,8 @@ func opencodeFreeLaneAccept(channel model.Channel) string {
 //     runtime/bun/1.4.4(<ver> 按出站协议), Accept 用 */*, 并发送 x-opencode-request
 //     (msg_ 升序 id);
 //   - v2 档(/inference): User-Agent 动态覆盖为 opencode/latest/2.1.4/cli,
-//     Accept 用 */*, 且不发送 x-opencode-request
-//     (v2 网关对此头 403); Anthropic 出站补 beta=true。
+//     Accept 用 */*, 同样发送 x-opencode-request(官方 v2 客户端实抓两个头都发);
+//     Anthropic 出站补 beta=true。
 //
 // 仅对免费档改写头, 改写发生在 applyChannelConfig 之后, 覆盖渠道静态同名头。
 // x-opencode-project 由关联头注入统一处理。
@@ -253,6 +253,12 @@ func applyOpencodeFreeLaneHeaders(channel model.Channel, request *httpclient.Req
 	if !isOpencodeV1Lane(channel) {
 		// 动态覆盖渠道静态 UA，存量库也生效。
 		request.Headers.Set("User-Agent", model.OpencodeV2UserAgent())
+		// 官方 v2 客户端实抓两个头都发，v2 档同样注入消息 ID。
+		request.Headers.Set("x-opencode-request", opencodeid.UserMessageID(
+			request.Headers.Get("x-opencode-request"),
+			request.Body,
+			request.Headers.Get(opencodeSessionHeader),
+		))
 		if isAnthropic {
 			applyAnthropicBetaQuery(request)
 			request.Headers.Set("anthropic-beta", "interleaved-thinking-2025-05-14")
@@ -338,6 +344,16 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 				out = normalized
 			}
 		}
+		if toolNext, aliases := ensureOfficialToolset(out, "v1"); aliases != nil {
+			out, changed = toolNext, true
+			if alias != "" {
+				aliases[v1ReadToolName] = alias
+			}
+			if normalized := normalizeOpencodeChatBody(out, v1ChatKeyOrder); normalized != nil {
+				out = normalized
+			}
+			return out, changed, aliases
+		}
 		if alias == "" {
 			return out, changed, nil
 		}
@@ -355,7 +371,7 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 		if sysNext, sysChanged := ensureOfficialOpencodeSystem(out, "v2", bodyModelName(out)); sysChanged {
 			out, changed = sysNext, true
 		}
-		if toolNext, aliases := ensureOfficialV2Toolset(out); aliases != nil {
+		if toolNext, aliases := ensureOfficialToolset(out, "v2"); aliases != nil {
 			out, changed = toolNext, true
 			if normalized := normalizeOpencodeChatBody(out, v2ChatKeyOrder); normalized != nil {
 				out = normalized

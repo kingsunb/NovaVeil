@@ -35,10 +35,9 @@ func GenerateSessionID() string {
 	return generateOpencodePrefixedID("ses_", true)
 }
 
-// GenerateMessageID 生成 v1 档(/zen) x-opencode-request 头所需的消息 ID,
+// GenerateMessageID 生成 x-opencode-request 头所需的消息 ID,
 // 格式 msg_ + 12 位十六进制 + 14 位字母数字, 与 opencode 1.x 客户端的消息 ID 同形。
-// opencode2api 在 v1 档每个模型请求上发送此头(递增 msg_ id); v2 档(/inference)不发
-// (v2 网关对 x-opencode-request 返回 403 FreeTierError)。
+// 两档都注入: 实抓官方 v2 客户端同样发送此头(旧假设"v2 网关对此头 403"已被实测推翻)。
 //
 // 消息 ID 用 ascending 编码(时间部分不取反), 与 opencode 的 Identifier.ascending() 一致:
 // 官方客户端只有会话 ID 走 descending, 消息 ID 是升序。取反后时间戳方向相反, 解出来的
@@ -97,9 +96,8 @@ func generateOpencodePrefixedID(prefix string, descending bool) string {
 }
 
 // GenerateRequestID 生成每请求唯一的 opencode 关联请求 ID, 格式 req_<32 hex>。
-// 注意: opencode v2 官方客户端不发送 x-opencode-request 头(客户端发送路径无此头,
-// 见 packages/core/src/session/model-request.ts:282-292), 该函数保留供内部关联/
-// 日志使用, 但不再注入到发往 opencode.ai 的上游请求头中。
+// 注意: 官方客户端在 x-opencode-request 上发送的是 msg_ 形态(实抓确认, 两档都发),
+// req_ 形态与之不符, 该函数保留供内部关联/日志使用, 不注入上游请求头。
 func GenerateRequestID() string {
 	buf := make([]byte, 16)
 	if _, err := rand.Read(buf); err != nil {
