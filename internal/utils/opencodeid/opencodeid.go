@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"math/big"
 	"regexp"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -123,11 +124,13 @@ var (
 // SessionIDFromSignal 由信号确定性派生官方 ses_ 会话号。
 // v1Lane=true 按小时锚(v1 原始策略); false 按天锚(v2: UTC 日−哈希偏移至多 30 天)。
 // 同一信号恒定派生同一号, 时间新鲜度与确定性兼得。
+// 种子混入进程盐, 重启后同一信号派生新号。
+// 官方合法号不受盐影响, 原样返回。
 func SessionIDFromSignal(signal string, v1Lane bool) string {
 	if officialSessionPattern.MatchString(signal) && descendingTimePartPattern.MatchString(signal[4:16]) {
 		return signal
 	}
-	sum := sha256.Sum256([]byte("ses\x00" + signal))
+	sum := sha256.Sum256(saltedSessionSeed(signal))
 	var inverted uint64
 	if v1Lane {
 		anchor := uint64(time.Now().UnixMilli()/sessionAnchorMillis*sessionAnchorMillis) << 12
@@ -143,6 +146,36 @@ func SessionIDFromSignal(signal string, v1Lane bool) string {
 		byte(inverted >> 16), byte(inverted >> 8), byte(inverted),
 	})
 	return "ses_" + hexPart + base62Fixed(sum[6:16], 14)
+}
+
+// processSalt 进程盐, 重启重铸防跨号复用。
+var (
+	processSaltOnce sync.Once
+	processSaltBuf  [16]byte
+)
+
+// processSalt 返回进程启动后一次性铸造的 16 字节盐。
+func processSalt() []byte {
+	processSaltOnce.Do(func() {
+		if _, err := rand.Read(processSaltBuf[:]); err != nil {
+			// crypto/rand 失败降级: 纳秒时间填充, 极低概率发生。
+			ts := time.Now().UnixNano()
+			for i := range processSaltBuf {
+				processSaltBuf[i] = byte(ts >> uint((i*8)%64))
+			}
+		}
+	})
+	return processSaltBuf[:]
+}
+
+// saltedSessionSeed 派生种子混入进程盐隔离重启。
+func saltedSessionSeed(signal string) []byte {
+	seed := make([]byte, 0, len(signal)+21)
+	seed = append(seed, "ses\x00"...)
+	seed = append(seed, processSalt()...)
+	seed = append(seed, 0)
+	seed = append(seed, signal...)
+	return seed
 }
 
 const sessionAnchorMillis = 3600 * 1000

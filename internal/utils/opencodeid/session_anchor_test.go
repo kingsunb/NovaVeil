@@ -3,6 +3,7 @@ package opencodeid
 import (
 	"encoding/hex"
 	"regexp"
+	"sync"
 	"testing"
 	"time"
 )
@@ -45,5 +46,34 @@ func TestSessionIDFromSignalStaysInWindow(t *testing.T) {
 	official := GenerateSessionID()
 	if SessionIDFromSignal(official, false) != official {
 		t.Fatal("官方号应原样保留")
+	}
+}
+
+// TestSessionIDFromSignalSaltedPerProcess 锁定进程盐契约: 同进程恒定派生,
+// 换盐(模拟重启)后同一信号派生新号, 且形态仍匹配官方 pattern。
+func TestSessionIDFromSignalSaltedPerProcess(t *testing.T) {
+	pattern := regexp.MustCompile(`^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`)
+	first := SessionIDFromSignal("conv-salt", false)
+	if again := SessionIDFromSignal("conv-salt", false); again != first {
+		t.Fatalf("同进程内应恒定派生: %s vs %s", first, again)
+	}
+	t.Cleanup(func() {
+		// 还原盐状态, 后续用例重铸随机盐。
+		processSaltOnce = sync.Once{}
+		processSaltBuf = [16]byte{}
+	})
+	// 模拟重启: 直接改写盐字节, Once 已消耗不再重铸。
+	for i := range processSaltBuf {
+		processSaltBuf[i] = byte(i + 1)
+	}
+	rebooted := SessionIDFromSignal("conv-salt", false)
+	if rebooted == first {
+		t.Fatal("换盐后同一信号应派生新号")
+	}
+	if !pattern.MatchString(rebooted) {
+		t.Fatalf("换盐后派生号形态异常: %q", rebooted)
+	}
+	if again := SessionIDFromSignal("conv-salt", false); again != rebooted {
+		t.Fatalf("换盐后进程内应恒定派生: %s vs %s", rebooted, again)
 	}
 }
