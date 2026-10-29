@@ -134,6 +134,9 @@ const opencodeV2CompletionLimit = 128000
 // opencodeProbeCompletionLimit 是体检模板默认输出上限。
 const opencodeProbeCompletionLimit = 64000
 
+// opencodeV1CompletionLimit 是 v1 档缺省补齐的输出上限(官方实抓)。
+const opencodeV1CompletionLimit = 32000
+
 // isOpencodeV1Lane 判定渠道是否走 opencode 1.x 客户端形态。
 func isOpencodeV1Lane(channel model.Channel) bool {
 	return model.OpencodeLaneOf(channel) == "v1"
@@ -329,9 +332,20 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 			if sysNext, sysChanged := ensureOfficialOpencodeSystem(out, "v1", bodyModelName(out)); sysChanged {
 				out, changed = sysNext, true
 			}
-			// 官方实抓 32000, 现放宽至 128000; 缺字段须在此补齐。
-			if !gjson.GetBytes(out, "max_tokens").Exists() && !gjson.GetBytes(out, "max_completion_tokens").Exists() {
-				if next, err := sjson.SetBytes(out, "max_tokens", opencodeV2CompletionLimit); err == nil {
+			if crlfNext, crlfChanged := normalizeOpencodeSystemCRLF(out); crlfChanged {
+				out, changed = crlfNext, true
+			}
+			// 黑名单: v1 剥离客户端新式顶层参数。
+			for _, key := range []string{"store", "prompt_cache_key", "max_completion_tokens"} {
+				if gjson.GetBytes(out, key).Exists() {
+					if next, err := sjson.DeleteBytes(out, key); err == nil {
+						out, changed = next, true
+					}
+				}
+			}
+			// 缺 max_tokens 时补官方实抓值。
+			if !gjson.GetBytes(out, "max_tokens").Exists() {
+				if next, err := sjson.SetBytes(out, "max_tokens", opencodeV1CompletionLimit); err == nil {
 					out, changed = next, true
 				}
 			}
@@ -458,6 +472,49 @@ func ensureOfficialOpencodeSystem(body []byte, lane, modelName string) ([]byte, 
 		return body, false
 	}
 	return next, true
+}
+
+// normalizeOpencodeSystemCRLF 把首条 system 内容换行符统一为 CRLF。
+// 上游对 LF 形态的 system 拒绝(2026-10-30 super 通道实测), 官方 Windows 客户端恒为 CRLF。
+func normalizeOpencodeSystemCRLF(body []byte) ([]byte, bool) {
+	msg := gjson.GetBytes(body, "messages.0")
+	if !msg.Exists() || msg.Get("role").String() != "system" {
+		return body, false
+	}
+	content := msg.Get("content")
+	if content.Type == gjson.String {
+		fixed := strings.ReplaceAll(content.String(), "\r\n", "\n")
+		fixed = strings.ReplaceAll(fixed, "\n", "\r\n")
+		if fixed == content.String() {
+			return body, false
+		}
+		next, err := sjson.SetBytes(body, "messages.0.content", fixed)
+		if err != nil {
+			return body, false
+		}
+		return next, true
+	}
+	if !content.IsArray() {
+		return body, false
+	}
+	out, changed := body, false
+	for i, part := range content.Array() {
+		if part.Get("type").String() != "text" {
+			continue
+		}
+		text := part.Get("text").String()
+		fixed := strings.ReplaceAll(text, "\r\n", "\n")
+		fixed = strings.ReplaceAll(fixed, "\n", "\r\n")
+		if fixed == text {
+			continue
+		}
+		next, err := sjson.SetBytes(out, fmt.Sprintf("messages.0.content.%d.text", i), fixed)
+		if err != nil {
+			return out, changed
+		}
+		out, changed = next, true
+	}
+	return out, changed
 }
 
 // prefixOfficialContentPart 把官方提示作为首个 text part 前置, 保留客户端其余 parts。

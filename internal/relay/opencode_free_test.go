@@ -172,7 +172,7 @@ func TestShapeOpencodeFreeBodyV1ReadTool(t *testing.T) {
 		if strings.Contains(string(got), `"description":"client"`) {
 			t.Fatalf("客户端 read 定义应被官方定义替换: %s", got)
 		}
-		if gjson.GetBytes(got, "max_tokens").Int() != 128000 || gjson.GetBytes(got, "tool_choice").String() != "auto" {
+		if gjson.GetBytes(got, "max_tokens").Int() != 32000 || gjson.GetBytes(got, "tool_choice").String() != "auto" {
 			t.Fatalf("v1 默认字段缺失: %s", got)
 		}
 	})
@@ -212,6 +212,55 @@ func TestShapeOpencodeFreeBodyV1ChatKeyOrder(t *testing.T) {
 	want = []string{"model", "max_tokens", "messages", "tools", "tool_choice", "stream", "stream_options"}
 	if got := topLevelKeyOrder(t, out); !reflect.DeepEqual(got, want) {
 		t.Fatalf("v1 缺省键序 = %v, 期望 %v", got, want)
+	}
+}
+
+// TestShapeOpencodeFreeBodyV1StripsNewStyleParams 黑名单: v1 剥离新式顶层参数。
+func TestShapeOpencodeFreeBodyV1StripsNewStyleParams(t *testing.T) {
+	raw := `{"model":"x-free","max_completion_tokens":245104,"prompt_cache_key":"session-abc","store":false,"messages":[{"role":"user","content":"hi"}]}`
+	out, changed, _ := shapeOpencodeFreeBody([]byte(raw), true, model.UpstreamProtocolChat)
+	for _, key := range []string{"store", "prompt_cache_key", "max_completion_tokens"} {
+		if gjson.GetBytes(out, key).Exists() {
+			t.Fatalf("%s 应被剥离: %s", key, out)
+		}
+	}
+	if got := gjson.GetBytes(out, "max_tokens").Int(); got != int64(opencodeV1CompletionLimit) {
+		t.Fatalf("max_tokens 应补 %d, 实际 %d", opencodeV1CompletionLimit, got)
+	}
+	if !changed {
+		t.Fatalf("应判定发生改写")
+	}
+
+	kept := `{"model":"x-free","max_tokens":4096,"max_completion_tokens":99,"messages":[]}`
+	out2, _, _ := shapeOpencodeFreeBody([]byte(kept), true, model.UpstreamProtocolChat)
+	if got := gjson.GetBytes(out2, "max_tokens").Int(); got != 4096 {
+		t.Fatalf("客户端自带 max_tokens 应保留, 实际 %d", got)
+	}
+	if gjson.GetBytes(out2, "max_completion_tokens").Exists() {
+		t.Fatalf("max_completion_tokens 应被剥离: %s", out2)
+	}
+}
+
+// TestShapeOpencodeFreeBodyV1SystemCRLF system 换行符归一为 CRLF。
+func TestShapeOpencodeFreeBodyV1SystemCRLF(t *testing.T) {
+	raw := `{"model":"x-free","messages":[{"role":"system","content":"line1\nline2\nline3"},{"role":"user","content":"hi"}]}`
+	out, changed, _ := shapeOpencodeFreeBody([]byte(raw), true, model.UpstreamProtocolChat)
+	s := gjson.GetBytes(out, "messages.0.content").String()
+	if n, crlf := strings.Count(s, "\n"), strings.Count(s, "\r\n"); n != crlf {
+		t.Fatalf("system 应无裸 LF: CRLF=%d LF=%d", crlf, n-crlf)
+	}
+	if !changed {
+		t.Fatalf("归一应判定发生改写")
+	}
+
+	already := `{"model":"x-free","messages":[{"role":"system","content":"a\r\nb"},{"role":"user","content":"hi"}]}`
+	out2, _, _ := shapeOpencodeFreeBody([]byte(already), true, model.UpstreamProtocolChat)
+	s2 := gjson.GetBytes(out2, "messages.0.content").String()
+	if n, crlf := strings.Count(s2, "\n"), strings.Count(s2, "\r\n"); n != crlf {
+		t.Fatalf("已 CRLF 的 system 应保持无裸 LF: CRLF=%d LF=%d", crlf, n-crlf)
+	}
+	if !strings.HasSuffix(s2, "a\r\nb") {
+		t.Fatalf("客户端 system 原文应保留在尾部: %q", s2)
 	}
 }
 
