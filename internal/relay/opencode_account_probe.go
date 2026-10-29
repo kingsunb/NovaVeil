@@ -348,6 +348,7 @@ var (
 )
 
 // loadOcProbeTemplates 解析两档体检模板, 解析失败在首次调用时固化为错误。
+// system 字段归一为 CRLF: 官方 Windows 客户端实抓恒为 CRLF, LF 形态被上游拒绝。
 func loadOcProbeTemplates() (map[string]*ocProbeTemplate, error) {
 	ocProbeTemplatesOnce.Do(func() {
 		ocProbeTemplates = make(map[string]*ocProbeTemplate, 2)
@@ -356,6 +357,8 @@ func loadOcProbeTemplates() (map[string]*ocProbeTemplate, error) {
 			if ocProbeTemplatesErr = json.Unmarshal(raw, &template); ocProbeTemplatesErr != nil {
 				return
 			}
+			template.System = strings.ReplaceAll(template.System, "\r\n", "\n")
+			template.System = strings.ReplaceAll(template.System, "\n", "\r\n")
 			ocProbeTemplates[lane] = &template
 		}
 	})

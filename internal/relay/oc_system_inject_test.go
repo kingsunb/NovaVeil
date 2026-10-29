@@ -95,7 +95,7 @@ func TestShapeOpencodeFreeBodyInjectsOfficialSystem(t *testing.T) {
 		t.Fatal("expected shaping")
 	}
 	content := gjson.GetBytes(out, "messages.0.content").String()
-	if !strings.HasPrefix(content, officialPrefix(t, "v1")) || !strings.HasSuffix(content, "\n\nbe brief") {
+	if !strings.HasPrefix(content, officialPrefix(t, "v1")) || !strings.HasSuffix(content, "\r\n\r\nbe brief") {
 		t.Fatalf("shaped system wrong: %.80s", content)
 	}
 	if keys := bodyTopLevelKeys(out); keys[0] != "model" {
