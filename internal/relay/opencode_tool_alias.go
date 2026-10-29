@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -8,12 +10,20 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// ocToolAliasPrefix 是免费档 v2 出站时客户端自定义工具的统一改名前缀:
-// 上游按官方工具集形态校验, 客户端自带名与定义留在出站正文里会被识别为
-// 非官方会话; 改名后出站工具集 = 官方全集 + clint_ 前缀的客户端工具,
-// 响应侧按别名表还原回客户端声明名(未映射名透传)。
+// ocToolAliasPrefix 免费档出站客户端自定义工具统一前缀。
+// 后接名字摘要, 免费层按客户端词汇拒绝请求。
 // 参考 opencode2api 2026-10-24 fd4c1c6d 的同名方案。
 const ocToolAliasPrefix = "clint_"
+
+// ocToolDigestLen 是出站名携带的名字摘要 hex 位数。
+const ocToolDigestLen = 12
+
+// ocToolWireName 由客户端名派生不透明出站名。
+// 摘要跨请求稳定, 原始名不出站。
+func ocToolWireName(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return ocToolAliasPrefix + hex.EncodeToString(sum[:])[:ocToolDigestLen]
+}
 
 // ocToolAliasMaxTools 是随 tools 数组出站的自定义工具数量上限。
 // 白名单优先占位, 余下名额按客户端顺序补足; 超出部分转文本注入 system。
@@ -66,9 +76,9 @@ var ocToolAliasWhitelist = map[string]bool{
 }
 
 // ensureOfficialToolset 把免费档正文的工具集规范成官方会话形态(lane 取 v1/v2):
-//   - 客户端自定义工具(非官方核心名)改名为 clint_ 前缀的无冲突名, 定义原样保留;
+//   - 客户端自定义工具改为摘要出站名, 定义原样保留;
 //   - 官方全集(体检模板的完整工具定义, 逐字节官方)替换/补齐工具数组前段;
-//   - 自定义工具白名单优先占位, 补足到上限, 其余渲染成文本追加 system;
+//   - 自定义工具白名单优先占位, 补足到上限, 其余摘要改名后渲染进 system;
 //   - tool_choice 与历史 tool_calls 中的客户端名同步改写。
 //
 // 返回改写后正文与别名表(出站名 → 客户端名); 无需改写时原样返回空表。
@@ -105,24 +115,18 @@ func ensureOfficialToolset(body []byte, lane string) ([]byte, map[string]string)
 		rest = append(rest, t)
 	}
 	// 白名单优先, 余下名额按客户端顺序补足到上限。
+	// 溢出工具同样改名登记, 文本块才不泄漏原名。
 	ordered := append(whitelisted, rest...)
 	for i, t := range ordered {
-		if i >= ocToolAliasMaxTools {
-			overflow = append(overflow, t.Raw)
-			continue
-		}
-		name := t.Get("function.name").String()
-		renamed := ocToolAliasPrefix + sanitizeToolAliasName(name)
-		for taken[renamed] {
-			renamed += "_"
-		}
-		taken[renamed] = true
-		next, err := sjson.SetBytes([]byte(t.Raw), "function.name", renamed)
-		if err != nil {
+		item, ok := ocToolRename(t.Raw, taken, aliases)
+		if !ok {
 			return body, nil
 		}
-		aliases[renamed] = name
-		clientItems = append(clientItems, string(next))
+		if i >= ocToolAliasMaxTools {
+			overflow = append(overflow, item)
+			continue
+		}
+		clientItems = append(clientItems, item)
 	}
 	if len(aliases) == 0 && len(overflow) == 0 && tools.Exists() {
 		missing := false
@@ -154,7 +158,25 @@ func ensureOfficialToolset(body []byte, lane string) ([]byte, map[string]string)
 	return out, aliases
 }
 
+// ocToolRename 把单个客户端工具改为摘要出站名并登记别名。
+// 冲突时追加下划线消解。
+func ocToolRename(raw string, taken map[string]bool, aliases map[string]string) (string, bool) {
+	name := gjson.Get(raw, "function.name").String()
+	renamed := ocToolWireName(name)
+	for taken[renamed] {
+		renamed += "_"
+	}
+	taken[renamed] = true
+	next, err := sjson.SetBytes([]byte(raw), "function.name", renamed)
+	if err != nil {
+		return "", false
+	}
+	aliases[renamed] = name
+	return string(next), true
+}
+
 // appendExtraToolsNote 把超出上限的客户端工具渲染成文本追加到 system 消息。
+// 入参工具已摘要改名, 文本块不含客户端原始名。
 // 这些工具不在 tools 数组内, 模型无法发起结构化 tool_calls, 只能作为能力说明保留。
 // 溢出数量不超过 extraToolCompactThreshold 时保留完整 schema(模型能构造正确参数);
 // 超过时转为精简格式(描述截断 + 参数名), 防止 Pi 这类上百 MCP 工具的客户端撑爆 system。
@@ -210,24 +232,6 @@ func appendExtraToolsNote(body []byte, tools []string) []byte {
 		return body
 	}
 	return next
-}
-
-// sanitizeToolAliasName 把客户端工具名规范为出站名的安全字符段。
-func sanitizeToolAliasName(name string) string {
-	var b strings.Builder
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	s := b.String()
-	if s == "" {
-		return "tool"
-	}
-	return s
 }
 
 // rewriteToolReferences 把 tool_choice 与历史 tool_calls 里的客户端工具名换成出站别名。

@@ -350,7 +350,7 @@ func TestOpencodeToolDescriptionPlatform(t *testing.T) {
 }
 
 // TestShapeOpencodeFreeBodyCorrectsClientPatch 锁定 patch 的新语义: patch 不在
-// 官方工具集内, 客户端 patch 改名为 clint_patch 且定义原样保留, 响应侧还原。
+// 官方工具集内, 客户端 patch 改名摘要名出站且定义原样保留, 响应侧还原。
 // 官方 v2 全集为 41 个(12 核心 + 29 chrome-devtools), 客户端工具排在其后。
 func TestShapeOpencodeFreeBodyCorrectsClientPatch(t *testing.T) {
 	def, ok := knownOpencodeTool("patch")
@@ -362,26 +362,27 @@ func TestShapeOpencodeFreeBodyCorrectsClientPatch(t *testing.T) {
 	if !changed {
 		t.Fatal("客户端 patch 应改名出站")
 	}
-	if aliases["clint_patch"] != "patch" {
-		t.Fatalf("别名表应含 clint_patch→patch, 实际 %v", aliases)
+	wire := ocExpectWireName("patch")
+	if aliases[wire] != "patch" {
+		t.Fatalf("别名表应含 %s→patch, 实际 %v", wire, aliases)
 	}
-	if gjson.GetBytes(got, "tools.41.function.name").String() != "clint_patch" {
+	if gjson.GetBytes(got, "tools.41.function.name").String() != wire {
 		t.Fatalf("patch 应排在官方集之后并改名: %s", gjson.GetBytes(got, "tools.#").Raw)
 	}
 	var parameters map[string]any
 	if err := json.Unmarshal([]byte(gjson.GetBytes(got, "tools.41.function.parameters").Raw), &parameters); err != nil {
-		t.Fatalf("解析 clint_patch parameters: %v", err)
+		t.Fatalf("解析 %s parameters: %v", wire, err)
 	}
 	// ensureOpencodeFreeTools 先把已知工具校正为真实定义, 再由改名层改名出站。
 	want, _ := json.Marshal(def.Parameters)
 	gotParams, _ := json.Marshal(parameters)
 	if string(gotParams) != string(want) {
-		t.Fatalf("clint_patch 定义应校正为真实定义, 实际 %#v", parameters)
+		t.Fatalf("patch 定义应校正为真实定义, 实际 %#v", parameters)
 	}
 }
 
 // TestShapeOpencodeFreeBodyKeepsExactPatch 同锁新语义: 客户端 patch 即使定义与
-// 旧 opencode_tools.json 完全一致, 出站仍改名 clint_patch(官方集无 patch 名)。
+// 旧 opencode_tools.json 完全一致, 出站仍改名摘要名(官方集无 patch 名)。
 func TestShapeOpencodeFreeBodyKeepsExactPatch(t *testing.T) {
 	tools := make([]string, 0, len(opencodeFreeCoreTools)+1)
 	for _, core := range opencodeFreeCoreTools {
@@ -393,11 +394,12 @@ func TestShapeOpencodeFreeBodyKeepsExactPatch(t *testing.T) {
 	if !changed {
 		t.Fatalf("patch 应改名出站: %s", got)
 	}
-	if aliases["clint_patch"] != "patch" {
-		t.Fatalf("别名表应含 clint_patch→patch, 实际 %v", aliases)
+	wire := ocExpectWireName("patch")
+	if aliases[wire] != "patch" {
+		t.Fatalf("别名表应含 %s→patch, 实际 %v", wire, aliases)
 	}
-	if !strings.Contains(gjson.GetBytes(got, "tools").Raw, `"name":"clint_patch"`) {
-		t.Fatalf("出站应含 clint_patch: %s", got)
+	if !strings.Contains(gjson.GetBytes(got, "tools").Raw, `"name":"`+wire+`"`) {
+		t.Fatalf("出站应含 %s: %s", wire, got)
 	}
 }
 
