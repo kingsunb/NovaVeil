@@ -366,6 +366,10 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 			if normalized := normalizeOpencodeChatBody(out, v1ChatKeyOrder); normalized != nil {
 				out = normalized
 			}
+			// 溢出文本块在工具集对齐时并入 system, 归一须在其后补一轮。
+			if crlfNext, crlfChanged := normalizeOpencodeSystemCRLF(out); crlfChanged {
+				out, changed = crlfNext, true
+			}
 			return out, changed, aliases
 		}
 		if alias == "" {
