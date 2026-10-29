@@ -87,7 +87,7 @@ var BuiltinFreeChannels = []model.Channel{
 		OpencodeLane:   "v2",
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "cli"},
-			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.4/cli"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.2.1/cli"},
 		},
 		Models: []model.ChannelModel{
 			// 协议来自 models.opencode.ai 的 opencode 提供方：这六个模型没有单独的
@@ -109,7 +109,7 @@ var BuiltinFreeChannels = []model.Channel{
 		// 2026-10-26 实测: /zen 已关闭(官方 1.19.4 客户端指向 /zen/v1 同样 429),
 		// 官方 1.x 默认 baseURL 就是 https://opencode.ai/inference。因此本渠道改为与
 		// OpenCode Free 同一端点, 仅保留 1.x 形态差异(由 OpencodeLane="v1" 承载):
-		//   - User-Agent 用 v1 模型请求格式 opencode/1.19.4 ai-sdk/provider-utils/<ver>
+		//   - User-Agent 用 v1 模型请求格式 opencode/1.19.5 ai-sdk/provider-utils/<ver>
 		//     runtime/bun/1.4.4, <ver> 按出站协议(chat=4.0.23/responses=4.0.40/anthropic=4.0.46);
 		//   - x-opencode-project 用裸 40-hex(由 injectOpencodeCorrelationHeaders 注入);
 		//   - 额外发送 x-opencode-request(msg_ 递增 id), v2 形态不发此头。
@@ -336,7 +336,7 @@ var BuiltinOfficialChannels = []model.Channel{
 		OpencodeCompat: true,
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "desktop"},
-			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.1.4/desktop"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.2.1/desktop"},
 		},
 	},
 	{

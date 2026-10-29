@@ -56,7 +56,7 @@ func TestBunSidecarRoundTripForwardsAndStreams(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer public")
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "opencode/1.19.4 ai-sdk/provider-utils/4.0.23 runtime/bun/1.4.4")
+	req.Header.Set("User-Agent", "opencode/1.19.5 ai-sdk/provider-utils/4.0.23 runtime/bun/1.4.4")
 	req.Header.Set("X-Opencode-Session", "ses_e8c23e83effeqhaDsqfGMpEXYq")
 
 	resp, err := transport.RoundTrip(req)
@@ -88,7 +88,7 @@ func TestBunSidecarRoundTripForwardsAndStreams(t *testing.T) {
 	for name, want := range map[string]string{
 		"Authorization":       "Bearer public",
 		"Content-Type":        "application/json",
-		"User-Agent":          "opencode/1.19.4 ai-sdk/provider-utils/4.0.23 runtime/bun/1.4.4",
+		"User-Agent":          "opencode/1.19.5 ai-sdk/provider-utils/4.0.23 runtime/bun/1.4.4",
 		"x-opencode-session":  "ses_e8c23e83effeqhaDsqfGMpEXYq",
 	} {
 		if headers[name] != want {

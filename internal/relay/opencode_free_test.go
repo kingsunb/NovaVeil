@@ -443,7 +443,7 @@ func TestApplyOpencodeFreeLaneHeadersV2UserAgent(t *testing.T) {
 		Body:    []byte(`{"model":"chat-x"}`),
 	}
 	applyOpencodeFreeLaneHeaders(channel, request, "chat-x")
-	if got := request.Headers.Get("User-Agent"); got != "opencode/latest/2.1.4/cli" {
+	if got := request.Headers.Get("User-Agent"); got != "opencode/latest/2.2.1/cli" {
 		t.Fatalf("User-Agent = %q, 期望 v2 动态值", got)
 	}
 	if got := request.Headers.Get("Accept"); got != "*/*" {
@@ -465,7 +465,7 @@ func TestApplyOpencodeFreeLaneHeadersV1UserAgentVersion(t *testing.T) {
 		Body:    []byte(`{"model":"chat-x"}`),
 	}
 	applyOpencodeFreeLaneHeaders(channel, request, "chat-x")
-	want := "opencode/1.19.4 ai-sdk/provider-utils/4.0.23 runtime/bun/1.4.4"
+	want := "opencode/1.19.5 ai-sdk/provider-utils/4.0.23 runtime/bun/1.4.4"
 	if got := request.Headers.Get("User-Agent"); got != want {
 		t.Fatalf("User-Agent = %q, 期望 %q", got, want)
 	}
