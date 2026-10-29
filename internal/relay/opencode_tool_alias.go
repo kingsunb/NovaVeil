@@ -23,6 +23,11 @@ const ocToolAliasMaxTools = 33
 // extraToolDescLimit 是溢出工具描述的最大字符数, 控制文本块体积。
 const extraToolDescLimit = 80
 
+// extraToolCompactThreshold 是切换精简渲染的溢出数量阈值。
+// 少量溢出保留完整 schema(模型能构造正确 arguments); 大量溢出(Pi 类上百工具)只列
+// 名称与参数名, 避免 system 膨胀上百 KB。
+const extraToolCompactThreshold = 30
+
 // ocToolAliasWhitelist 是优先占位的客户端工具名, 按客户端分组维护。
 // 每个请求只携带单一客户端的工具集, 跨组重名(如 read/Agent)对匹配无影响。
 var ocToolAliasWhitelist = map[string]bool{
@@ -173,8 +178,8 @@ func ensureOfficialToolset(body []byte, lane string) ([]byte, map[string]string)
 
 // appendExtraToolsNote 把超出上限的客户端工具渲染成文本追加到 system 消息。
 // 这些工具不在 tools 数组内, 模型无法发起结构化 tool_calls, 只能作为能力说明保留。
-// 描述截断、参数只列属性名: 部分客户端(Pi)单请求上百个 MCP 工具, 渲染 schema 原文
-// 会让 system 膨胀上百 KB, 反而拖垮请求。
+// 溢出数量不超过 extraToolCompactThreshold 时保留完整 schema(模型能构造正确参数);
+// 超过时转为精简格式(描述截断 + 参数名), 防止 Pi 这类上百 MCP 工具的客户端撑爆 system。
 func appendExtraToolsNote(body []byte, tools []string) []byte {
 	content := gjson.GetBytes(body, "messages.0.content")
 	if content.Type != gjson.String {
@@ -184,8 +189,22 @@ func appendExtraToolsNote(body []byte, tools []string) []byte {
 	b.WriteString("\n\n<additional_tools>\n")
 	b.WriteString("The following tools are not available as function calls. ")
 	b.WriteString(`If one is needed, reply with a JSON object: {"tool": "<name>", "arguments": {...}}`)
+	compact := len(tools) > extraToolCompactThreshold
 	for _, raw := range tools {
 		t := gjson.Parse(raw)
+		if !compact {
+			b.WriteString("\n\n- name: ")
+			b.WriteString(t.Get("function.name").String())
+			if d := t.Get("function.description").String(); d != "" {
+				b.WriteString("\n  description: ")
+				b.WriteString(d)
+			}
+			if p := t.Get("function.parameters"); p.Exists() {
+				b.WriteString("\n  parameters: ")
+				b.WriteString(p.Raw)
+			}
+			continue
+		}
 		b.WriteString("\n- ")
 		b.WriteString(t.Get("function.name").String())
 		if d := t.Get("function.description").String(); d != "" {
