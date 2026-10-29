@@ -1,4 +1,4 @@
-# Agent Note: v2 免费档自定义工具限 33 个，溢出转文本注入
+# Agent Note: 免费档自定义工具限量与溢出文本注入（上限 23）
 
 Status: implemented
 
@@ -25,11 +25,11 @@ dsh 客户端一次对话带 52 个自定义工具，经网关转发到 OpenCode
 
 ## 决定
 
-`internal/relay/opencode_tool_alias.go` 的 `ensureOfficialToolset` 改为「白名单优先 + 名额上限 33」：
+`internal/relay/opencode_tool_alias.go` 的 `ensureOfficialToolset` 改为「白名单优先 + 名额上限」（初值 33，同日复测后收紧为 23，见文末追加节）：
 
 ```go
-const ocToolAliasMaxTools = 33
-var ocToolAliasWhitelist = map[string]bool{ /* 33 个 dsh 工具名 */ }
+const ocToolAliasMaxTools = 23
+var ocToolAliasWhitelist = map[string]bool{ /* 33 个 dsh 工具名, 按优先级占位 */ }
 ```
 
 - 白名单内的自定义工具先占位，若白名单未占满上限，剩余名额按客户端顺序用其他工具补足；
@@ -137,3 +137,34 @@ Pi 是首个工具数破百的客户端（107 个，body 170KB），其中 `mcp_
 74 个工具的文本块从约 100KB 降到约 12KB，system 总量约 182KB，仍在可控范围。
 
 需要注意：溢出的工具不在 `tools` 数组内，模型无法发起结构化 `tool_calls`，只能按 `<additional_tools>` 里的约定输出 JSON 文本，由客户端解析。Pi 的 `mcp_playwright_*` 全部落在此列。
+
+## 追加：上游收紧，名额 33 → 23（2026-10-30 晚）
+
+同日晚些时候经 super 中转（背后即 OpenCode 免费档）复测，上游对工具总量的容忍明显收紧，早前「50–74 全部成功」的结论已失效：
+
+| 工具总数 | 结果 |
+| --- | --- |
+| 41 / 42 / 61 / 62 | 稳定成功（41 重复多次） |
+| 63 | 抖动：一次 503，复测 200 |
+| 64 | 503（两次） |
+| 65 / 66 / 70 / 73 / 74 | 503（73 亦抖动：一次 503，复测 200） |
+
+维持不变的结论：官方全集必须在场、自定义工具定义本身无咎（`clint_acp_cache` 等原样放行）、与 system 内容/换行/顶层参数均无关。
+
+名额随之收紧：`ocToolAliasMaxTools` 33 → 23（总数 40+23=63，取维护者判定的上限值 63）。白名单 33 个名字不变、仍按优先级占位，超出的 10 个走溢出文本。对各客户端的影响：dsh 33 个白名单工具进 23 溢出 10（其实际 46 个自定义大部分溢出）；Codex 24 进 23 溢出 1；LiveAgent 23 恰好占满；Claude Code 17、Pi 核心 9 不受影响。
+
+注意 63 本身处于抖动区（一次过一次拒），若后续观察到 63 也稳定失败，名额应再降至 22（总数 62，本轮全绿的最高值）。
+
+## 追加：白名单精简为核心集（2026-10-30 晚）
+
+名额 23 落地后，白名单按「核心进数组、非核心走溢出」的原则精简，106 条 → 59 条：
+
+| 客户端 | 原白名单 | 保留核心 | 裁掉 |
+| --- | --- | --- | --- |
+| dsh | 33 | 13 | acp/压缩/作业/工作流/目标/present 共 14 个 + 与官方同名的 6 个死条目（read/write/edit/glob/grep/skill，本就不参与改名） |
+| LiveAgent | 23 | 17 | SkillsManager / CronTaskManager / McpManager / MemoryManager / ReadTerminal / Browser |
+| Codex | 28 | 9 | mcp__codex_tui__ 12 个（TUI 线程管理）+ list_mcp_resources 系 3 个 + list_mcp_resource_templates 等 |
+| Claude Code | 26 | 11 | Cron* 3 个 + DesignSync / ReportFindings / ScheduleWakeup |
+| Pi | 17 | 9 | 不变（MCP 不占名额） |
+
+机制不变：白名单优先占位，剩余名额按客户端顺序补足，超出转溢出文本。裁掉的条目不再享有优先级，但仍作为普通自定义参与顺序补位——客户端工具少时仍可能进数组。

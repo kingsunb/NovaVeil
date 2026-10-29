@@ -17,8 +17,8 @@ const ocToolAliasPrefix = "clint_"
 
 // ocToolAliasMaxTools 是随 tools 数组出站的自定义工具数量上限。
 // 白名单优先占位, 余下名额按客户端顺序补足; 超出部分转文本注入 system。
-// 上游对工具总量敏感: 官方全集 40 + 自定义 30 可过, 再多即失败, 预留 3 个余量。
-const ocToolAliasMaxTools = 33
+// 实测总数 62 稳过, 63 抖动, 64 起必拒; 23 对应总数 63。
+const ocToolAliasMaxTools = 23
 
 // extraToolDescLimit 是溢出工具描述的最大字符数, 控制文本块体积。
 const extraToolDescLimit = 80
@@ -30,58 +30,36 @@ const extraToolCompactThreshold = 30
 
 // ocToolAliasWhitelist 是优先占位的客户端工具名, 按客户端分组维护。
 // 每个请求只携带单一客户端的工具集, 跨组重名(如 read/Agent)对匹配无影响。
+// 只保留核心工具; 与官方同名的条目(read/write/edit 等)不列——它们在官方
+// 名字集合内, 本就不会作为自定义工具改名。被裁条目按普通自定义参与顺序
+// 补位或溢出转文本。
 var ocToolAliasWhitelist = map[string]bool{
-	"pwsh": true, "read": true, "write": true, "edit": true,
-	"glob": true, "grep": true, "read_image": true,
-
-	"acp_cache": true, "acp_read_original_image": true, "acp_status": true,
-	"compress": true, "decompress": true, "search_context": true,
-
+	// DSH(核心 13)
+	"pwsh": true, "read_image": true,
 	"subagent": true, "subagent_fork": true, "send_message": true,
 	"list_agents": true, "interrupt_agent": true,
+	"todo_write": true, "web_fetch": true, "web_search": true,
+	"ask_user_question": true, "exit_plan_mode": true, "working_directory": true,
 
-	"job_list": true, "job_output": true, "job_kill": true,
-
-	"workflow": true,
-
-	"create_goal": true, "get_goal": true, "update_goal": true, "todo_write": true,
-
-	"web_fetch": true, "web_search": true,
-
-	"ask_user_question": true, "exit_plan_mode": true, "present": true,
-	"skill": true, "working_directory": true,
-
-	// LiveAgent(首字母大写风格)
+	// LiveAgent(核心 17, 管理器/浏览器类转溢出)
 	"Image": true, "Write": true, "Edit": true, "Delete": true, "List": true,
 	"Glob": true, "Grep": true, "Bash": true, "ProcessWait": true, "ProcessStop": true,
-	"ManagedProcess": true, "SkillsManager": true, "CronTaskManager": true,
-	"McpManager": true, "MemoryManager": true, "ReadTerminal": true, "Browser": true,
-	"SendMessage": true, "TaskCreate": true, "TaskUpdate": true, "TaskList": true,
-	"AskUserQuestion": true, "Agent": true,
+	"ManagedProcess": true, "SendMessage": true, "TaskCreate": true, "TaskUpdate": true,
+	"TaskList": true, "AskUserQuestion": true, "Agent": true,
 
-	// Codex(下划线 + 双下划线命名空间)
+	// Codex(核心 9, TUI 线程管理与 MCP 资源类转溢出)
 	"exec_command": true, "write_stdin": true, "request_user_input": true,
-	"view_image": true, "list_mcp_resources": true,
-	"list_mcp_resource_templates": true, "read_mcp_resource": true,
+	"view_image": true,
 	"multi_agent_v1__close_agent": true, "multi_agent_v1__resume_agent": true,
 	"multi_agent_v1__send_input": true, "multi_agent_v1__spawn_agent": true,
 	"multi_agent_v1__wait_agent": true,
-	"mcp__codex_tui__create_thread": true, "mcp__codex_tui__create_worktree": true,
-	"mcp__codex_tui__fork_thread": true, "mcp__codex_tui__get_worktree_creation_status": true,
-	"mcp__codex_tui__list_archived_threads": true, "mcp__codex_tui__list_threads": true,
-	"mcp__codex_tui__list_worktrees": true, "mcp__codex_tui__read_thread": true,
-	"mcp__codex_tui__send_message_to_thread": true,
-	"mcp__codex_tui__set_thread_archived": true, "mcp__codex_tui__set_thread_title": true,
-	"mcp__codex_tui__wait_threads": true,
 
-	// Claude Code(首字母大写, 带计划/工作树/Cron 系列)
-	"CronCreate": true, "CronDelete": true, "CronList": true, "DesignSync": true,
+	// Claude Code(核心 11, Cron/报表类转溢出)
 	"EnterPlanMode": true, "ExitPlanMode": true, "EnterWorktree": true, "ExitWorktree": true,
-	"ListAgents": true, "NotebookEdit": true, "ReportFindings": true,
-	"ScheduleWakeup": true, "TaskStop": true, "WebFetch": true, "WebSearch": true,
-	"Workflow": true, "Skill": true,
+	"ListAgents": true, "NotebookEdit": true, "TaskStop": true,
+	"WebFetch": true, "WebSearch": true, "Workflow": true, "Skill": true,
 
-	// Pi(核心 17 个, MCP 工具集不占名额)
+	// Pi(核心 9, MCP 工具集不占名额)
 	"bash": true, "find": true, "ls": true, "todo": true,
 	"plan_mode_question": true, "plan_mode_complete": true,
 	"source_check": true, "fetch_content": true, "get_search_content": true,
