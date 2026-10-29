@@ -389,7 +389,7 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 
 	// 非免费模型回退极小请求, 模型级输出上限在免费档透传。
 	channel := model.Channel{Type: model.ChannelProviderOpenAI, BaseURL: "http://opencode.test/inference", Models: []model.ChannelModel{{Name: "paid-model", MaxOutput: 12345}}}
-	raw, err := ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, channel, "paid-model", "", defaultTestMessage, 12345)
+	raw, err := ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, channel, "paid-model", "", strings.Repeat("ab", 20), defaultTestMessage, 12345)
 	if err != nil {
 		t.Fatalf("付费模型构造失败: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 		t.Fatalf("非免费模型应回退极小请求: %d 条消息", got)
 	}
 	freeChannel := model.Channel{Type: model.ChannelProviderOpenAI, BaseURL: "http://opencode.test/inference", IsFree: true, Models: []model.ChannelModel{{Name: "probe-free-model", MaxOutput: 9999}}}
-	raw, err = ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, freeChannel, "probe-free-model", "", defaultTestMessage, 9999)
+	raw, err = ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, freeChannel, "probe-free-model", "", strings.Repeat("ab", 20), defaultTestMessage, 9999)
 	if err != nil {
 		t.Fatalf("免费模型构造失败: %v", err)
 	}
