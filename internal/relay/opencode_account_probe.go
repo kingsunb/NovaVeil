@@ -3,7 +3,7 @@ package relay
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
+	crand "crypto/rand"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
@@ -97,12 +97,14 @@ type AccountProbeReport struct {
 	Summary   AccountProbeSummary  `json:"summary"`
 }
 
-// ocProbePlan 是一次体检的入参解算结果: 渠道、模型、账号列表与展示名。
+// ocProbePlan 是一次体检的入参解算结果: 渠道、模型、账号列表、展示名与项目号。
 type ocProbePlan struct {
 	channel     model.Channel
 	modelName   string
 	displayName string
 	accounts    []string
+	// projectID 本轮体检共用的随机项目号, 等价官方的项目目录。
+	projectID string
 }
 
 // prepareAccountProbe 解算体检入参并把「生成即落账」写入台账, 不发起任何上游请求。
@@ -131,11 +133,16 @@ func prepareAccountProbe(ctx context.Context, channelID int, accounts []string, 
 	if err := op.UpsertOpencodeGeneratedAccounts(channelID, probing); err != nil {
 		return nil, err
 	}
+	projectID, err := newOcProbeProjectID()
+	if err != nil {
+		return nil, err
+	}
 	return &ocProbePlan{
 		channel:     channel,
 		modelName:   modelName,
 		displayName: ocProbeDisplayName(ctx, channel, modelName),
 		accounts:    probing,
+		projectID:   projectID,
 	}, nil
 }
 
@@ -161,7 +168,7 @@ func runAccountProbe(ctx context.Context, plan *ocProbePlan, concurrency int, ti
 			if ctx.Err() != nil {
 				return
 			}
-			result := ocProbeOne(ctx, plan.channel, plan.modelName, plan.displayName, account, timeout)
+			result := ocProbeOne(ctx, plan.channel, plan.modelName, plan.displayName, plan.projectID, account, timeout)
 			results[index] = result
 			if onProgress != nil {
 				onProgress(result)
@@ -291,7 +298,7 @@ func ocProbeAccountList(accounts []string, count int) ([]string, error) {
 // ocProbeRawRequest 构造与官方客户端逐字节同构的体检请求。免费档 chat 模型按实抓模板
 // 发送完整 Agent 形态消息(系统提示+全量工具+流式参数), 免费档整形对其幂等; 其余(非
 // chat 协议或非免费模型)回退面板构造器, 避免在付费档燃烧大系统提示的 token。
-func ocProbeRawRequest(format llm.APIFormat, channel model.Channel, modelName, displayName, question string, maxOutput int) (*httpclient.Request, error) {
+func ocProbeRawRequest(format llm.APIFormat, channel model.Channel, modelName, displayName, projectID, question string, maxOutput int) (*httpclient.Request, error) {
 	if format != llm.APIFormatOpenAIChatCompletion || !isOpencodeFreeModel(channel, modelName) {
 		return newTestRequest(format, modelName, defaultTestMessage, 1)
 	}
@@ -305,8 +312,8 @@ func ocProbeRawRequest(format llm.APIFormat, channel model.Channel, modelName, d
 	}
 	headers := http.Header{"Content-Type": []string{"application/json"}}
 	if lane == "v2" {
-		// 官方 v2 客户端恒发项目目录哈希, 从不发 global。
-		headers.Set(opencodeProjectHeader, ocProbeProjectID)
+		// 官方 v2 客户端恒发项目号, 从不发 global。
+		headers.Set(opencodeProjectHeader, projectID)
 	}
 	// 官方客户端在 /inference 上带协议族段(MITM 实抓: POST /inference/openai/v1/...),
 	// 体检必须同形, 否则探针打的是上游不认的路径。
@@ -365,12 +372,16 @@ func loadOcProbeTemplates() (map[string]*ocProbeTemplate, error) {
 	return ocProbeTemplates, ocProbeTemplatesErr
 }
 
-// ocProbeProjectID 是体检 v2 档的项目号: 稳定 40-hex, 形态对齐官方客户端按项目目录
-// 取哈希(同一网关恒定, 等价于官方客户端在固定项目目录下运行)。
-var ocProbeProjectID = func() string {
-	sum := sha256.Sum256([]byte("novaveil-opencode-account-probe"))
-	return hex.EncodeToString(sum[:20])
-}()
+// newOcProbeProjectID 每次体检铸一个随机项目号(40 位小写 hex, 形态对齐官方按项目
+// 目录取哈希)。免费档把「会话+项目」身份挂在额度记账上, 固定项目号会让探测身份
+// 持续累积记账, 健康账号被误判不可用; 对齐官方目录语义: 一轮体检内共享, 跨轮更换。
+func newOcProbeProjectID() (string, error) {
+	buf := make([]byte, 20)
+	if _, err := crand.Read(buf); err != nil {
+		return "", fmt.Errorf("铸造体检项目号失败: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
 
 // ocProbeClientBody 按官方客户端实抓形态装配体检正文: 键序、参数、工具与抓包一致,
 // 仅模型、展示名、日期与用户消息按当次探测填充。maxOutput 非正时回退 64000。
@@ -512,12 +523,12 @@ func ocProbeChannelMaxOutput(channel model.Channel, modelName string) int {
 // ocProbeOne 钉住单个账号探测一次并归类结论, 结论同步写回台账。
 // 每次调用经 probeOnceWithAccount 铸全新的 opencode 会话号: 账号间、同账号复测间
 // 的 x-opencode-session(及镜像头与 v1 档 msg_ id)互不相同, 避免上游按会话聚合识别。
-func ocProbeOne(ctx context.Context, channel model.Channel, modelName, displayName string, account string, timeout time.Duration) AccountProbeResult {
+func ocProbeOne(ctx context.Context, channel model.Channel, modelName, displayName, projectID, account string, timeout time.Duration) AccountProbeResult {
 	result := AccountProbeResult{Account: account, Outcome: ocProbeOutcomeError}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	probe, err := probeOnceWithAccount(probeCtx, channel, modelName, account, func(format llm.APIFormat) (*httpclient.Request, error) {
-		return ocProbeRawRequest(format, channel, modelName, displayName, ocProbeRandomQuestion(), ocProbeChannelMaxOutput(channel, modelName))
+		return ocProbeRawRequest(format, channel, modelName, displayName, projectID, ocProbeRandomQuestion(), ocProbeChannelMaxOutput(channel, modelName))
 	}, false)
 	switch {
 	case err != nil && probe == nil:

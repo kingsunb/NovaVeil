@@ -51,7 +51,9 @@ func TestStartOpencodeAccountProbeRunsInBackground(t *testing.T) {
 	original := ocProbeJobRunner
 	t.Cleanup(func() { ocProbeJobRunner = original })
 	release := make(chan struct{})
+	var plannedProject string
 	ocProbeJobRunner = func(ctx context.Context, plan *ocProbePlan, concurrency int, perAccount time.Duration, onProgress func(AccountProbeResult)) *AccountProbeReport {
+		plannedProject = plan.projectID
 		<-release
 		result := AccountProbeResult{Account: plan.accounts[0], Outcome: ocProbeOutcomeHealthy, Status: 200}
 		onProgress(result)
@@ -89,6 +91,9 @@ func TestStartOpencodeAccountProbeRunsInBackground(t *testing.T) {
 			}
 			if status.Healthy != 1 || status.Probed != 1 || len(status.Results) != 1 {
 				t.Fatalf("作业结果异常: %+v", status)
+			}
+			if !ocProbeProjectPattern.MatchString(plannedProject) {
+				t.Fatalf("体检计划项目号形态异常: %q", plannedProject)
 			}
 			return
 		}

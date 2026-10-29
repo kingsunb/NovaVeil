@@ -23,6 +23,9 @@ func probeChatOKBody() []byte {
 	return []byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":20,"completion_tokens":1,"total_tokens":21}}`)
 }
 
+// ocProbeProjectPattern 是体检项目号的形态: 40 位小写 hex。
+var ocProbeProjectPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
 // TestProbeOpencodeAccountsClassifiesAndSeedsPool 验证批量体检的三类结论与池回填:
 // 健康→verified 入池优先复用; 403→24h 冷却; 其余非 2xx 归为失败不冷却。
 
@@ -356,6 +359,8 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 		{"v1", "http://opencode.test/inference"},
 		{"v2", "http://opencode.test/inference"},
 	}
+	// 项目号由体检计划铸好后传入, 固定合法值断言原样透传。
+	projectID := strings.Repeat("ab", 20)
 	for _, c := range cases {
 		channel := model.Channel{
 			Type:           model.ChannelProviderOpenAI,
@@ -365,7 +370,7 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 			OpencodeLane:   c.lane,
 			Models:         []model.ChannelModel{{Name: "probe-free-model"}},
 		}
-		raw, err := ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, channel, "probe-free-model", "Probe Free Model", defaultTestMessage, 0)
+		raw, err := ocProbeRawRequest(llm.APIFormatOpenAIChatCompletion, channel, "probe-free-model", "Probe Free Model", projectID, defaultTestMessage, 0)
 		if err != nil {
 			t.Fatalf("%s 档构造失败: %v", c.lane, err)
 		}
@@ -373,8 +378,8 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 			t.Fatalf("%s 档路径异常: %q", c.lane, raw.Path)
 		}
 		if c.lane == "v2" {
-			if got := raw.Headers.Get(opencodeProjectHeader); !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(got) {
-				t.Fatalf("v2 档项目号形态异常: %q", got)
+			if got := raw.Headers.Get(opencodeProjectHeader); got != projectID {
+				t.Fatalf("v2 档项目号应原样透传: %q", got)
 			}
 		} else if raw.Headers.Get(opencodeProjectHeader) != "" {
 			t.Fatal("v1 档不应携带项目号头")
@@ -401,6 +406,24 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 	}
 }
 
+// TestNewOcProbeProjectID 验证项目号铸造: 40 位小写 hex 且跨体检轮次不重复。
+func TestNewOcProbeProjectID(t *testing.T) {
+	seen := make(map[string]bool, 16)
+	for i := 0; i < 16; i++ {
+		id, err := newOcProbeProjectID()
+		if err != nil {
+			t.Fatalf("铸造项目号失败: %v", err)
+		}
+		if !ocProbeProjectPattern.MatchString(id) {
+			t.Fatalf("项目号形态异常: %q", id)
+		}
+		if seen[id] {
+			t.Fatalf("项目号不应重复: %q", id)
+		}
+		seen[id] = true
+	}
+}
+
 // TestOcProbeClientBodyShapingIdempotent 验证免费档整形对实抓模板幂等:
 // 出站正文不会被整形层二次改写, 与上游逐字节门禁的口径锁定。
 func TestOcProbeClientBodyShapingIdempotent(t *testing.T) {
@@ -421,7 +444,7 @@ func TestOcProbeClientBodyShapingIdempotent(t *testing.T) {
 }
 
 // TestProbeOpencodeAccountsSendsClientFormAndUniqueSessions 端到端验证 v2 免费档体检:
-// 出站正文为官方客户端完整形态, 且每个账号的会话号互不相同。
+// 出站正文为官方客户端完整形态, 会话号逐请求互异, 项目号轮内稳定、跨轮更换。
 func TestProbeOpencodeAccountsSendsClientFormAndUniqueSessions(t *testing.T) {
 	ocProbePinQuestion(t)
 	setupFailoverTest(t)
@@ -458,6 +481,7 @@ func TestProbeOpencodeAccountsSendsClientFormAndUniqueSessions(t *testing.T) {
 	if len(requests) != 3 {
 		t.Fatalf("应有 3 条出站请求: %d", len(requests))
 	}
+	runProject := requests[0].Header.Get("x-opencode-project")
 	sessions := make(map[string]bool, 3)
 	for _, request := range requests {
 		if request.Method != http.MethodPost || request.Path != "/inference/openai/v1/chat/completions" {
@@ -482,13 +506,29 @@ func TestProbeOpencodeAccountsSendsClientFormAndUniqueSessions(t *testing.T) {
 		if request.Header.Get("x-opencode-client") != "cli" {
 			t.Fatalf("x-opencode-client 异常: %q", request.Header.Get("x-opencode-client"))
 		}
-		if request.Header.Get("x-opencode-project") != ocProbeProjectID {
-			t.Fatalf("项目号异常: %q", request.Header.Get("x-opencode-project"))
+		project := request.Header.Get("x-opencode-project")
+		if !ocProbeProjectPattern.MatchString(project) {
+			t.Fatalf("项目号形态异常: %q", project)
+		}
+		if project != runProject {
+			t.Fatalf("同轮体检项目号应稳定: %q vs %q", project, runProject)
 		}
 		if request.Header.Get("traceparent") == "" || request.Header.Get("b3") == "" {
 			t.Fatal("v2 免费档应携带追踪头")
 		}
 		assertClientFormBody(t, request.Body, "v2", modelName, "Probe Free Model")
+	}
+
+	// 复测同账号应铸新项目号: 免费档按项目身份记账, 固定号会累积误判。
+	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, []string{"user_a"}, 0, 1, 0, modelName); err != nil {
+		t.Fatalf("第二轮体检失败: %v", err)
+	}
+	requests = probe.proxiedRequests()
+	if len(requests) != 4 {
+		t.Fatalf("第二轮应新增 1 条出站请求: %d", len(requests))
+	}
+	if next := requests[3].Header.Get("x-opencode-project"); next == runProject {
+		t.Fatalf("跨体检项目号应更换: %q", next)
 	}
 }
 
