@@ -1560,7 +1560,7 @@ function GroupEditor({
               />
               <Toggle
                 label="拒绝标题类请求"
-                description="识别单轮、无工具、含标题提示词的轻请求，直接返回 400 且不消耗上游额度；客户端标题生成会因此失效"
+                description="识别无工具、含标题提示词的轻请求，直接返回 400 且不消耗上游额度；系统提示里声明生成标题时不受消息条数限制，客户端标题生成会因此失效"
                 checked={relayConfig.reject_title_requests}
                 onChange={(v) => updateRelay("reject_title_requests", v)}
               />

@@ -17,11 +17,21 @@ var titleRequestMarkers = []string{
 	"title generator",
 }
 
+// 指令型标记, 系统角色命中即判定
+var titleInstructionMarkers = []string{
+	"you are a title generator",
+	"output only a thread title",
+	"generate a title for this conversation",
+	"generate the session title",
+	"create a concise title",
+}
+
 // errTitleRequestRejected 分组策略拒绝标题类请求的终态。
 var errTitleRequestRejected = errors.New("title generation request rejected by group policy")
 
 // isTitleGenerationRequest 判定是否为客户端生成的标题类轻请求。
-// 三个条件同时成立: 消息不超过两条、未声明工具、提示词含标题标记。
+// 前置条件: messages 非空且客户端未声明工具。
+// 系统角色的指令型标记直接成立, 泛用标记需消息不超过两条。
 // 免费档整形会注入官方系统提示与工具, 故必须用客户端原始正文判定。
 func isTitleGenerationRequest(body []byte) bool {
 	messages := gjson.GetBytes(body, "messages")
@@ -29,18 +39,29 @@ func isTitleGenerationRequest(body []byte) bool {
 		return false
 	}
 	items := messages.Array()
-	if len(items) == 0 || len(items) > titleRequestMaxMessages {
+	if len(items) == 0 {
 		return false
 	}
 	if tools := gjson.GetBytes(body, "tools"); tools.IsArray() && len(tools.Array()) > 0 {
 		return false
 	}
+	light := len(items) <= titleRequestMaxMessages
 	for _, msg := range items {
-		if containsTitleMarker(messageText(msg)) {
+		text := messageText(msg)
+		// 系统提示声明生成标题, 不看条数
+		if isInstructionRole(msg.Get("role").String()) && containsTitleMarker(text, titleInstructionMarkers) {
+			return true
+		}
+		if light && containsTitleMarker(text, titleRequestMarkers) {
 			return true
 		}
 	}
 	return false
+}
+
+// isInstructionRole 报告角色是否承载系统级指令。
+func isInstructionRole(role string) bool {
+	return role == "system" || role == "developer"
 }
 
 // messageText 拼接单条消息文本, 兼容字符串与 parts 两种正文。
@@ -62,13 +83,13 @@ func messageText(msg gjson.Result) string {
 	return builder.String()
 }
 
-// containsTitleMarker 报告文本是否含任一标题标记。
-func containsTitleMarker(text string) bool {
+// containsTitleMarker 报告文本是否含给定标记之一。
+func containsTitleMarker(text string, markers []string) bool {
 	if text == "" {
 		return false
 	}
 	lower := strings.ToLower(text)
-	for _, marker := range titleRequestMarkers {
+	for _, marker := range markers {
 		if strings.Contains(lower, marker) {
 			return true
 		}

@@ -12,13 +12,12 @@ dsh 一类客户端每次会话会额外发一次标题生成请求：单轮、`
 
 ### 识别（`internal/relay/title_request.go`）
 
-三个条件**同时**成立才算标题类请求：
+两个前置条件：`messages` 是数组且非空、客户端未声明 `tools`（缺字段或空数组）。满足后按标记分两档判定：
 
-- `messages` 是数组且条数 ≤ 2
-- 客户端未声明 `tools`（缺字段或空数组）
-- 任一消息的文本命中标题标记（`session title`、`concise title`、`title generator`，小写匹配）
+- **指令型标记**（`you are a title generator`、`output only a thread title`、`generate a title for this conversation`、`generate the session title`、`create a concise title`）出现在 `system` 或 `developer` 消息里即判定，**不看消息条数**。有的客户端把整段会话作为额外的 user 消息塞进标题请求（system 指令 + 一句诱导语 + 会话正文共三条），条数不是可靠判据。
+- **泛用标记**（`session title`、`concise title`、`title generator`）出现在任意消息、且 `messages` 条数 ≤ 2 时判定。这一档兜住把标题措辞写在 user 消息里的客户端，条数限制避免长篇对话里偶然出现的「标题」措辞被误判。
 
-消息文本兼容 `content` 为字符串与 content parts 数组两种形态。三条叠加后误伤面很小：真实的编码请求必然带工具且多轮；单轮无工具的闲聊又不含标题标记。
+指令型标记限定系统角色，避免 user 真让模型「写个标题」这类内容生成请求被拦。消息文本兼容 `content` 为字符串与 content parts 数组两种形态。
 
 ### 开关与判定位置
 
@@ -45,12 +44,13 @@ dsh 一类客户端每次会话会额外发一次标题生成请求：单轮、`
 - **客户端 `small_model`**：OpenCode 原生支持把标题生成指到另一个模型，零改动；但 dsh 没有等价配置，只能解决一半，因此作为并行建议而非本仓方案。
 - **用自定义渠道的固定回复顶替标题请求**：零上游成本，但标题恒为同一句假数据，且属于伪造成功响应。
 - **用 `max_completion_tokens` 小值作为判据**：dsh 标题请求传 4096、主请求传 256000，但该字段随客户端版本变化，不适合当契约。
+- **把条数上限从 2 提到 3**：改动最小，但判据仍是「数消息」——客户端换个模板把会话拆成几条就漏，不如直接认「系统提示声明了自己在干什么」。
 
 ## 后果
 
 - **收益**：开启该开关的分组上，标题请求零上游消耗、零额度占用。
 - **代价**：该分组的客户端标题生成拿 400，功能失效；若客户端会重试，日志里会出现多条 `client_rejected`，据此判断是否需要去重。
-- **误伤边界**：单轮、无工具、正文含标题标记的真实提问会被拒；带工具的编码请求不受影响。
+- **误伤边界**：无工具、正文含标题标记的真实提问会被拒；system 提示里写了「生成标题」字样的真实会话同样会被拒；带工具的编码请求不受影响。
 - **默认关闭**：存量分组行为不变，无需数据迁移。
 
 ## 验证
@@ -59,7 +59,7 @@ dsh 一类客户端每次会话会额外发一次标题生成请求：单轮、`
 go test ./internal/relay/ -run 'TestIsTitleGenerationRequest|TestTitleRequest' -v
 ```
 
-- `TestIsTitleGenerationRequest`：三个判定条件的边界（parts 正文、空 tools、超两条消息、声明工具、无 messages 字段）。
+- `TestIsTitleGenerationRequest`：判定边界（系统指令跨条数命中、user 角色措辞不越界、parts 正文、空 tools、超两条消息、声明工具、无 messages 字段）。
 - `TestTitleRequestRejectedByGroupPolicy`：开关打开时 400 + 专用提示，假上游调用次数必须为 0。
 - `TestTitleRequestForwardedWhenGroupPolicyOff`：开关关闭时同一请求照常转发。
 - `TestTitleRequestWithToolsForwarded`：开关打开但声明了工具时按普通请求转发。

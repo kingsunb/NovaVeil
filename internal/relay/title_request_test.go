@@ -12,7 +12,7 @@ import (
 	"github.com/looplj/axonhub/llm"
 )
 
-// 标题类请求识别的边界: 三条判定条件任一不成立都不拦截。
+// 标题类请求识别的边界: 前置条件不成立不拦截, 指令型标记不看条数。
 func TestIsTitleGenerationRequest(t *testing.T) {
 	cases := []struct {
 		name string
@@ -23,6 +23,16 @@ func TestIsTitleGenerationRequest(t *testing.T) {
 			name: "dsh 标题请求命中",
 			body: `{"messages":[{"role":"developer","content":"Create a concise title for an AI coding-assistant session."},{"role":"user","content":"Generate the session title: [{\"seq\":8}]"}]}`,
 			want: true,
+		},
+		{
+			name: "系统标题指令超出两条仍命中",
+			body: `{"messages":[{"role":"system","content":"You are a title generator. You output ONLY a thread title. Nothing else."},{"role":"user","content":"Generate a title for this conversation:\n"},{"role":"user","content":[{"type":"text","text":"<EXTREMELY_IMPORTANT>You have superpowers.</EXTREMELY_IMPORTANT>"},{"type":"text","text":"你能看看这个文件夹吗"}]}]}`,
+			want: true,
+		},
+		{
+			name: "用户角色的标题措辞不越界",
+			body: `{"messages":[{"role":"user","content":"create a concise title for my essay"},{"role":"assistant","content":"好的"},{"role":"user","content":"再短一点"}]}`,
+			want: false,
 		},
 		{
 			name: "content parts 正文命中",
