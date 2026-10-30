@@ -20,7 +20,7 @@ WARP 出口被改成一组编号稳定的槽位：`slot N` 在进程生命周期
 - `GET /slots`（控制端口 1081）返回 `size`、`updated_at` 和 `slots`。每个槽位含 `slot`、`account`、`egress`、`prefix`、`state`、`in_flight`、`cooling_until`、`generation`。`state` 为 `active`（可派发且空闲）、`busy`（有在途）、`cooling`（该出口 /64 冷却中）、`unknown`（暂时没有绑定出口）。出口替换时槽位号不变，`generation` 加一。
 - HTTP 代理（8080）从 `Proxy-Authorization: Basic` 的用户名读取槽位，密码忽略；SOCKS5（1080）走 RFC 1929（即：SOCKS5 用户名密码认证）。无 `warp-` 前缀的用户名继续走原来的轮询，保证旧配置可用；`warp-` 前缀但槽位号非法的用户名按未知槽位返回 407。
 - 未知槽位返回 `407` 并带 `Proxy-Authenticate: Basic realm="warp-slots"`；`busy`、`cooling`、`unknown` 返回 `503` 并带 `Retry-After`（至少 1 秒）。不允许静默换到别的出口，否则归因再次失效。每个槽位同时只接一个在途连接，由 WARP 侧兜底。
-- 403 不触发轮换；只有 429 或网络失败才调用 `/penalize?egress=`。轮换先复用旧注册、换外层源地址做 soft restart（零注册）；新出口的 `/64`（IPv4 为 `/32`）与旧出口相同才升级 full re-key。全池轮换由 `rotateMu` 串行，相邻两次至少间隔 4 秒；单出口 key 每小时最多 2 次，全池 full re-key 每小时最多 60 次；连续失败按 `300 * 2^n` 秒退避，封顶 3600 秒。预算耗尽或退避期间恢复旧出口，不无限注册。
+- 403 不触发轮换；只有 429 或网络失败才调用 `/penalize?egress=`。轮换先复用旧注册、换外层源地址做 soft restart（零注册）；新出口的 `/64`（IPv4 为 `/32`）与旧出口相同才升级 full re-key。soft restart 落点若仍在被封禁的段上，轮换自动改走 full re-key 换段重建。全池轮换由 `rotateMu` 串行，相邻两次至少间隔 4 秒；单出口 key 每小时最多 60 次，全池 full re-key 每小时最多 60 次；连续失败按 `15 * 2^n` 秒退避，封顶 300 秒。预算耗尽或退避期间恢复旧出口，不无限注册。段冷却与轮换死锁的修复见 [WARP 出口段冷却改短与轮换死锁修复](../bug-fix/2026-10-30-warp-egress-cooldown-and-rotation-deadlock.md)。
 - 槽位出口不参与 `Check` / `scaleDown` 的主动巡检，避免巡检把正在服务的槽位出口淘汰；槽位出口的健康由真实请求失败驱动。`Close` 会释放槽位引用、清空槽位并 retire 活跃出口。
 
 ### NovaVeil 侧：选号、租约与 429 判定
@@ -87,8 +87,8 @@ Cloudflare 从有限的 `/64` 组合中分配 WARP 出口前缀；重新注册�
 
 - **收益**：每个在途请求固定到一个出口，429 能归因到槽位；单个槽位 429 不再连坐其他出口；403 与 429 分开处理；resin 账号体系零 schema、零表行变更；辅助路径不再生成未知槽位或写库。
 - **容量**：每槽并发 1，默认 `-pool-size=4`，网关只有 4 个 WARP 并发；全忙时返回 503 + `Retry-After`，需要按上游免费档配额与请求延迟计算容量。
-- **状态不持久**：NovaVeil 的 suspect/全冷状态、WARP 的段冷却都在内存；进程或 WARP 重启后清零，不能把 WARP 侧冷却当成跨重启的持久保证。WARP 重启后槽位号可能保持不变但出口已换，NovaVeil 内存里的旧 suspect 会短暂压制新出口。
-- **轮换权衡**：预算耗尽或退避期间 `restoreExit` 会清 penalty/cooling，把 429 出口放回服务，可能再次 429；这是「不无限注册」的代价。soft restart 在没有 `sourcePrefix` 时复用同源，必然同 `/64`，会升级 full re-key，注册量增加。
+- **状态不持久**：NovaVeil 的 suspect/全冷状态、WARP 的段冷却都在内存；进程或 WARP 重启后清零，不能把 WARP 侧冷却当成跨重启的持久保证。WARP 重启后槽位号可能保持不变但出口已换，NovaVeil 内存里的旧 suspect 会短暂压制新出口。段冷却默认 60 秒。
+- **轮换权衡**：预算耗尽或退避期间 `restoreExit` 会清 penalty/cooling，把 429 出口放回服务，可能再次 429。soft restart 在没有 `sourcePrefix` 时复用同源，必然同 `/64`，会升级 full re-key，注册量增加；退避与单 key 预算放宽后注册量进一步上升。
 - **槽位出口不巡检**：`Check` / `scaleDown` 跳过 slotBound 出口，槽位出口只靠真实请求失败驱动，坏出口可能多接一次请求才被替换。
 - **HTTP 代理文本判定**：标准库 CONNECT 非 200 只保留原因短语，503 的 `Service Unavailable` 需要单独识别；`502 Bad Gateway` 仍按网络失败惩罚。Bun sidecar 的 `Proxy-Authorization` 与分池行为未在本轮实抓验证，启用 sidecar 时需以实际请求确认。
 - **阈值边界**：并发低于 3 时 3 个不同 `/64` 的阈值不会成立，单槽 suspect 60 秒是退路；这会把「整体限流」退化为「单槽暂时避开」，不会死等。

@@ -452,15 +452,15 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 跳过不是失败, 整链占用须归还。
 				releaseRefChainHops(hops)
 				clearSessionStickyByItem(group.ID, item.ID)
-			if len(contextSkipped) >= routableCandidateCount(hops[0].group) {
-				// 报出请求规模与最大手动窗口, 调用方可据此截断请求或换模型。
-				// 与预扫拒绝同用基准口径, 不随最后尝试成员的实测密度漂移。
-				detail := fmt.Errorf(
-					"%s（请求约 %d token，手动窗口最大值 %d token）",
-					errContextWindowTooSmall.Error(),
-					estimateRequestTokens(raw.Body),
-					maxCandidateWindow,
-				)
+				if len(contextSkipped) >= routableCandidateCount(hops[0].group) {
+					// 报出请求规模与最大手动窗口, 调用方可据此截断请求或换模型。
+					// 与预扫拒绝同用基准口径, 不随最后尝试成员的实测密度漂移。
+					detail := fmt.Errorf(
+						"%s（请求约 %d token，手动窗口最大值 %d token）",
+						errContextWindowTooSmall.Error(),
+						estimateRequestTokens(raw.Body),
+						maxCandidateWindow,
+					)
 					request.markFailed(detail, "", nil)
 					recordErrorLog(request)
 					rejectRequest(c, inbound, detail)
@@ -558,6 +558,14 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				if pickErr != nil {
 					lifecycle.Stop()
 					releaseRefChainHops(hops)
+					// 槽位不足是本地瞬态, 按分组节奏重选.
+					var warpBusy *warpSlotsBusyError
+					if errors.As(pickErr, &warpBusy) {
+						if !request.wait(ctx, routeRecheckIntervalSeconds(group.RelayConfig)) {
+							return
+						}
+						continue
+					}
 					request.markFailed(pickErr, "", nil)
 					recordErrorLog(request)
 					rejectRequest(c, inbound, pickErr)
