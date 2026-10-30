@@ -3,6 +3,8 @@ package helper
 import (
 	"net/url"
 	"testing"
+
+	"github.com/kingsunb/NovaVeil/internal/model"
 )
 
 // TestResolveProxyTemplateReplacesAccountInUsername 验证基本占位符替换:
@@ -105,6 +107,35 @@ func TestResolveProxyTemplateTrimsWhitespace(t *testing.T) {
 	}
 	if got := resolved.User.Username(); got != "u.alice" {
 		t.Fatalf("空白容忍下替换仍应生效, 实际 %q", got)
+	}
+}
+
+// TestResolveChannelProxyTemplateWarpBypassesAlias WARP 渠道应清空代理模板。
+func TestResolveChannelProxyTemplateWarpBypassesAlias(t *testing.T) {
+	template := "socks5h://{account}:pass@" + model.WarpProxyMarker + ":1080"
+	channel := model.Channel{ID: 7, ChannelProxy: &template}
+	if err := ResolveChannelProxyTemplate(&channel); err != nil {
+		t.Fatalf("WARP 渠道解析失败: %v", err)
+	}
+	if channel.ChannelProxy != nil {
+		t.Fatalf("WARP 渠道应清空代理模板, 实际 %q", *channel.ChannelProxy)
+	}
+}
+
+// TestResolveChannelProxyTemplateResinKeepsAlias resin 渠道仍按 Key 别名解析。
+func TestResolveChannelProxyTemplateResinKeepsAlias(t *testing.T) {
+	template := "socks5h://grok.{account}:sk-1@resin:2260"
+	channel := model.Channel{
+		ID:           7,
+		Keys:         []model.ChannelKey{{ID: "key-1", Key: "sk-1"}},
+		ChannelProxy: &template,
+	}
+	if err := ResolveChannelProxyTemplate(&channel); err != nil {
+		t.Fatalf("resin 渠道解析失败: %v", err)
+	}
+	want := "socks5h://grok." + AccountAliasFor(7, "key-1") + ":sk-1@resin:2260"
+	if channel.ChannelProxy == nil || *channel.ChannelProxy != want {
+		t.Fatalf("resin 渠道应派生 Key 别名, want %q got %v", want, channel.ChannelProxy)
 	}
 }
 

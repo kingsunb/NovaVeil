@@ -483,9 +483,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 写入该 Key 的明文并使用其 Account/ID 解析代理模板; Remark 仅展示不参与。
 				effective, dispatchErr = effectiveChannelForKey(channel, selectedKey)
 			}
-			// OpenCode 免费档按出口 IP 轮换代理账号。
+			// OpenCode 免费档按出口 IP 轮换代理账号; WARP 走槽位, 不生成树脂别名。
 			proxyAccount := ""
-			if dispatchErr == nil && proxyNeedsOpencodeAccount(channel) {
+			var warpLease *warpSlotLease
+			if dispatchErr == nil && !isWarpProxy(channel) && proxyNeedsOpencodeAccount(channel) {
 				candidate := pickOpencodeProxyAccount(ctx, channel.ID)
 				if resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate); resolveErr == nil {
 					addr := resolved.String()
@@ -552,6 +553,38 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 带原因的取消用于区分成员级响应超时与人工中止: 人工中止原因为 context.Canceled, 超时为 errMemberResponseTimeout。
 			roundCtx, cancelRound := context.WithCancelCause(ctx)
 			lifecycle = newRoundLifecycle(cancelRound)
+			if isWarpProxy(channel) && channel.ChannelProxy != nil && model.HasAccountPlaceholder(*channel.ChannelProxy) {
+				lease, pickErr := pickWarpSlot(roundCtx, channel)
+				if pickErr != nil {
+					lifecycle.Stop()
+					releaseRefChainHops(hops)
+					request.markFailed(pickErr, "", nil)
+					recordErrorLog(request)
+					rejectRequest(c, inbound, pickErr)
+					return
+				}
+				warpLease = lease
+				proxyAccount = lease.Account()
+				resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, proxyAccount)
+				if resolveErr != nil {
+					lifecycle.Stop()
+					releaseRefChainHops(hops)
+					request.markFailed(errWarpProxyInvalid, "", nil)
+					recordErrorLog(request)
+					rejectRequest(c, inbound, errWarpProxyInvalid)
+					return
+				}
+				if resolved.User == nil || resolved.User.Username() != proxyAccount || model.HasAccountPlaceholder(resolved.String()) {
+					lifecycle.Stop()
+					releaseRefChainHops(hops)
+					request.markFailed(errWarpProxyTemplateInvalid, "", nil)
+					recordErrorLog(request)
+					rejectRequest(c, inbound, errWarpProxyTemplateInvalid)
+					return
+				}
+				addr := resolved.String()
+				effective.ChannelProxy = &addr
+			}
 			modelLimit, _ := lookupModelLimit(channel.ModelLimits, channelModel.Name)
 			request.startRound(lifecycle.Stop, RoundTarget{
 				MemberID:      item.ID,
@@ -585,7 +618,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				requestRandomValueResolved = true
 			}
 			var result *upstreamResponse
+			upstreamAttempted := false
 			if err == nil {
+				upstreamAttempted = true
 				// 客户端与渠道协议一致时直接透传, 其余组合通过 pipeline 转换。
 				if passthrough {
 					result, err = sendPassthrough(roundCtx, format, raw, effective, outbound, metadataStreaming, requestRandomValue, requestOpencodeSession)
@@ -606,9 +641,37 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				err = memberTimeoutError(metadataStreaming, timeoutSeconds)
 			}
 			// 回填账号结果: 成功或 403/429 冷却; 真实转发的成功/失败按来源分开计数,
-			// 客户端取消/管理端中止不算失败。
+			// 客户端取消/管理端中止不算失败。WARP 槽位状态纯内存, 不写账号表。
 			proxyAccountRejection := false
-			if proxyAccount != "" {
+			warpRejection := false
+			warpProxyRejection := false
+			if warpLease != nil {
+				if err == nil {
+					warpLease.MarkSuccess()
+				} else if !upstreamAttempted {
+					// 本地出站构造失败, 不是出口网络问题。
+				} else if code, ok := UpstreamStatusCode(err); ok {
+					switch code {
+					case http.StatusForbidden:
+						warpRejection = true
+					case http.StatusTooManyRequests:
+						warpRejection = true
+						if warpLease.MarkRateLimited() {
+							warpLease.RotateAll()
+						}
+					default:
+						if isWarpProxyRejection(err) {
+							warpProxyRejection = true
+							warpLease.MarkProxyUnavailable()
+						}
+					}
+				} else if isWarpProxyRejection(err) || isWarpSlotUnavailable(err) {
+					warpProxyRejection = true
+					warpLease.MarkProxyUnavailable()
+				} else if !errors.Is(err, context.Canceled) {
+					warpLease.MarkNetworkFailure(err.Error())
+				}
+			} else if proxyAccount != "" {
 				if err == nil {
 					markOpencodeProxySuccess(channel.ID, proxyAccount, false)
 				} else {
@@ -622,14 +685,16 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 						markOpencodeProxyRealFailure(channel.ID, proxyAccount)
 					}
 				}
-			}
-
-			// WARP SOCKS5 反应式淘汰: 代理指向 WARP 容器时, 403/429 通知其换 IP。
-			warpRejection := false
-			if err != nil && proxyAccount == "" && isWarpSocksProxy(channel) {
-				if code, ok := UpstreamStatusCode(err); ok && (code == http.StatusForbidden || code == http.StatusTooManyRequests) {
-					warpRejection = true
-					warpPenalizeExit(channel)
+			} else if err != nil && isWarpProxy(channel) {
+				// 未槽位化的旧 WARP 渠道: 429 只淘汰最近一个出口, 403 不轮换。
+				if code, ok := UpstreamStatusCode(err); ok {
+					switch code {
+					case http.StatusForbidden:
+						warpRejection = true
+					case http.StatusTooManyRequests:
+						warpRejection = true
+						warpPenalizeLatest(channel)
+					}
 				}
 			}
 
@@ -657,7 +722,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 代理账号 403/429 不冷却 Key。
 				// 旧式单 Key 与仅剩一把的渠道不走此路径, 照常进入下方失败计数与冷却处理。
 				keyAuthRejection := isAuthRejectionError(err)
-				if outcome == AttemptFailed && !(proxyAccountRejection || warpRejection) && len(channel.Keys) > 1 && (keyAuthRejection || isKeyRateLimitError(err)) {
+				if outcome == AttemptFailed && !(proxyAccountRejection || warpRejection || warpProxyRejection) && len(channel.Keys) > 1 && (keyAuthRejection || isKeyRateLimitError(err)) {
 					markChannelKeyCooldown(channel.ID, selectedKey.ID, group.RelayConfig.MemberCooldownSeconds)
 					request.finishRound(AttemptFailed, classifyUpstreamStatus(err), brief)
 					request.releaseRoundLifecycle()
@@ -689,7 +754,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					continue
 				}
 				// 403/429 不惩罚成员, 换号同成员。
-				if (proxyAccountRejection || warpRejection) && opencodeAccountRetries[item.ID] < ocProxyMaxRetries {
+				if (proxyAccountRejection || warpRejection || warpProxyRejection) && opencodeAccountRetries[item.ID] < ocProxyMaxRetries {
 					opencodeAccountRetries[item.ID]++
 					request.releaseRoundLifecycle()
 					releaseRefChainHops(hops)
@@ -1515,9 +1580,17 @@ func recordErrorLog(request *RequestState) {
 // 请求体超过上游限制返回 413, 其余请求级错误(协议/参数问题)为 400。
 func rejectRequest(c *gin.Context, inbound transformer.Inbound, err error) {
 	status := http.StatusBadRequest
+	var warpBusy *warpSlotsBusyError
 	if errors.Is(err, errAllRequestsStopped) || errors.Is(err, errAllChannelsBusy) {
 		status = http.StatusServiceUnavailable
 		c.Header("Retry-After", "5")
+	} else if errors.As(err, &warpBusy) {
+		status = http.StatusServiceUnavailable
+		seconds := int((warpBusy.RetryAfter + time.Second - 1) / time.Second)
+		if seconds < 1 {
+			seconds = 1
+		}
+		c.Header("Retry-After", strconv.Itoa(seconds))
 	} else if errors.Is(err, errRequestTooLarge) {
 		status = http.StatusRequestEntityTooLarge
 	}

@@ -193,6 +193,9 @@ func probeOnce(ctx context.Context, channel model.Channel, modelName string, tok
 //
 // 拿到 HTTP 响应时结论(Status/Detail/Latency)随 result 返回, error 仅表示未得出容量结论。
 func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName, account string, buildRaw func(llm.APIFormat) (*httpclient.Request, error), clampOutput bool) (*ContextProbeResult, error) {
+	if isWarpProxy(channel) {
+		return nil, errWarpProbeUnsupported
+	}
 	candidates := channelKeyTestCandidates(channel)
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("渠道未配置任何密钥")

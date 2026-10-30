@@ -99,6 +99,26 @@ func TestValidateProxyPoolPlain(t *testing.T) {
 	}
 }
 
+// TestHasAccountPlaceholder 覆盖字面量与百分号转义两种占位符。
+func TestHasAccountPlaceholder(t *testing.T) {
+	cases := []struct {
+		name     string
+		template string
+		want     bool
+	}{
+		{"字面量", "socks5://warp-{account}:p@host:1080", true},
+		{"转义", "socks5://warp-%7Baccount%7D:p@host:1080", true},
+		{"小写转义", "socks5://warp-%7baccount%7d:p@host:1080", true},
+		{"无占位符", "socks5://warp-0:p@host:1080", false},
+		{"空串", "", false},
+	}
+	for _, tc := range cases {
+		if got := HasAccountPlaceholder(tc.template); got != tc.want {
+			t.Errorf("%s: HasAccountPlaceholder(%q) = %v, want %v", tc.name, tc.template, got, tc.want)
+		}
+	}
+}
+
 // TestValidateProxyPoolAccountPlaceholderStillRejectsBadScheme 确认占位符转义只放宽
 // userinfo 字符限制, 不会放过非法协议等其余校验。
 func TestValidateProxyPoolAccountPlaceholderStillRejectsBadScheme(t *testing.T) {

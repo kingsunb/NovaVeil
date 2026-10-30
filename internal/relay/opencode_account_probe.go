@@ -114,6 +114,9 @@ func prepareAccountProbe(ctx context.Context, channelID int, accounts []string, 
 	if err != nil {
 		return nil, err
 	}
+	if isWarpProxy(channel) {
+		return nil, errWarpProbeUnsupported
+	}
 	if !proxyNeedsOpencodeAccount(channel) {
 		return nil, fmt.Errorf("渠道不是含 {account} 代理的 OpenCode 免费档, 无需账号体检")
 	}
@@ -606,6 +609,9 @@ func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLe
 	if err != nil {
 		return nil, err
 	}
+	if isWarpProxy(channel) {
+		return nil, errWarpProbeUnsupported
+	}
 	if !proxyNeedsOpencodeAccount(channel) {
 		return nil, fmt.Errorf("渠道不是含 {account} 代理的 OpenCode 免费档, 无账号台账")
 	}
@@ -726,6 +732,9 @@ func AutoProbeOpencodeAccounts(ctx context.Context) error {
 	}
 	for _, channel := range op.ChannelList() {
 		if !channel.Enabled || !proxyNeedsOpencodeAccount(channel) {
+			continue
+		}
+		if isWarpProxy(channel) {
 			continue
 		}
 		rows, err := op.LoadOpencodeProxyAccounts(channel.ID)

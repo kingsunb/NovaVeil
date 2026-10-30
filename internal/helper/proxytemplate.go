@@ -61,8 +61,14 @@ func AccountAliasFor(channelID int, keyID string) string {
 // 含 { 的原始模板无法通过 url.Parse 的 userinfo 校验, 直接透传必然失败。
 // 生效 Key 的选取与 model.Channel.PrimaryKey 一致: 首把 Key 明文非空时取 Keys[0],
 // 否则视为旧式单 Key(空 keyID), 与转发路径取同一别名, 预览与实际转发行为一致。
+// WARP 渠道置空代理交给转发路径。
 // 渠道未配置代理模板或模板不含占位符时原样返回 nil。
 func ResolveChannelProxyTemplate(channel *model.Channel) error {
+	if channel.ChannelProxy != nil && strings.Contains(*channel.ChannelProxy, model.WarpProxyMarker) {
+		// WARP 槽位不派生别名。
+		channel.ChannelProxy = nil
+		return nil
+	}
 	if channel.ChannelProxy == nil || !strings.Contains(*channel.ChannelProxy, model.AccountPlaceholder) {
 		return nil
 	}

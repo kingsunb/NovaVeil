@@ -86,7 +86,7 @@ func proxyNeedsOpencodeAccount(channel model.Channel) bool {
 	if !isOpencodeFreeLane(channel) || channel.ChannelProxy == nil {
 		return false
 	}
-	return strings.Contains(*channel.ChannelProxy, model.AccountPlaceholder)
+	return model.HasAccountPlaceholder(*channel.ChannelProxy)
 }
 
 // pickOpencodeProxyAccount 选出本轮使用的账号并占用一个并发槽位。

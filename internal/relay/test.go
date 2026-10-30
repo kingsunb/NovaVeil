@@ -376,6 +376,9 @@ func sendKeyTestRequest(ctx context.Context, effective model.Channel, modelName 
 // effectiveTestChannel 解析 TestChannel 的生效渠道: keyID 非空时按 ID 定位该把密钥并绕过冷却,
 // 找不到时返回中文错误(该错误会原样展示在面板); 为空时回退探测路径的第一把健康 Key。
 func effectiveTestChannel(channel model.Channel, keyID string) (model.Channel, int, model.ChannelKey, error) {
+	if isWarpProxy(channel) {
+		return model.Channel{}, 0, model.ChannelKey{}, errWarpProbeUnsupported
+	}
 	if keyID == "" {
 		return effectiveProbeChannel(channel)
 	}

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -114,11 +113,13 @@ var (
 	errAllChannelKeysCooling = errors.New("all keys cooling")
 	errProxyTemplateInvalid  = errors.New("proxy template invalid")
 	errChannelDisabled       = errors.New("channel disabled")
+	errWarpProbeUnsupported  = errors.New("warp proxy probe unsupported")
 )
 
 // effectiveChannelForKey 构造单次上游调用使用的渠道副本: 写入所选 Key, 并用「渠道 ID + Key ID」
 // 确定性派生的别名解析 ChannelProxy 中的 {account}, 同一渠道同一 Key 每次请求别名一致。
 // Remark 仅用于展示, 从不参与代理替换。
+// WARP 渠道保留占位符交给选槽。
 // 代理解析失败只返回固定哨兵, 不透出模板原文或底层 URL 错误, 防止 userinfo 中的凭据泄漏。
 func effectiveChannelForKey(channel model.Channel, selected model.ChannelKey) (model.Channel, error) {
 	effective := channel
@@ -126,7 +127,11 @@ func effectiveChannelForKey(channel model.Channel, selected model.ChannelKey) (m
 	// Runtime 生效副本只暴露本次选中的单一凭据: buildOutbound/conversionMiddleware 都通过
 	// PrimaryKey() 读取认证, 若保留原 Keys 列表会永远优先拿 Keys[0], 使轮询选中的 Key 失效。
 	effective.Keys = nil
-	if effective.ChannelProxy == nil || !strings.Contains(*effective.ChannelProxy, model.AccountPlaceholder) {
+	if effective.ChannelProxy == nil || !model.HasAccountPlaceholder(*effective.ChannelProxy) {
+		return effective, nil
+	}
+	if isWarpProxy(channel) {
+		// WARP 占位符交由 relay 选槽。
 		return effective, nil
 	}
 	resolvedProxy, err := helper.ResolveProxyTemplate(*effective.ChannelProxy, helper.AccountAliasFor(channel.ID, selected.ID))
@@ -143,7 +148,11 @@ func effectiveChannelForKey(channel model.Channel, selected model.ChannelKey) (m
 // 停用渠道的探测与 TestChannel 同样应被阻止, 否则后台探测会无限消耗
 // 冷却 / 并发 / RPM 信号量, 拉低整链路健康度。仅对真实 ID 的渠道检查, 避免
 // 影响单元测试里直接构造的 ID=0 占位 channel。
+// WARP 槽位返回哨兵错误。
 func effectiveProbeChannel(channel model.Channel) (model.Channel, int, model.ChannelKey, error) {
+	if isWarpProxy(channel) {
+		return model.Channel{}, 0, model.ChannelKey{}, errWarpProbeUnsupported
+	}
 	if channel.ID > 0 && !channel.Enabled {
 		return model.Channel{}, 0, model.ChannelKey{}, errChannelDisabled
 	}
