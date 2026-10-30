@@ -66,7 +66,7 @@ func TestEnsureOfficialV2ToolsetRewritesToolCalls(t *testing.T) {
 }
 
 // TestEnsureOfficialToolsetNoClientVocabularyLeak 锁定出站零词汇泄漏:
-// 客户端原始工具名不得出现在 tools 数组与 system 文本(含溢出块)。
+// 客户端原始工具名不得出现在 tools 数组与 system 文本, 全部进数组。
 func TestEnsureOfficialToolsetNoClientVocabularyLeak(t *testing.T) {
 	var raws []string
 	names := []string{"ReportFindings", "ScheduleWakeup"}
@@ -83,6 +83,15 @@ func TestEnsureOfficialToolsetNoClientVocabularyLeak(t *testing.T) {
 	}
 	toolsRaw := gjson.GetBytes(out, "tools").Raw
 	system := gjson.GetBytes(out, "messages.0.content").String()
+	array := gjson.GetBytes(out, "tools").Array()
+	templates, err := loadOcProbeTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	officialCount := len(gjson.ParseBytes(templates["v2"].Tools).Array())
+	if len(array) != officialCount+len(names) {
+		t.Fatalf("出站数组应为官方全集+全部客户端工具: %d", len(array))
+	}
 	for _, name := range names {
 		if strings.Contains(toolsRaw, name) {
 			t.Fatalf("tools 数组泄漏客户端名 %q", name)
@@ -94,11 +103,8 @@ func TestEnsureOfficialToolsetNoClientVocabularyLeak(t *testing.T) {
 			t.Fatalf("别名表缺少 %q 的摘要映射", name)
 		}
 	}
-	if !strings.Contains(system, "additional_tools") {
-		t.Fatal("溢出文本块应存在")
-	}
-	if !strings.Contains(system, ocExpectWireName("leak_probe_24")) {
-		t.Fatal("溢出块应用摘要名指代工具")
+	if strings.Contains(system, "additional_tools") {
+		t.Fatal("上限已移除, 不应再出现溢出文本块")
 	}
 }
 

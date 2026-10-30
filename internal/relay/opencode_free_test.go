@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -262,23 +261,6 @@ func TestShapeOpencodeFreeBodyV1SystemCRLF(t *testing.T) {
 	}
 	if !strings.HasSuffix(s2, "a\r\nb") {
 		t.Fatalf("客户端 system 原文应保留在尾部: %q", s2)
-	}
-}
-
-// TestShapeOpencodeFreeBodyV1OverflowNoteCRLF 溢出文本块并入 system 后仍应全 CRLF。
-func TestShapeOpencodeFreeBodyV1OverflowNoteCRLF(t *testing.T) {
-	var tools []string
-	for i := 0; i < 30; i++ {
-		tools = append(tools, fmt.Sprintf(`{"type":"function","function":{"name":"cust_%02d","description":"c%d","parameters":{"type":"object","properties":{}}}}`, i, i))
-	}
-	raw := `{"model":"x-free","messages":[{"role":"user","content":"hi"}],"tools":[` + strings.Join(tools, ",") + `]}`
-	out, _, _ := shapeOpencodeFreeBody([]byte(raw), true, model.UpstreamProtocolChat)
-	s := gjson.GetBytes(out, "messages.0.content").String()
-	if n, crlf := strings.Count(s, "\n"), strings.Count(s, "\r\n"); n != crlf {
-		t.Fatalf("溢出注入后 system 应无裸 LF: CRLF=%d LF=%d", crlf, n-crlf)
-	}
-	if !strings.Contains(s, "additional_tools") {
-		t.Fatalf("应包含溢出文本块")
 	}
 }
 
