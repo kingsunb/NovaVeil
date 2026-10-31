@@ -203,12 +203,13 @@ func TestShapeOpencodeFreeBodyV1ReadTool(t *testing.T) {
 	})
 }
 
-// TestShapeOpencodeFreeBodyV1ChatKeyOrder 对齐官方 1.19.4 实抓键序:
-// [model, max_tokens, messages, tools, tool_choice, stream, stream_options], 多余键按字母序殿后。
+// TestShapeOpencodeFreeBodyV1ChatKeyOrder 对齐官方 1.19.5 实抓键序:
+// [model, max_tokens, reasoning_effort, messages, tools, tool_choice, stream,
+// stream_options], 多余键按字母序殿后。
 func TestShapeOpencodeFreeBodyV1ChatKeyOrder(t *testing.T) {
-	body := []byte(`{"stream":true,"stream_options":{"include_usage":true},"model":"x-free","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"read","description":"client","parameters":{"type":"object","properties":{}}}}],"max_tokens":1024,"tool_choice":"auto","temperature":0.7}`)
+	body := []byte(`{"stream":true,"stream_options":{"include_usage":true},"model":"x-free","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"read","description":"client","parameters":{"type":"object","properties":{}}}}],"max_tokens":1024,"reasoning_effort":"max","tool_choice":"auto","temperature":0.7}`)
 	out, _, _ := shapeOpencodeFreeBody(body, true, model.UpstreamProtocolChat)
-	want := []string{"model", "max_tokens", "messages", "tools", "tool_choice", "stream", "stream_options", "temperature"}
+	want := []string{"model", "max_tokens", "reasoning_effort", "messages", "tools", "tool_choice", "stream", "stream_options", "temperature"}
 	if got := topLevelKeyOrder(t, out); !reflect.DeepEqual(got, want) {
 		t.Fatalf("v1 键序 = %v, 期望 %v", got, want)
 	}

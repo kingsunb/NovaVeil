@@ -854,7 +854,7 @@ func marshalOpencodeJSON(value any) ([]byte, error) {
 var v2ChatKeyOrder = []string{"model", "messages", "tools", "stream", "stream_options", "max_completion_tokens"}
 
 // v1ChatKeyOrder 是 v1 档(/zen)官方 1.19.5 客户端的 Chat 键序, 由实抓核实。
-var v1ChatKeyOrder = []string{"model", "max_tokens", "messages", "tools", "tool_choice", "stream", "stream_options"}
+var v1ChatKeyOrder = []string{"model", "max_tokens", "reasoning_effort", "messages", "tools", "tool_choice", "stream", "stream_options"}
 
 // normalizeOpencodeChatBody 把免费档 Chat 正文重编码为固定键序且不转义 HTML,
 // 对齐上游逐字节门禁(#142)。仅在免费档 Chat 路径调用, keyOrder 按档位传入。

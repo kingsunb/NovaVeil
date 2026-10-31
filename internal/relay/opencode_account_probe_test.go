@@ -244,7 +244,7 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 // ocProbeExpectedV1Tools / ocProbeExpectedV2Tools 是官方客户端实抓的核心工具名与顺序
 // (2026-11-01 起 chrome-devtools 系列移除, 模板回归纯官方核心集)。
 var (
-	ocProbeExpectedV1Tools = []string{"bash", "edit", "glob", "grep", "read", "skill", "task", "todowrite", "webfetch", "websearch", "write"}
+	ocProbeExpectedV1Tools = []string{"bash", "edit", "glob", "grep", "question", "read", "skill", "task", "todowrite", "webfetch", "websearch", "write"}
 	ocProbeExpectedV2Tools = []string{"edit", "glob", "grep", "question", "read", "shell", "skill", "subagent", "webfetch", "websearch", "write", "execute"}
 )
 
@@ -276,7 +276,7 @@ func assertClientFormBody(t *testing.T, body []byte, lane string, modelName, dis
 	t.Helper()
 	wantKeys := []string{"model", "messages", "tools", "stream", "stream_options", "max_completion_tokens"}
 	if lane == "v1" {
-		wantKeys = []string{"model", "max_tokens", "messages", "tools", "tool_choice", "stream", "stream_options"}
+		wantKeys = []string{"model", "max_tokens", "reasoning_effort", "messages", "tools", "tool_choice", "stream", "stream_options"}
 	}
 	if keys := topLevelJSONKeys(t, body); strings.Join(keys, ",") != strings.Join(wantKeys, ",") {
 		t.Fatalf("%s 档键序异常: %v", lane, keys)

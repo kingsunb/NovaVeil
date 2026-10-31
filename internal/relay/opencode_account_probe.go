@@ -440,11 +440,15 @@ func ocProbeClientBody(lane, modelName, displayName, question string, maxOutput 
 		return nil
 	}
 	if lane == "v1" {
-		// v1 档(1.19.4)键序: model, max_tokens, messages, tools, tool_choice, stream, stream_options。
+		// v1 档(1.19.5)键序: model, max_tokens, reasoning_effort, messages, tools,
+		// tool_choice, stream, stream_options(2026-11-01 官方实抓)。
 		if err := set("model", modelName); err != nil {
 			return nil, err
 		}
 		if err := set("max_tokens", maxOutput); err != nil {
+			return nil, err
+		}
+		if err := set("reasoning_effort", "max"); err != nil {
 			return nil, err
 		}
 		if err := setRaw("messages", messages); err != nil {
@@ -482,9 +486,10 @@ func ocProbeClientBody(lane, modelName, displayName, question string, maxOutput 
 	return body, nil
 }
 
-// ocProbeDate 输出官方客户端的系统提示日期格式, 形如 Sat Oct 24 2026(日不补零)。
+// ocProbeDate 输出官方客户端的系统提示日期格式, 形如 Sun Nov 01 2026(日补零,
+// 2026-11-01 官方 1.19.5 实抓核实)。
 func ocProbeDate(now time.Time) string {
-	return fmt.Sprintf("%s %s %d %d", now.Format("Mon"), now.Format("Jan"), now.Day(), now.Year())
+	return now.Format("Mon Jan 02 2006")
 }
 
 // ocRuntimeWorkdir 返回进程工作目录, 与官方客户端写自身 cwd 同口径。
