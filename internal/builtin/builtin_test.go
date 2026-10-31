@@ -415,13 +415,13 @@ func TestBuiltinOfficialChannelsDefinitions(t *testing.T) {
 func TestOpenCodeFreeSeedProtocolsAreVerified(t *testing.T) {
 	var free *model.Channel
 	for i := range BuiltinFreeChannels {
-		if BuiltinFreeChannels[i].Name == "OpenCode Free" {
+		if BuiltinFreeChannels[i].Name == "OpenCode Free V2" {
 			free = &BuiltinFreeChannels[i]
 			break
 		}
 	}
 	if free == nil {
-		t.Fatal("BuiltinFreeChannels should contain OpenCode Free")
+		t.Fatal("BuiltinFreeChannels should contain OpenCode Free V2")
 	}
 	seen := make(map[string]bool, len(free.Models))
 	for _, channelModel := range free.Models {
