@@ -175,18 +175,15 @@ func ocFreePassthroughChannel(serverURL, lane string) model.Channel {
 	}
 }
 
-func ocFreeConvertedChannel(proxyURL, lane string) model.Channel {
-	proxy := proxyURL
+func ocFreeConvertedChannel(serverURL, lane string) model.Channel {
 	return model.Channel{
 		ID:           2,
 		Name:         "oc-converted",
 		Type:         model.ChannelProviderOpenAI,
-		BaseURL:      "http://opencode.invalid/zen",
+		BaseURL:      serverURL + "/zen",
 		Key:          "test-key",
 		IsFree:       true,
 		OpencodeLane: lane,
-		Proxy:        true,
-		ChannelProxy: &proxy,
 	}
 }
 
