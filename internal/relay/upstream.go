@@ -711,15 +711,22 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		return nil, err
 	}
 	if collapse {
-		// 与流式分支相同的窗口预读校验, 再把完整事件流折叠成非流式正文。
+		// 先读完真实事件流再折叠: 窗口预读后暂停读取会让异步事件流提前关闭底层解码器。
 		events := result.EventStream
-		window, ended, terminated, err := readStreamWindow(ctx, format, inbound, events)
+		chunks, err := collectStreamEvents(events)
 		if err != nil {
 			_ = events.Close()
 			releaseConcurrency()
 			return nil, err
 		}
-		resp := &upstreamResponse{events: events, window: window, last: ended, terminated: terminated, release: releaseConcurrency}
+		_ = events.Close()
+		buffered := streams.SliceStream(chunks)
+		window, ended, terminated, err := readStreamWindow(ctx, format, inbound, buffered)
+		if err != nil {
+			releaseConcurrency()
+			return nil, err
+		}
+		resp := &upstreamResponse{events: streams.SliceStream(chunks[len(window):]), window: window, last: ended, terminated: terminated, release: releaseConcurrency}
 		applyToolAliasRestore(resp, middleware.toolAliases)
 		body, usage, err := collapseOpencodeFreeStream(ctx, format, resp)
 		resp.Close()
@@ -755,6 +762,22 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		return nil, err
 	}
 	return finishOpencodeResponse(&upstreamResponse{events: events, window: window, last: ended, terminated: terminated, release: releaseConcurrency}, format, identityAliases)
+}
+
+// collectStreamEvents 一次读完事件流, 供折叠路径先读完再校验。
+func collectStreamEvents(events streams.Stream[*httpclient.StreamEvent]) ([]*httpclient.StreamEvent, error) {
+	var collected []*httpclient.StreamEvent
+	for events.Next() {
+		event := events.Current()
+		if event == nil || len(event.Data) == 0 {
+			continue
+		}
+		collected = append(collected, event)
+	}
+	if err := events.Err(); err != nil {
+		return nil, err
+	}
+	return collected, nil
 }
 
 // readStreamWindow 预读流式事件直到出现首个内容承载信号(提交点)或流结束(有效性窗口关闭)。
