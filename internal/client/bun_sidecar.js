@@ -1,3 +1,6 @@
+// 本地鉴权 token: 启动时由 Go 注入, 每请求校验。
+const sidecarToken = process.env.NOVEIL_SIDECAR_TOKEN || ""
+
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
@@ -6,6 +9,10 @@ const server = Bun.serve({
   async fetch(req) {
     if (req.method !== "POST" || new URL(req.url).pathname !== "/forward") {
       return new Response("not found", { status: 404 })
+    }
+    // 鉴权头缺失或不匹配一律拒绝, 头不参与转发。
+    if (!sidecarToken || req.headers.get("x-noveil-sidecar-auth") !== sidecarToken) {
+      return Response.json({ error: "unauthorized" }, { status: 403 })
     }
     let input
     try {

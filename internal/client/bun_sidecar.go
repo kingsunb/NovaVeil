@@ -3,8 +3,10 @@ package client
 import (
 	"bufio"
 	"bytes"
-	_ "embed"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +24,9 @@ import (
 //go:embed bun_sidecar.js
 var bunSidecarScript []byte
 
+// bunSidecarAuthHeader 是 Go 与 sidecar 之间的本地鉴权头。
+const bunSidecarAuthHeader = "X-Noveil-Sidecar-Auth"
+
 // bunForwardRequest 是 Go 传给 Bun sidecar 的本地转发载荷。
 type bunForwardRequest struct {
 	Method  string      `json:"method"`
@@ -35,6 +40,7 @@ type bunForwardRequest struct {
 type bunSidecar struct {
 	cmd      *exec.Cmd
 	endpoint string
+	token    string // 本地鉴权 token, 仅用于 Go 与 sidecar 之间。
 	done     chan struct{}
 }
 
@@ -106,8 +112,21 @@ func (m *bunSidecarManager) current() (*bunSidecar, error) {
 	return m.sidecar, nil
 }
 
+// newSidecarToken 生成 128 位随机 token 的 hex 形式。
+func newSidecarToken() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate bun sidecar token: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
 // startBunSidecar 启动 sidecar 并等待其回传监听端口。
 func startBunSidecar(binary string) (*bunSidecar, error) {
+	token, err := newSidecarToken()
+	if err != nil {
+		return nil, err
+	}
 	script, err := os.CreateTemp("", "novaveil-bun-sidecar-*.js")
 	if err != nil {
 		return nil, fmt.Errorf("create bun sidecar script: %w", err)
@@ -124,7 +143,10 @@ func startBunSidecar(binary string) (*bunSidecar, error) {
 	}
 
 	cmd := exec.Command(binary, "run", scriptPath)
-	cmd.Env = append(os.Environ(), "NOVEIL_PARENT_PID="+strconv.Itoa(os.Getpid()))
+	cmd.Env = append(os.Environ(),
+		"NOVEIL_PARENT_PID="+strconv.Itoa(os.Getpid()),
+		"NOVEIL_SIDECAR_TOKEN="+token,
+	)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		os.Remove(scriptPath)
@@ -173,6 +195,7 @@ func startBunSidecar(binary string) (*bunSidecar, error) {
 		sidecar := &bunSidecar{
 			cmd:      cmd,
 			endpoint: "http://127.0.0.1:" + strconv.Itoa(status.Port) + "/forward",
+			token:    token,
 			done:     make(chan struct{}),
 		}
 		var pipes sync.WaitGroup
@@ -297,6 +320,8 @@ func (t *bunSidecarTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		return nil, fmt.Errorf("bun sidecar request: %w", err)
 	}
 	forward.Header.Set("Content-Type", "application/json")
+	// 本地鉴权头, 只发 sidecar 不进转发载荷。
+	forward.Header.Set(bunSidecarAuthHeader, sidecar.token)
 	response, err := t.client.Do(forward)
 	if err != nil {
 		return nil, bunContextError(req.Context(), err)

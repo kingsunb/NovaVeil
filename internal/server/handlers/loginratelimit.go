@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -23,7 +24,15 @@ const (
 	loginMaxFailures = 5
 	// loginRateLimitDBTimeout 单次限速数据库操作的上界, 避免慢查询拖死请求(审计 OLD-13)。
 	loginRateLimitDBTimeout = 5 * time.Second
+	// ipLockMaxEntries 触发清扫的 IP 锁条目上限。
+	ipLockMaxEntries = 4096
 )
+
+// ipLockEntry 按 IP 互斥量, 附最近持锁时间。
+type ipLockEntry struct {
+	mu       sync.Mutex
+	lastUsed atomic.Int64 // 最近一次持锁的 UnixNano。
+}
 
 // loginLimiter 登录限速器: 失败计数持久化在 login_attempts 表中, 多副本部署共享同一份窗口计数。
 var loginLimiter = newLoginRateLimiter(loginFailWindow, loginMaxFailures)
@@ -32,13 +41,14 @@ var loginLimiter = newLoginRateLimiter(loginFailWindow, loginMaxFailures)
 // 失败时插入一行, 判定时统计窗口内该 IP 的行数, 达上限拒绝登录并给出 Retry-After;
 // 过期行由各副本惰性清理(距上次全表清理超过 window/4 时执行)。
 type loginRateLimiter struct {
-	mu        sync.Mutex // 仅保护 lastSweep; 数据操作本身由 gorm 连接池保证并发安全
-	ipMu      sync.Map   // 按 IP 串行化 check 与 recordFailure, 挡住同一进程内的并行爆破
-	conn      *gorm.DB   // 独立连接仅供测试注入, 为空时回退全局连接
-	window    time.Duration
-	maxFails  int
-	now       func() time.Time
-	lastSweep time.Time
+	mu          sync.Mutex   // 仅保护 lastSweep; 数据操作本身由 gorm 连接池保证并发安全
+	ipMu        sync.Map     // 按 IP 串行化 check 与 recordFailure, 挡住同一进程内的并行爆破
+	ipLockCount atomic.Int64 // ipMu 存活条目计数。
+	conn        *gorm.DB     // 独立连接仅供测试注入, 为空时回退全局连接
+	window      time.Duration
+	maxFails    int
+	now         func() time.Time
+	lastSweep   time.Time
 }
 
 func newLoginRateLimiter(window time.Duration, maxFails int) *loginRateLimiter {
@@ -59,11 +69,39 @@ func (l *loginRateLimiter) dbConn() *gorm.DB {
 
 // lockIP 让同一 IP 的检查、失败记账和成功清零不能并行。
 // 多副本之间仍靠数据库行数, 这里只封住单进程里 check 与 insert 之间的空窗。
+// 条目带最近使用时间, 超上限时机会性清扫空闲条。
 func (l *loginRateLimiter) lockIP(ip string) func() {
-	value, _ := l.ipMu.LoadOrStore(ip, &sync.Mutex{})
-	mu := value.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+	nowNano := l.now().UnixNano()
+	fresh := &ipLockEntry{}
+	fresh.lastUsed.Store(nowNano)
+	value, loaded := l.ipMu.LoadOrStore(ip, fresh)
+	entry := value.(*ipLockEntry)
+	if !loaded {
+		// 仅新建条目计数, 超上限触发一次清扫。
+		if l.ipLockCount.Add(1) > ipLockMaxEntries {
+			l.sweepIPLocks(nowNano)
+		}
+	}
+	entry.mu.Lock()
+	entry.lastUsed.Store(nowNano)
+	return entry.mu.Unlock
+}
+
+// sweepIPLocks 超上限时回收空闲 IP 锁条目。
+// 只回收空闲超 window 且未持有的条目。
+// 清扫与复活并发时串行化暂弱化, 库行数兜底。
+func (l *loginRateLimiter) sweepIPLocks(nowNano int64) {
+	idle := l.window.Nanoseconds()
+	l.ipMu.Range(func(key, value any) bool {
+		entry := value.(*ipLockEntry)
+		if nowNano-entry.lastUsed.Load() < idle || !entry.mu.TryLock() {
+			return true
+		}
+		entry.mu.Unlock()
+		l.ipMu.Delete(key)
+		l.ipLockCount.Add(-1)
+		return true
+	})
 }
 
 // check 返回该 IP 是否允许再次尝试登录; 不允许时同时返回建议等待时长(Retry-After)。

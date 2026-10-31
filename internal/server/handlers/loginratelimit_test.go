@@ -183,3 +183,35 @@ func TestRejectRateLimitedResponse(t *testing.T) {
 		t.Fatal("429 response body must not be empty")
 	}
 }
+
+// TestIPLockSweepsIdleEntries 验证条目超上限时空闲 IP 锁被回收:
+// 空闲超过窗口的条目被删除, 正被持有与新建的条目保留, 计数回到上限内。
+func TestIPLockSweepsIdleEntries(t *testing.T) {
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	l := newTestLimiter(newTestLimiterDB(t), time.Minute, 3, &now)
+
+	idleIP := "203.0.113.30"
+	idleUnlock := l.lockIP(idleIP)
+	idleUnlock()
+	advance(&now, 2*time.Minute) // 旧条目空闲超过窗口
+
+	heldUnlock := l.lockIP("203.0.113.31") // 持有中的条目
+	defer heldUnlock()
+
+	l.ipLockCount.Store(ipLockMaxEntries) // 模拟条目已满载
+	freshUnlock := l.lockIP("203.0.113.32")
+	freshUnlock()
+
+	if got := l.ipLockCount.Load(); got > ipLockMaxEntries {
+		t.Fatalf("清扫后条目计数 = %d, 应不超过 %d", got, ipLockMaxEntries)
+	}
+	if _, ok := l.ipMu.Load(idleIP); ok {
+		t.Fatal("空闲超过窗口的条目应被清扫")
+	}
+	if _, ok := l.ipMu.Load("203.0.113.31"); !ok {
+		t.Fatal("正被持有的条目不得被清扫")
+	}
+	if _, ok := l.ipMu.Load("203.0.113.32"); !ok {
+		t.Fatal("新建条目不得被清扫")
+	}
+}

@@ -92,13 +92,19 @@ func TestBunSidecarRoundTripForwardsAndStreams(t *testing.T) {
 		headers[item[0]] = item[1]
 	}
 	for name, want := range map[string]string{
-		"Authorization":       "Bearer public",
-		"Content-Type":        "application/json",
-		"User-Agent":          "opencode/1.19.5 ai-sdk/provider-utils/4.0.23 runtime/bun/1.4.4",
-		"x-opencode-session":  "ses_e8c23e83effeqhaDsqfGMpEXYq",
+		"Authorization":      "Bearer public",
+		"Content-Type":       "application/json",
+		"User-Agent":         "opencode/1.19.5 ai-sdk/provider-utils/4.0.23 runtime/bun/1.4.4",
+		"x-opencode-session": "ses_e8c23e83effeqhaDsqfGMpEXYq",
 	} {
 		if headers[name] != want {
 			t.Fatalf("header %s = %q, want %q", name, headers[name], want)
+		}
+	}
+	// 本地鉴权头只用于 Go 与 sidecar 之间, 绝不进转发载荷。
+	for _, item := range captured.Headers {
+		if strings.EqualFold(item[0], bunSidecarAuthHeader) {
+			t.Fatalf("auth header leaked into forward payload: %s", item[0])
 		}
 	}
 }
@@ -552,6 +558,41 @@ func TestBunSidecarProcessCancellationReachesUpstream(t *testing.T) {
 				t.Fatalf("canceled request replayed: requests=%d", got)
 			}
 		})
+	}
+}
+
+// 真实进程拒绝缺失或错误鉴权头的请求。
+func TestBunSidecarProcessRejectsUnauthorized(t *testing.T) {
+	sidecar, err := startBunSidecar(bunSidecarTestBinary(t))
+	if err != nil {
+		t.Fatalf("start sidecar: %v", err)
+	}
+	defer sidecar.Close()
+	post := func(auth string) int {
+		req, err := http.NewRequest(http.MethodPost, sidecar.endpoint, strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if auth != "" {
+			req.Header.Set(bunSidecarAuthHeader, auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+	if code := post(""); code != http.StatusForbidden {
+		t.Fatalf("missing auth header: status=%d, want 403", code)
+	}
+	if code := post("wrong-token"); code != http.StatusForbidden {
+		t.Fatalf("wrong auth token: status=%d, want 403", code)
+	}
+	if code := post(sidecar.token); code == http.StatusForbidden {
+		t.Fatal("correct token must be accepted")
 	}
 }
 

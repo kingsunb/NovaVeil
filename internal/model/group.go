@@ -12,7 +12,7 @@ const (
 type GroupRelayConfig struct {
 	MemberMaxAttempts                     int     `json:"member_max_attempts" binding:"omitempty,min=1"`                        // 单个成员包含首次请求的总尝试次数，仅在故障转移模式生效。
 	MemberInfraMaxRetries                 int     `json:"member_infra_max_retries" binding:"omitempty,min=0"`                   // 单个成员连续发生基础设施层错误(SOCKS/DNS/TLS/连接重置)的最大重试次数,达到后走正常冷却通道;0 表示与 MemberMaxAttempts 相同。
-	MemberRetryIntervalSeconds            float64 `json:"member_retry_interval_seconds" binding:"omitempty,min=0"`              // 同一成员相邻两次尝试之间的等待秒数, 支持小数, 0 表示不等待直接重试。
+	MemberRetryIntervalSeconds            float64 `json:"member_retry_interval_seconds" binding:"omitempty,min=0,max=3600"`     // 同一成员相邻两次尝试之间的等待秒数, 支持小数, 0 表示不等待直接重试, 上限 1 小时。
 	MemberNonStreamResponseTimeoutSeconds int     `json:"member_non_stream_response_timeout_seconds" binding:"omitempty,min=1"` // 单个成员返回完整非流式响应的超时秒数。
 	MemberStreamFirstEventTimeoutSeconds  int     `json:"member_stream_first_event_timeout_seconds" binding:"omitempty,min=1"`  // 单个成员返回首个有效流事件的超时秒数。
 	MemberStreamIdleTimeoutSeconds        int     `json:"member_stream_idle_timeout_seconds" binding:"omitempty,min=0"`         // 流式转发期相邻事件间的空闲超时秒数, 超时终止流并按失败定稿; 0 表示不限时。

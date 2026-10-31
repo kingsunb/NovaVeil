@@ -92,14 +92,22 @@ type openAIErrorDetail struct {
 // GenRequestID 生成与 new-api 风格一致的请求 ID: 时间戳(14 位) + 随机后缀。
 func GenRequestID() string {
 	const suffixLen = 20
-	b := make([]byte, suffixLen)
 	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	// 62*4=248: 低于该值的字节均匀映射到 62 字符。
+	const unbiasedLimit = 256 - 256%len(chars)
+	b := make([]byte, suffixLen)
 	if _, err := rand.Read(b); err != nil {
 		// rand.Read 极少失败; 退化为时间戳纳秒保证仍有唯一性。
 		return fmt.Sprintf("%s%d", time.Now().Format("20060102150405"), time.Now().UnixNano())
 	}
 	for i := range b {
-		b[i] = chars[int(b[i])%len(chars)]
+		// 拒绝采样: 超上限字节重摇, 消除取模偏差。
+		for int(b[i]) >= unbiasedLimit {
+			if _, err := rand.Read(b[i : i+1]); err != nil {
+				return fmt.Sprintf("%s%d", time.Now().Format("20060102150405"), time.Now().UnixNano())
+			}
+		}
+		b[i] = chars[b[i]%len(chars)]
 	}
 	return time.Now().Format("20060102150405") + string(b)
 }

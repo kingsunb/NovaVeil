@@ -2,7 +2,12 @@
 package cmd
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 
 	"github.com/kingsunb/NovaVeil/internal/conf"
 	"github.com/kingsunb/NovaVeil/internal/db"
@@ -11,11 +16,22 @@ import (
 )
 
 var passwdCmd = &cobra.Command{ // 设置现有用户密码的命令。
-	Use:   "passwd <password>",
-	Short: "Set user password",
-	Args:  cobra.ExactArgs(1),
+	Use:   "passwd [password]",
+	Short: "Set user password (omit argument to read from stdin)",
+	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if args[0] == "" {
+		password := ""
+		if len(args) == 1 {
+			password = args[0]
+		} else {
+			// 无参数时从 stdin 读入, 免进 shell 历史。
+			line, readErr := bufio.NewReader(os.Stdin).ReadString('\n')
+			if readErr != nil && !errors.Is(readErr, io.EOF) {
+				return fmt.Errorf("failed to read password from stdin: %w", readErr)
+			}
+			password = strings.TrimRight(line, "\r\n")
+		}
+		if password == "" {
 			return fmt.Errorf("password must not be empty")
 		}
 		if err := conf.Load(cfgFile); err != nil {
@@ -30,7 +46,7 @@ var passwdCmd = &cobra.Command{ // 设置现有用户密码的命令。
 		if err := db.GetDB().First(&user).Error; err != nil {
 			return fmt.Errorf("failed to load user: %w", err)
 		}
-		user.Password = args[0]
+		user.Password = password
 		if err := user.HashPassword(); err != nil {
 			return err
 		}
