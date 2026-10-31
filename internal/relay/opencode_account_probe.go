@@ -124,9 +124,13 @@ func prepareAccountProbe(ctx context.Context, channelID int, accounts []string, 
 		return nil, fmt.Errorf("渠道不是含 {account} 代理的 OpenCode 免费档, 无需账号体检")
 	}
 	if modelName == "" {
-		modelName, err = ocProbeModelName(channel)
-		if err != nil {
-			return nil, err
+		// 默认钉死 deepseek-v4.1-flash-free(模板按它实抓对齐到字节级), 渠道未
+		// 收录时回退渠道自动选择。
+		if modelName = ocProbeDefaultModelName(channel); modelName == "" {
+			modelName, err = ocProbeModelName(channel)
+			if err != nil {
+				return nil, err
+			}
 		}
 	} else if !ocProbeChannelHasModel(channel, modelName) {
 		return nil, fmt.Errorf("模型 %q 不在渠道模型列表中, 请先同步模型", modelName)
@@ -163,7 +167,7 @@ func runAccountProbe(ctx context.Context, plan *ocProbePlan, concurrency int, ti
 			break
 		}
 		wg.Add(1)
-		go func(index int, account string) {
+		goSafe("account-probe", func() {
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
@@ -179,7 +183,7 @@ func runAccountProbe(ctx context.Context, plan *ocProbePlan, concurrency int, ti
 			if onProgress != nil {
 				onProgress(result)
 			}
-		}(index, account)
+		})
 	}
 	wg.Wait()
 	for index := range results {
@@ -770,7 +774,7 @@ func AutoProbeOpencodeAccounts(ctx context.Context) error {
 		if len(due) == 0 {
 			continue
 		}
-		if _, err := ProbeOpencodeAccounts(ctx, channel.ID, due, 0, ocProbeDefaultConcurrency, 0, ocAutoProbeModelName(channel)); err != nil {
+		if _, err := ProbeOpencodeAccounts(ctx, channel.ID, due, 0, ocProbeDefaultConcurrency, 0, ocProbeDefaultModelName(channel)); err != nil {
 			log.Warnf("渠道 %d 自动体检失败: %v", channel.ID, err)
 			continue
 		}
@@ -779,9 +783,9 @@ func AutoProbeOpencodeAccounts(ctx context.Context) error {
 	return nil
 }
 
-// ocAutoProbeModelName 返回自动体检的探测模型: 钉死 deepseek-v4.1-flash-free,
-// 渠道未收录时回退渠道自动选择(空串交由 ocProbeModelName 决定)。
-func ocAutoProbeModelName(channel model.Channel) string {
+// ocProbeDefaultModelName 返回体检的默认探测模型: 钉死 deepseek-v4.1-flash-free
+// (模板按它实抓对齐到字节级), 渠道未收录时回退空串交由 ocProbeModelName 决定。
+func ocProbeDefaultModelName(channel model.Channel) string {
 	if ocProbeChannelHasModel(channel, ocProbeAutoModelName) {
 		return ocProbeAutoModelName
 	}

@@ -16,9 +16,9 @@ Status: implemented
 
 会话 ID 经确认本就每请求新铸且不进缓存，未改动。
 
-## 追加：自动体检模型钉死（2026-11-01）
+## 追加：体检默认模型钉死（2026-11-01）
 
-自动体检（`AutoProbeOpencodeAccounts`）原以空模型名触发，由 `ocProbeModelName` 取渠道模型表首个 chat 模型——当前渠道 2 的表序首个是 `nemotron-3.5-lightning-free`，与维护者意图（体检 `deepseek-v4.1-flash-free`）不符。现钉死为 `ocProbeAutoModelName = "deepseek-v4.1-flash-free"`：渠道收录该模型即用之，未收录回退渠道自动选择。原因：体检模板（system 模型行、工具集）按该模型实抓对齐并验证到字节级，换模型会使模板形态漂移。面板手动体检不受影响（仍按操作者指定模型）。
+体检（自动任务与手动/空参触发共用 `prepareAccountProbe`）原以空模型名回退到 `ocProbeModelName` 取渠道模型表首个 chat 模型——当前渠道 2 的表序首个是 `nemotron-3.5-lightning-free`，与维护者意图（体检 `deepseek-v4.1-flash-free`）不符。现钉死为 `ocProbeAutoModelName = "deepseek-v4.1-flash-free"`（`ocProbeDefaultModelName`）：渠道收录该模型即用之，未收录回退渠道自动选择。原因：体检模板（system 模型行、工具集）按该模型实抓对齐并验证到字节级，换模型会使模板形态漂移。面板手动体检显式指定的模型仍优先于默认值。
 
 ## 备选方案
 

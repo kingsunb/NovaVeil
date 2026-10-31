@@ -403,15 +403,15 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 	}
 }
 
-// TestOcAutoProbeModelName 锁定自动体检模型钉死与回退:
+// TestOcProbeDefaultModelName 锁定体检默认模型钉死与回退:
 // 渠道含 deepseek-v4.1-flash-free 时钉死它, 不含时回退渠道自动选择。
 func TestOcAutoProbeModelName(t *testing.T) {
 	with := model.Channel{Models: []model.ChannelModel{{Name: "nemotron-3.5-lightning-free"}, {Name: ocProbeAutoModelName}}}
-	if got := ocAutoProbeModelName(with); got != ocProbeAutoModelName {
+	if got := ocProbeDefaultModelName(with); got != ocProbeAutoModelName {
 		t.Fatalf("渠道含钉死模型时应返回它: %q", got)
 	}
 	without := model.Channel{Models: []model.ChannelModel{{Name: "nemotron-3.5-lightning-free"}}}
-	if got := ocAutoProbeModelName(without); got != "" {
+	if got := ocProbeDefaultModelName(without); got != "" {
 		t.Fatalf("渠道不含钉死模型时应回退自动选择: %q", got)
 	}
 }
