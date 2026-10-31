@@ -107,7 +107,7 @@ func GenRequestID() string {
 				return fmt.Sprintf("%s%d", time.Now().Format("20060102150405"), time.Now().UnixNano())
 			}
 		}
-		b[i] = chars[b[i]%len(chars)]
+		b[i] = chars[int(b[i])%len(chars)]
 	}
 	return time.Now().Format("20060102150405") + string(b)
 }
