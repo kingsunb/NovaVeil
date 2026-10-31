@@ -377,7 +377,7 @@ func TestOpencodeProxy429SingleSessionDoesNotCoolAccount(t *testing.T) {
 	}
 }
 
-// 三个不同会话都报 429 才冷却账号, 前两个会话仅换号不冷却。
+// 两个不同会话都报 429 才冷却账号, 前一个会话仅换号不冷却。
 func TestOpencodeProxy429QuorumCoolsAccount(t *testing.T) {
 	setupFailoverTest(t)
 	resetChannelKeyHealth()
@@ -397,7 +397,7 @@ func TestOpencodeProxy429QuorumCoolsAccount(t *testing.T) {
 	})
 	group := createIntegrationGroup(t, "opencode-proxy-429-quorum", opencodeProxyTestConfig(), integrationLeafItem(t, channel, channel.Models[0].Name))
 
-	for i, content := range []string{"hi-quorum-1", "hi-quorum-2", "hi-quorum-3"} {
+	for i, content := range []string{"hi-quorum-1", "hi-quorum-2"} {
 		// 换号成功会刷新 good-account 的最近成功时间, 每轮先把 bad-account 置顶,
 		// 保证每个会话都先打 bad-account 再换号成功, 成员不会因持续失败被冷却。
 		prioritizeOpencodeProxyAccount(t, channel.ID, "bad-account")
@@ -406,7 +406,7 @@ func TestOpencodeProxy429QuorumCoolsAccount(t *testing.T) {
 			t.Fatalf("第 %d 个会话换号后应成功, 实际 %d: %s", i+1, recorder.Code, recorder.Body.String())
 		}
 		pool := opencodeProxyPoolSnapshot(t, channel.ID)
-		if i < 2 && !pool["bad-account"].cooldownUntil.IsZero() {
+		if i < 1 && !pool["bad-account"].cooldownUntil.IsZero() {
 			t.Fatalf("第 %d 个会话后不应冷却账号, 实际 %v", i+1, pool["bad-account"].cooldownUntil)
 		}
 	}
@@ -734,7 +734,7 @@ func TestOpencodeProxy403ConcurrentRetry(t *testing.T) {
 	}
 }
 
-// TestOpencodeProxy429UsesUpstreamRetryAfter 三个会话报 429 触发冷却后,
+// TestOpencodeProxy429UsesUpstreamRetryAfter 两个会话报 429 触发冷却后,
 // 上游给出可信 Retry-After 时按其冷却, 不再回落到 UTC 零点。
 func TestOpencodeProxy429UsesUpstreamRetryAfter(t *testing.T) {
 	setupFailoverTest(t)
@@ -756,7 +756,7 @@ func TestOpencodeProxy429UsesUpstreamRetryAfter(t *testing.T) {
 	})
 	group := createIntegrationGroup(t, "opencode-proxy-429-retry-after", opencodeProxyTestConfig(), integrationLeafItem(t, channel, channel.Models[0].Name))
 
-	for _, content := range []string{"hi-retry-after-1", "hi-retry-after-2", "hi-retry-after-3"} {
+	for _, content := range []string{"hi-retry-after-1", "hi-retry-after-2"} {
 		prioritizeOpencodeProxyAccount(t, channel.ID, "bad-account")
 		recorder := postOpencodeProxyRequestWithContent(t, group, content, nil)
 		if recorder.Code != http.StatusOK {

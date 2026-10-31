@@ -30,9 +30,9 @@ const (
 	// ocProxySessionTTL 是会话内账号去重的记忆时长。
 	ocProxySessionTTL = 24 * time.Hour
 	// ocProxy429VoteWindow 是 429 计票窗口。
-	ocProxy429VoteWindow = 10 * time.Minute
+	ocProxy429VoteWindow = 24 * time.Hour
 	// ocProxy429Quorum 是触发冷却所需的不同会话数。
-	ocProxy429Quorum = 3
+	ocProxy429Quorum = 2
 )
 
 // ocProxyAccount 是一个代理账号的进程内状态。
@@ -305,7 +305,7 @@ func (p *ocProxyPool) recordRateLimitedLocked(session string, now time.Time) boo
 	return true
 }
 
-// markOpencodeProxyRateLimited 处理 429: 窗口内三个不同会话报出才冷却账号,
+// markOpencodeProxyRateLimited 处理 429: 24 小时窗口内两个不同会话报出才冷却账号,
 // 单会话仅计票不冷却; 无会话标识时无法计票, 回退单次冷却避免反复使用被限流账号。
 func markOpencodeProxyRateLimited(channelID int, account, session, retryAfter string) {
 	now := time.Now()

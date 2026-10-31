@@ -89,15 +89,14 @@ func TestOcProxyPoolPickSessionDedup(t *testing.T) {
 	assert.Equal(t, third.account, pool.accounts[third.account].account, "新账号应入池")
 }
 
-// 三个不同会话在窗口内报 429 才冷却, 重复会话不计票, 过期票作废。
+// 两个不同会话在 24 小时窗口内报 429 才冷却, 重复会话不计票, 过期票作废。
 func TestOcProxyRateLimitedQuorum(t *testing.T) {
 	now := time.Now()
 	pool := &ocProxyPool{accounts: map[string]*ocProxyAccount{}}
 
 	assert.False(t, pool.recordRateLimitedLocked("s1", now), "单会话不应冷却")
-	assert.False(t, pool.recordRateLimitedLocked("s2", now), "两个会话不应冷却")
 	assert.False(t, pool.recordRateLimitedLocked("s1", now), "重复会话不计票")
-	assert.True(t, pool.recordRateLimitedLocked("s3", now), "三个不同会话应触发冷却")
+	assert.True(t, pool.recordRateLimitedLocked("s2", now), "两个不同会话应触发冷却")
 	assert.Empty(t, pool.rateLimited, "触发后计票应清零")
 
 	fresh := &ocProxyPool{accounts: map[string]*ocProxyAccount{}}

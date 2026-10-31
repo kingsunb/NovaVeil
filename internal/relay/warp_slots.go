@@ -18,7 +18,11 @@ const (
 	warpSlotsCacheTTL = time.Second
 	// warpSlotRateLimitWindow 是单槽 429 的暂停派发时长。
 	warpSlotRateLimitWindow = 60 * time.Second
-	// warpSlotAllCoolingWindow 是三个不同 /64 都被 429 后的全槽冷却时长。
+	// warpSlotRateLimitVoteWindow 是 /64 429 计票窗口。
+	warpSlotRateLimitVoteWindow = 24 * time.Hour
+	// warpSlotRateLimitQuorum 是触发全槽冷却所需的不同 /64 数。
+	warpSlotRateLimitQuorum = 2
+	// warpSlotAllCoolingWindow 是两个不同 /64 都被 429 后的全槽冷却时长。
 	warpSlotAllCoolingWindow = 60 * time.Second
 	// warpSlotProxySuspect 是代理自身 407/503 后的短暂停。
 	warpSlotProxySuspect = 2 * time.Second
@@ -340,7 +344,7 @@ func (p *warpSlotPool) invalidate() {
 
 func (p *warpSlotPool) pruneVotesLocked(now time.Time) {
 	for prefix, at := range p.votes {
-		if now.Sub(at) >= warpSlotRateLimitWindow {
+		if now.Sub(at) >= warpSlotRateLimitVoteWindow {
 			delete(p.votes, prefix)
 		}
 	}
@@ -382,7 +386,7 @@ func (l *warpSlotLease) MarkSuccess() {
 	l.pool.mu.Unlock()
 }
 
-// MarkRateLimited 记录单槽 429; 三个不同 /64 在窗口内达到后返回 true。
+// MarkRateLimited 记录单槽 429; 两个不同 /64 在 24 小时窗口内达到后返回 true。
 func (l *warpSlotLease) MarkRateLimited() bool {
 	if l == nil {
 		return false
@@ -398,7 +402,7 @@ func (l *warpSlotLease) MarkRateLimited() bool {
 			pool.votes[l.prefix] = now
 		}
 	}
-	if len(pool.votes) < 3 {
+	if len(pool.votes) < warpSlotRateLimitQuorum {
 		return false
 	}
 	if now.Before(pool.allCoolingUntil) {

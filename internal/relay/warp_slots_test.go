@@ -110,7 +110,7 @@ func TestWarpSlotPoolPickSessionDedup(t *testing.T) {
 	other.Release()
 }
 
-// 三个不同 /64 才触发全槽冷却, 重复前缀不计数。
+// 两个不同 /64 才触发全槽冷却, 重复前缀不计数。
 func TestWarpSlotRateLimitQuorum(t *testing.T) {
 	pool := warpTestPool()
 	lease := func(slot int, prefix string) *warpSlotLease {
@@ -119,14 +119,11 @@ func TestWarpSlotRateLimitQuorum(t *testing.T) {
 	if lease(0, "a/64").MarkRateLimited() {
 		t.Fatal("单前缀不应触发全槽冷却")
 	}
-	if lease(1, "b/64").MarkRateLimited() {
-		t.Fatal("两个前缀不应触发全槽冷却")
-	}
-	if lease(2, "a/64").MarkRateLimited() {
+	if lease(1, "a/64").MarkRateLimited() {
 		t.Fatal("重复前缀不应计数")
 	}
-	if !lease(2, "c/64").MarkRateLimited() {
-		t.Fatal("三个不同前缀应触发全槽冷却")
+	if !lease(2, "b/64").MarkRateLimited() {
+		t.Fatal("两个不同前缀应触发全槽冷却")
 	}
 	if _, err := pool.pick(""); err == nil {
 		t.Fatal("全槽冷却期间应拒绝派发")

@@ -32,3 +32,5 @@ go test ./internal/relay/ -run 'TestOcProxyPoolPickSessionDedup|TestOcProxyRateL
 go test ./internal/relay/ -run 'TestOpencodeProxy429|TestOpencodeProxy403|TestWarpSlot' -v
 go build ./... && go vet ./...
 ```
+
+> 计票阈值与窗口已于 2026-11-01 调整为两个会话 / 24 小时，见 [新笔记](2026-11-01-opencode-429-quorum-two-sessions.md)。
