@@ -482,7 +482,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				effective, dispatchErr = effectiveChannelForKey(channel, selectedKey)
 			}
 			// 会话标识必须在选号之前派生: 同会话不重复使用同一代理账号/槽位。
-			if !opencodeSessionResolved && (proxyNeedsOpencodeAccount(channel) || isWarpProxy(channel)) {
+			if !opencodeSessionResolved && (channel.OpencodeCompat || isWarpProxy(channel)) {
 				callerScope := "console"
 				if apiKeyID > 0 {
 					callerScope = strconv.Itoa(apiKeyID)
