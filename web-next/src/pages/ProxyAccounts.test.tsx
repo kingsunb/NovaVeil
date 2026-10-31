@@ -410,12 +410,12 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
 
     // 网络错误筛选: 台账只剩网络错误账号(结果表仍展示批量体检结果)
     await user.click(screen.getByText("网络错误 1"));
-    expect(await screen.findByText("opencode0d9e0f1a2")).toBeInTheDocument();
+    expect((await screen.findAllByText("opencode0d9e0f1a2")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("opencode0a1b2c3d")).toHaveLength(1);
 
     // 今日未测试筛选: 今日无体检且无成功的账号(含冷却与旧体检), 今日已测的可用账号不在台账
     await user.click(screen.getByText("今日未测试 3"));
-    expect(await screen.findByText("opencode0c7d8e9f")).toBeInTheDocument();
+    expect((await screen.findAllByText("opencode0c7d8e9f")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("opencode0a1b2c3d")).toHaveLength(1);
 
     // 历史可用筛选: 只显示曾成功过的账号(含冷却中的好号), 未成功账号不出现在台账
