@@ -8,6 +8,7 @@ usage() {
 
 [[ $# -eq 3 ]] || usage
 OUTPUT_DIR="$1"
+: "${OUTPUT_DIR:?OUTPUT_DIR is required}"
 REVISION="$2"
 VERSION="$3"
 

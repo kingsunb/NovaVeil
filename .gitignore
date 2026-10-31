@@ -13,6 +13,7 @@ novaveil.exe
 
 # pnpm content-addressable store (local cache; never commit)
 .pnpm-store/
+/pnpm-lock.yaml
 .workbuddy/
 .codeartsdoer/
 /NovaVeil
@@ -40,4 +41,9 @@ Thumbs.db
 *.db-wal
 *.db-shm
 node_modules/
-pnpm-lock.yaml
+
+# Workspace temp artifacts (session exports, scratch scripts)
+.tmp-*
+.tmpdb/
+参考/
+__pycache__/
