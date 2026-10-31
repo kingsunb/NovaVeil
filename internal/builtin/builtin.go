@@ -54,6 +54,8 @@ func init() {
 //
 //   - OpenCode Free V2：公开免费端点，OpenAI Compatible；需要 OpenCode 会话头，
 //     后端 OpencodeCompat 机制负责注入 x-opencode-session。
+//   - OpenCode Free V1 备用1 / 备用2：V1 的同构副本，默认停用，供实例单独挂
+//     resin/WARP 代理做出出口隔离与容灾。
 //   - AI Horde Free：社区志愿算力，OpenAI Compatible 匿名端点；匿名 key 固定为
 //     0000000000，队列式响应较慢，不保证工具调用。
 //   - Pollinations Free：免 key OpenAI Compatible 端点，模型列表较大，
@@ -111,6 +113,45 @@ var BuiltinFreeChannels = []model.Channel{
 		//   - 额外发送 x-opencode-request(msg_ 递增 id), v2 形态也发此头(2026-10-30 实抓)。
 		// 两条渠道都打 /inference, 形态由 OpencodeLane 显式指定, 不再由 BaseURL 推断。
 		Name:           "OpenCode Free V1",
+		Type:           model.ChannelProviderOpenAI,
+		BaseURL:        "https://opencode.ai/inference",
+		Key:            "public",
+		OpencodeCompat: true,
+		OpencodeLane:   "v1",
+		Models: []model.ChannelModel{
+			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+		},
+	},
+	// OpenCode Free V1 备用1/备用2: V1 的同构副本, 供实例单独挂 resin/WARP 代理做
+	// 出口隔离与容灾(主渠道被身份惩罚时切换出口)。种子只补建, 默认停用, 代理与
+	// 启用由实例自配; 挂 WARP 的副本不参与自动体检(isWarpProxy 跳过)。
+	{
+		Name:           "OpenCode Free V1 备用1",
+		Type:           model.ChannelProviderOpenAI,
+		BaseURL:        "https://opencode.ai/inference",
+		Key:            "public",
+		OpencodeCompat: true,
+		OpencodeLane:   "v1",
+		Models: []model.ChannelModel{
+			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+		},
+	},
+	{
+		Name:           "OpenCode Free V1 备用2",
 		Type:           model.ChannelProviderOpenAI,
 		BaseURL:        "https://opencode.ai/inference",
 		Key:            "public",
