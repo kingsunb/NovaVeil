@@ -48,7 +48,7 @@ async function mockApi(page: Page) {
       version: "0.13.0",
       client_ip_count: 42,
       total_requests: 1024,
-      error_count_24h: 0,
+      error_count: 0,
       total_tokens_input: 100_000,
       total_tokens_output: 50_000,
       tokens_by_model: [
@@ -75,22 +75,8 @@ async function mockApi(page: Page) {
   await page.route("**/api/v1/setting/list", (route) => jsonResponse(route, []));
 }
 
-async function loginAs(page: Page) {
-  await page.addInitScript(() => {
-    localStorage.setItem(
-      "nv-auth",
-      JSON.stringify({
-        isAuthenticated: true,
-        username: "admin",
-        mustChangePassword: false,
-      }),
-    );
-  });
-}
-
-/** 完成登录态引导：通过侧栏 NavLink 导航（避开 auth 重定向问题） */
+/** 经侧栏 NavLink 导航；登录态由探活 mock 提供 */
 async function navTo(page: Page, label: string) {
-  await loginAs(page);
   await page.goto("/");
   // 等侧栏出现（已登录态）
   await page.waitForSelector('[data-testid="sidebar"]', { timeout: 10_000 });
@@ -106,7 +92,6 @@ test.describe("E2E 冒烟", () => {
   });
 
   test("首页直达 dashboard", async ({ page }) => {
-    await loginAs(page);
     await page.goto("/");
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 10_000 });
     await expect(page.getByRole("heading", { level: 2 })).toContainText("总览");
@@ -164,7 +149,6 @@ test.describe("E2E 冒烟", () => {
   });
 
   test("主题切换：light → dark", async ({ page }) => {
-    await loginAs(page);
     await page.goto("/");
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 10_000 });
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
@@ -173,7 +157,6 @@ test.describe("E2E 冒烟", () => {
   });
 
   test("侧边栏折叠：data-collapsed 切换 + localStorage 持久化", async ({ page }) => {
-    await loginAs(page);
     await page.goto("/");
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 10_000 });
     const sb = page.getByTestId("sidebar");
@@ -222,7 +205,6 @@ test.describe("E2E 冒烟", () => {
         }),
       }),
     );
-    await loginAs(page);
     await page.goto("/dashboard");
     await expect(page.getByText(/经典版控制台/)).toBeVisible();
     await expect(

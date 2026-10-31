@@ -626,6 +626,25 @@ describe("导出下载错误与文件名解析", () => {
       kind: "network",
     });
   });
+
+  it("导出响应体读取失败抛 kind=network 的 APIError", async () => {
+    // 中途断连时 fetch 已 resolve，读 body 的 text() 才抛 TypeError
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          text: () => Promise.reject(new TypeError("network error")),
+        } as unknown as Response),
+      ),
+    );
+    await expect(api.exportChannels()).rejects.toMatchObject({
+      status: 0,
+      kind: "network",
+    });
+  });
 });
 
 describe("归一化函数降级分支", () => {

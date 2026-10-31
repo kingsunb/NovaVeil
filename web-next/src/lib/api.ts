@@ -331,7 +331,13 @@ async function rawDownload(
   if (init.signal?.aborted) {
     throw new APIError(0, "请求已取消", undefined, "network");
   }
-  const text = await res.text();
+  let text: string;
+  try {
+    text = await res.text();
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    throw new APIError(0, message || "读取响应失败", undefined, "network");
+  }
   if (!res.ok) {
     let message = `请求失败（HTTP ${res.status}）`;
     try {

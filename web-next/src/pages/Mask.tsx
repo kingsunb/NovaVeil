@@ -46,7 +46,7 @@ const TERM_VALUE_MAX = 200;
 export default function MaskPage() {
   const qc = useQueryClient();
   const [adding, setAdding] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
   const configQ = useQuery({
     queryKey: ["mask-config"],
@@ -72,7 +72,48 @@ export default function MaskPage() {
   // 以最新 config 为底合并 patch 写回；onDone 仅在成功后执行（关弹窗/提示）。
   const put = (cfg: MaskConfig, onDone?: () => void) =>
     putMut.mutate(cfg, onDone ? { onSuccess: onDone } : undefined);
-  const patch = (p: Partial<MaskConfig>) => config && put({ ...config, ...p });
+  // 写前重取，避免旧快照覆盖别处更新
+  const refreshConfig = async (): Promise<MaskConfig | null> => {
+    const res = await configQ.refetch();
+    if (res.isError) {
+      const msg = res.error instanceof Error ? res.error.message : "";
+      toast.error(msg || "获取最新配置失败，请重试");
+      return null;
+    }
+    return res.data ?? null;
+  };
+  const patch = async (p: Partial<MaskConfig>) => {
+    const fresh = await refreshConfig();
+    if (!fresh) return;
+    put({ ...fresh, ...p });
+  };
+  const addTerm = async (term: MaskConfigTerm) => {
+    const fresh = await refreshConfig();
+    if (!fresh) return;
+    const freshTerms = fresh.custom_terms ?? [];
+    // 弹窗期间配置可能已更新，以最新数据查重
+    if (freshTerms.some((t) => t.value === term.value)) {
+      toast.error("该敏感词已存在");
+      return;
+    }
+    put({ ...fresh, custom_terms: [...freshTerms, term] }, () => {
+      setAdding(false);
+      toast.success("已添加");
+    });
+  };
+  const removeTerm = async () => {
+    if (!pendingDelete) return;
+    const fresh = await refreshConfig();
+    if (!fresh) return;
+    // 按词匹配最新快照，避免裸下标错删
+    const next = (fresh.custom_terms ?? []).filter(
+      (t) => t.value !== pendingDelete,
+    );
+    put({ ...fresh, custom_terms: next }, () => {
+      setPendingDelete(null);
+      toast.success("已删除");
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -102,7 +143,7 @@ export default function MaskPage() {
                 <Switch
                   checked={config.enabled}
                   disabled={putMut.isPending}
-                  onCheckedChange={(v) => patch({ enabled: v })}
+                  onCheckedChange={(v) => void patch({ enabled: v })}
                 />
                 {config.enabled ? (
                   <Pill tone="success">已启用</Pill>
@@ -165,7 +206,7 @@ export default function MaskPage() {
                                 checked={on}
                                 disabled={putMut.isPending}
                                 onCheckedChange={(v) =>
-                                  patch({
+                                  void patch({
                                     builtin_rule_switch: {
                                       ...switchMap,
                                       [r.label]: v,
@@ -241,7 +282,7 @@ export default function MaskPage() {
                               className="h-7 w-7 text-destructive hover:bg-destructive/10"
                               aria-label={`删除自定义拦截词 ${t.value}`}
                               disabled={putMut.isPending}
-                              onClick={() => setPendingDelete(i)}
+                              onClick={() => setPendingDelete(t.value)}
                             >
                               <Trash2 className="h-3.5 w-3.5" aria-hidden />
                             </Button>
@@ -266,16 +307,7 @@ export default function MaskPage() {
         pending={putMut.isPending}
         existingValues={terms.map((t) => t.value)}
         onClose={() => setAdding(false)}
-        onSubmit={(term) => {
-          if (!config) return;
-          put(
-            { ...config, custom_terms: [...terms, term] },
-            () => {
-              setAdding(false);
-              toast.success("已添加");
-            },
-          );
-        }}
+        onSubmit={(term) => void addTerm(term)}
       />
 
       {/* 删除确认弹窗 */}
@@ -289,7 +321,7 @@ export default function MaskPage() {
             <DialogDescription>
               词{" "}
               <span className="mono text-ink">
-                {pendingDelete !== null ? terms[pendingDelete]?.value : ""}
+                {pendingDelete ?? ""}
               </span>{" "}
               删除后立即生效，无法恢复。
             </DialogDescription>
@@ -304,14 +336,7 @@ export default function MaskPage() {
               variant="destructive"
               size="sm"
               loading={putMut.isPending}
-              onClick={() => {
-                if (pendingDelete === null || !config) return;
-                const next = terms.filter((_, i) => i !== pendingDelete);
-                put({ ...config, custom_terms: next }, () => {
-                  setPendingDelete(null);
-                  toast.success("已删除");
-                });
-              }}
+              onClick={() => void removeTerm()}
             >
               删除
             </Button>

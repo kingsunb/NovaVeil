@@ -40,7 +40,7 @@ async function mockApi(page: Page) {
       version: "0.13.0",
       client_ip_count: 42,
       total_requests: 1024,
-      error_count_24h: 0,
+      error_count: 0,
       total_tokens_input: 0,
       total_tokens_output: 0,
       tokens_by_model: [],
@@ -84,12 +84,8 @@ test.describe("axe a11y 扫描", () => {
     for (const theme of ["light", "dark"] as const) {
       test(`${p.name} (${theme}) 无 critical/serious 违规`, async ({ page }) => {
         // 用直接 goto + 侧栏导航（确保主题一致）
+        // 登录态由探活 mock 给出，仅预置主题
         await page.addInitScript((t) => {
-          localStorage.setItem("nv-auth", JSON.stringify({
-            isAuthenticated: true,
-            username: "admin",
-            mustChangePassword: false,
-          }));
           localStorage.setItem("nv-theme", t as string);
         }, theme);
         await page.goto("/");
