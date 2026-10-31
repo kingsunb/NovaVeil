@@ -16,6 +16,10 @@ Status: implemented
 
 会话 ID 经确认本就每请求新铸且不进缓存，未改动。
 
+## 追加：自动体检模型钉死（2026-11-01）
+
+自动体检（`AutoProbeOpencodeAccounts`）原以空模型名触发，由 `ocProbeModelName` 取渠道模型表首个 chat 模型——当前渠道 2 的表序首个是 `nemotron-3.5-lightning-free`，与维护者意图（体检 `deepseek-v4.1-flash-free`）不符。现钉死为 `ocProbeAutoModelName = "deepseek-v4.1-flash-free"`：渠道收录该模型即用之，未收录回退渠道自动选择。原因：体检模板（system 模型行、工具集）按该模型实抓对齐并验证到字节级，换模型会使模板形态漂移。面板手动体检不受影响（仍按操作者指定模型）。
+
 ## 备选方案
 
 - **每请求一个项目 ID**：同一轮内账号各自携带不同项目号，违背官方「一轮 = 一个项目目录」的形态语义，否。

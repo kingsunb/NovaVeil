@@ -403,6 +403,19 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 	}
 }
 
+// TestOcAutoProbeModelName 锁定自动体检模型钉死与回退:
+// 渠道含 deepseek-v4.1-flash-free 时钉死它, 不含时回退渠道自动选择。
+func TestOcAutoProbeModelName(t *testing.T) {
+	with := model.Channel{Models: []model.ChannelModel{{Name: "nemotron-3.5-lightning-free"}, {Name: ocProbeAutoModelName}}}
+	if got := ocAutoProbeModelName(with); got != ocProbeAutoModelName {
+		t.Fatalf("渠道含钉死模型时应返回它: %q", got)
+	}
+	without := model.Channel{Models: []model.ChannelModel{{Name: "nemotron-3.5-lightning-free"}}}
+	if got := ocAutoProbeModelName(without); got != "" {
+		t.Fatalf("渠道不含钉死模型时应回退自动选择: %q", got)
+	}
+}
+
 // TestNewOcProbeProjectID 验证项目号铸造: 40 位小写 hex 且跨体检轮次不重复。
 func TestNewOcProbeProjectID(t *testing.T) {
 	seen := make(map[string]bool, 16)

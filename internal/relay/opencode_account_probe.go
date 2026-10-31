@@ -30,6 +30,9 @@ import (
 // 批量账号体检: 钉住账号并发打与官方客户端同构的完整请求, 健康入池/被拒冷却, 供免费档直接复用。
 // 「账号」是渠道代理模板 {account} 占位符对应的 resin 出口会话, 不是登录凭据。
 const (
+	// ocProbeAutoModelName 是自动体检钉死的探测模型: 体检模板按它实抓对齐,
+	// 换模型会使 system 模型行与官方形态漂移。
+	ocProbeAutoModelName = "deepseek-v4.1-flash-free"
 	// ocProbeMaxAccounts 单次体检的账号数上限, 与台账容量对齐。
 	ocProbeMaxAccounts = 30_000
 	// ocProbeMaxConcurrency 单次体检的并发上限。
@@ -767,13 +770,22 @@ func AutoProbeOpencodeAccounts(ctx context.Context) error {
 		if len(due) == 0 {
 			continue
 		}
-		if _, err := ProbeOpencodeAccounts(ctx, channel.ID, due, 0, ocProbeDefaultConcurrency, 0, ""); err != nil {
+		if _, err := ProbeOpencodeAccounts(ctx, channel.ID, due, 0, ocProbeDefaultConcurrency, 0, ocAutoProbeModelName(channel)); err != nil {
 			log.Warnf("渠道 %d 自动体检失败: %v", channel.ID, err)
 			continue
 		}
 		log.Infof("渠道 %d 自动体检完成: %d 个账号", channel.ID, len(due))
 	}
 	return nil
+}
+
+// ocAutoProbeModelName 返回自动体检的探测模型: 钉死 deepseek-v4.1-flash-free,
+// 渠道未收录时回退渠道自动选择(空串交由 ocProbeModelName 决定)。
+func ocAutoProbeModelName(channel model.Channel) string {
+	if ocProbeChannelHasModel(channel, ocProbeAutoModelName) {
+		return ocProbeAutoModelName
+	}
+	return ""
 }
 
 // ocAutoProbeDueAccounts 选出到期账号: 距上次体检超过周期即到期, 最早未体检的优先。
