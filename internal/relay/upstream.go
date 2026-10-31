@@ -226,6 +226,28 @@ func (s *toolAliasStream) Current() *httpclient.StreamEvent {
 func (s *toolAliasStream) Close() error { return s.inner.Close() }
 func (s *toolAliasStream) Err() error   { return s.inner.Err() }
 
+// stickyEOFStream 保证首次 EOF 后不再触达底层流。
+// go-sse 解码器 EOF 后置空内部 scanner, 重复 Next 会空指针。
+type stickyEOFStream struct {
+	inner streams.Stream[*httpclient.StreamEvent]
+	done  bool
+}
+
+func (s *stickyEOFStream) Next() bool {
+	if s.done {
+		return false
+	}
+	if !s.inner.Next() {
+		s.done = true
+		return false
+	}
+	return true
+}
+
+func (s *stickyEOFStream) Current() *httpclient.StreamEvent { return s.inner.Current() }
+func (s *stickyEOFStream) Close() error                     { return s.inner.Close() }
+func (s *stickyEOFStream) Err() error                       { return s.inner.Err() }
+
 // sendPassthroughStream 发起同协议流式请求并预读有效性窗口, 窗口通过验证才算本轮取得可提交响应。
 // accept 非空时用它作为出站 Accept(OpenCode 免费档的官方值), 否则用默认 text/event-stream。
 func sendPassthroughStream(ctx context.Context, format llm.APIFormat, request *httpclient.Request, client *http.Client, accept string) (*upstreamResponse, error) {
@@ -608,6 +630,7 @@ func (m *conversionMiddleware) OnOutboundRawResponse(_ context.Context, response
 
 // OnOutboundRawStream 在转换前还原工具名。
 func (m *conversionMiddleware) OnOutboundRawStream(_ context.Context, events streams.Stream[*httpclient.StreamEvent]) (streams.Stream[*httpclient.StreamEvent], error) {
+	events = &stickyEOFStream{inner: events}
 	if len(m.toolAliases) == 0 {
 		return events, nil
 	}
