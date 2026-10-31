@@ -205,6 +205,10 @@ func ocAnthropicClientBody(stream bool) []byte {
 		ocContractClientTool(model.UpstreamProtocolAnthropic, "ReadFile") + `]}`)
 }
 
+func ocContainsToolName(data []byte, name string) bool {
+	return bytes.Contains(bytes.ReplaceAll(data, []byte(" "), nil), []byte(`"name":"`+name+`"`))
+}
+
 func TestOpencodePassthroughChatKeepsClientContract(t *testing.T) {
 	for _, lane := range []string{"v1", "v2"} {
 		for _, stream := range []bool{false, true} {
@@ -237,10 +241,10 @@ func TestOpencodePassthroughChatKeepsClientContract(t *testing.T) {
 					t.Fatalf("用户正文不得改写: %s", captured)
 				}
 				wire := ocExpectWireName("ReadFile")
-				if !bytes.Contains(captured, []byte(`"name":"`+wire+`"`)) {
+				if !ocContainsToolName(captured, wire) {
 					t.Fatalf("客户端工具未改名为摘要: %s", captured)
 				}
-				if bytes.Contains(captured, []byte(`"name":"ReadFile"`)) {
+				if ocContainsToolName(captured, "ReadFile") {
 					t.Fatalf("出站正文不得保留客户端工具原名: %s", captured)
 				}
 				if !bytes.Contains(captured, []byte("9007199254740993")) {
@@ -251,10 +255,10 @@ func TestOpencodePassthroughChatKeepsClientContract(t *testing.T) {
 				}
 				if stream {
 					delivered := ocDrainStream(t, resp)
-					if !bytes.Contains(delivered, []byte(`"name":"ReadFile"`)) {
+					if !ocContainsToolName(delivered, "ReadFile") {
 						t.Fatalf("流式响应未还原客户端工具名: %s", delivered)
 					}
-					if bytes.Contains(delivered, []byte(wire)) {
+					if ocContainsToolName(delivered, wire) {
 						t.Fatalf("流式响应不得泄露摘要工具名: %s", delivered)
 					}
 					if !bytes.Contains(delivered, []byte("identity:opencode")) {
@@ -350,10 +354,10 @@ func TestOpencodeConvertedKeepsClientContract(t *testing.T) {
 						t.Fatalf("转换后客户端工具参数定义丢失大整数: %s", captured)
 					}
 					wire := ocExpectWireName("ReadFile")
-					if !bytes.Contains(captured, []byte(`"name":"`+wire+`"`)) {
+					if !ocContainsToolName(captured, wire) {
 						t.Fatalf("客户端工具未改名为摘要: %s", captured)
 					}
-					if bytes.Contains(captured, []byte(`"name":"ReadFile"`)) {
+					if ocContainsToolName(captured, "ReadFile") {
 						t.Fatalf("出站正文不得保留客户端工具原名: %s", captured)
 					}
 					if !json.Valid(captured) {
@@ -366,10 +370,10 @@ func TestOpencodeConvertedKeepsClientContract(t *testing.T) {
 						defer resp.Close()
 						delivered = resp.body
 					}
-					if !bytes.Contains(delivered, []byte(`"ReadFile"`)) {
+					if !ocContainsToolName(delivered, "ReadFile") {
 						t.Fatalf("客户端响应未还原工具名: %s", delivered)
 					}
-					if bytes.Contains(delivered, []byte(wire)) {
+					if ocContainsToolName(delivered, wire) {
 						t.Fatalf("客户端响应不得泄露摘要工具名: %s", delivered)
 					}
 					if !bytes.Contains(delivered, []byte("identity:opencode")) {
