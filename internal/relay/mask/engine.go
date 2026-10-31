@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
+	"sync/atomic"
 )
 
 // Engine 脱敏引擎, 持有会话存储与内置规则集。
@@ -74,9 +74,12 @@ func (e *Engine) Apply(body string, sessionKey string, enabledRules map[string]b
 	}
 
 	var rules []Rule
-	for _, term := range terms {
-		if term.Value != "" {
-			rules = append(rules, Rule{Label: "TERM", Pattern: customTermRegex(term.Value)})
+	if len(terms) > 0 {
+		table := customTermTable(terms)
+		for _, term := range terms {
+			if term.Value != "" {
+				rules = append(rules, Rule{Label: "TERM", Pattern: table[term.Value]})
+			}
 		}
 	}
 	for _, rule := range e.rules {
@@ -112,7 +115,55 @@ func (e *Engine) ApplyBytes(body []byte, sessionKey string, enabledRules map[str
 
 // ---- 自定义敏感词正则缓存 ----
 
-var customTermRegexCache sync.Map // value -> *regexp.Regexp
+// customTermRegexCache 保存当前词集的整表编译结果。
+// 词集变化时整表重建, 废弃词的正则随之释放。
+var customTermRegexCache atomic.Pointer[map[string]*regexp.Regexp]
+
+func init() {
+	customTermRegexCache.Store(&map[string]*regexp.Regexp{})
+}
+
+// customTermTable 返回覆盖全部词项的编译整表。
+// 词集增减均整表重建, 废弃词不残留; 并发重建各自等价。
+func customTermTable(terms []CustomTerm) map[string]*regexp.Regexp {
+	current := customTermRegexCache.Load()
+	if current == nil {
+		current = &map[string]*regexp.Regexp{}
+	}
+	if customTermTableHits(current, terms) {
+		return *current
+	}
+	next := make(map[string]*regexp.Regexp, len(terms))
+	for _, t := range terms {
+		if t.Value == "" {
+			continue
+		}
+		// 复用旧表已编译项, 仅补编译新词。
+		if rx, ok := (*current)[t.Value]; ok {
+			next[t.Value] = rx
+		} else {
+			next[t.Value] = compileCustomTerm(t.Value)
+		}
+	}
+	customTermRegexCache.CompareAndSwap(current, &next)
+	return next
+}
+
+// customTermTableHits 判断缓存表与当前词集是否恰好一致:
+// 词项全在表中且无多余残留(纯删词场景)。
+func customTermTableHits(current *map[string]*regexp.Regexp, terms []CustomTerm) bool {
+	count := 0
+	for _, term := range terms {
+		if term.Value == "" {
+			continue
+		}
+		count++
+		if _, ok := (*current)[term.Value]; !ok {
+			return false
+		}
+	}
+	return len(*current) == count
+}
 
 // isASCIIWord 判断字符串是否全为 ASCII 词字符([A-Za-z0-9_]), 用于决定是否加 \b 词边界。
 // 中文等非 ASCII 词不适用 \b(中文与中文间不存在词边界), 故只对纯 ASCII 词加边界。
@@ -126,19 +177,15 @@ func isASCIIWord(s string) bool {
 	return true
 }
 
-// customTermRegex 构造并缓存自定义敏感词的整词匹配正则。纯 ASCII 词加 \b 边界, 否则字面匹配。
-func customTermRegex(value string) *regexp.Regexp {
-	if v, ok := customTermRegexCache.Load(value); ok {
-		return v.(*regexp.Regexp)
-	}
+// compileCustomTerm 编译单个词的整词匹配正则。
+// 纯 ASCII 词加 \b 边界, 否则字面匹配。
+func compileCustomTerm(value string) *regexp.Regexp {
 	escaped := regexp.QuoteMeta(value)
 	pat := escaped
 	if isASCIIWord(value) {
 		pat = `\b` + escaped + `\b`
 	}
-	rx := regexp.MustCompile(pat)
-	customTermRegexCache.Store(value, rx)
-	return rx
+	return regexp.MustCompile(pat)
 }
 
 // ---- 特征预检（未含必含特征则跳过该规则正则，避免全量扫描）----

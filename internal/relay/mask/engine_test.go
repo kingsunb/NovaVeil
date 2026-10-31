@@ -293,3 +293,25 @@ func TestEngine_JSONStringValuesMasked(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(restored2), &back))
 	assert.Equal(t, "13800138000", back["content"], "还原后语义应与原文一致")
 }
+
+// TestCustomTermTableDropsRemovedTerms 验证词集变化后整表重建:
+// 废弃词的正则不残留, 新词可用, 未变更词复用同一编译结果。
+func TestCustomTermTableDropsRemovedTerms(t *testing.T) {
+	first := customTermTable([]CustomTerm{{Value: "cat"}, {Value: "张三"}})
+	require.Contains(t, first, "cat")
+	require.Contains(t, first, "张三")
+
+	second := customTermTable([]CustomTerm{{Value: "dog"}, {Value: "张三"}})
+	assert.NotContains(t, second, "cat", "废弃词应从新表移除")
+	assert.Contains(t, second, "dog")
+	assert.Contains(t, second, "张三")
+	assert.Same(t, first["张三"], second["张三"], "未变更词应复用编译结果")
+
+	current := *customTermRegexCache.Load()
+	assert.NotContains(t, current, "cat", "全局缓存应随重建废弃旧词")
+	assert.Contains(t, current, "dog")
+
+	// 词集未变时返回同一张表, 不重复编译。
+	again := customTermTable([]CustomTerm{{Value: "dog"}, {Value: "张三"}})
+	assert.Same(t, second["dog"], again["dog"])
+}
