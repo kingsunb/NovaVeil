@@ -234,9 +234,30 @@ func opencodeProxyTestConfig() model.GroupRelayConfig {
 
 func postOpencodeProxyRequest(t *testing.T, group model.Group, ctx context.Context) *httptest.ResponseRecorder {
 	t.Helper()
+	return postOpencodeProxyRequestWithContent(t, group, "hi", ctx)
+}
+
+// 不同首条 user 内容派生不同会话标识, 用于构造多会话 429 计票场景。
+func postOpencodeProxyRequestWithContent(t *testing.T, group model.Group, content string, ctx context.Context) *httptest.ResponseRecorder {
+	t.Helper()
 	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
-	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, group.Name)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":%q}],"stream":false}`, group.Name, content)
 	return postRelayJSON(t, engine, path, body, "", ctx)
+}
+
+// prioritizeOpencodeProxyAccount 把账号最近成功时间置顶, 使下一轮选号优先命中它。
+func prioritizeOpencodeProxyAccount(t *testing.T, channelID int, account string) {
+	t.Helper()
+	pool := ocProxyPoolFor(channelID)
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	loadOpencodeProxyPool(pool, channelID)
+	state, ok := pool.accounts[account]
+	if !ok {
+		t.Fatalf("账号 %s 不在池内", account)
+	}
+	state.verified = true
+	state.lastSuccessAt = time.Now()
 }
 
 func TestOpencodeProxy403RetriesAnotherAccount(t *testing.T) {
@@ -298,7 +319,7 @@ func TestOpencodeProxy403RetriesAnotherAccount(t *testing.T) {
 	}
 }
 
-func TestOpencodeProxy429CoolsAccountUntilUTCMidnightAndRetriesAnother(t *testing.T) {
+func TestOpencodeProxy429SingleSessionDoesNotCoolAccount(t *testing.T) {
 	setupFailoverTest(t)
 	resetChannelKeyHealth()
 	t.Cleanup(resetChannelKeyHealth)
@@ -331,12 +352,13 @@ func TestOpencodeProxy429CoolsAccountUntilUTCMidnightAndRetriesAnother(t *testin
 	if !ok {
 		t.Fatalf("被限速账号应留在池内, 实际 %+v", pool)
 	}
-	assertOpencodeProxyCooldownDuration(t, bad.cooldownUntil, opencodeRejectCooldown("", time.Now()))
+	if !bad.cooldownUntil.IsZero() {
+		t.Fatalf("单会话 429 只计票不应冷却账号, 实际 %v", bad.cooldownUntil)
+	}
 	if state, ok := pool["good-account"]; !ok || !state.cooldownUntil.IsZero() {
 		t.Fatalf("成功账号不应冷却, 实际 %+v", state)
 	}
 	assertOpencodeProxyKeysNotCooling(t, channel)
-	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", opencodeRejectCooldown("", time.Now()))
 
 	itemID := group.Items[0].ID
 	route := routeSnapshot(t, group.ID)
@@ -353,6 +375,46 @@ func TestOpencodeProxy429CoolsAccountUntilUTCMidnightAndRetriesAnother(t *testin
 	if state.Status != StatusSuccess || len(state.Attempts) != 2 || state.Attempts[0].Outcome != AttemptFailed || state.Attempts[1].Outcome != AttemptSuccess {
 		t.Fatalf("应记录失败后成功两轮, 实际 %s/%+v", state.Status, state.Attempts)
 	}
+}
+
+// 三个不同会话都报 429 才冷却账号, 前两个会话仅换号不冷却。
+func TestOpencodeProxy429QuorumCoolsAccount(t *testing.T) {
+	setupFailoverTest(t)
+	resetChannelKeyHealth()
+	t.Cleanup(resetChannelKeyHealth)
+	probe := newOpencodeProxyProbe(t, func(account string) (int, []byte) {
+		if account == "bad-account" {
+			return http.StatusTooManyRequests, []byte(`{"error":{"message":"rate limited"}}`)
+		}
+		return http.StatusOK, chatCompletionBody("chatcmpl-opencode-429-quorum", "ok-from-next-account", 3, 5)
+	})
+	channel := createOpencodeProxyTestChannel(t, probe.template,
+		model.ChannelKey{Key: "single-alpha", Remark: "alpha"},
+	)
+	seedOpencodeProxyAccounts(t, channel.ID, map[string]time.Time{
+		"bad-account":  time.Now(),
+		"good-account": time.Now().Add(-time.Hour),
+	})
+	group := createIntegrationGroup(t, "opencode-proxy-429-quorum", opencodeProxyTestConfig(), integrationLeafItem(t, channel, channel.Models[0].Name))
+
+	for i, content := range []string{"hi-quorum-1", "hi-quorum-2", "hi-quorum-3"} {
+		// 换号成功会刷新 good-account 的最近成功时间, 每轮先把 bad-account 置顶,
+		// 保证每个会话都先打 bad-account 再换号成功, 成员不会因持续失败被冷却。
+		prioritizeOpencodeProxyAccount(t, channel.ID, "bad-account")
+		recorder := postOpencodeProxyRequestWithContent(t, group, content, nil)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("第 %d 个会话换号后应成功, 实际 %d: %s", i+1, recorder.Code, recorder.Body.String())
+		}
+		pool := opencodeProxyPoolSnapshot(t, channel.ID)
+		if i < 2 && !pool["bad-account"].cooldownUntil.IsZero() {
+			t.Fatalf("第 %d 个会话后不应冷却账号, 实际 %v", i+1, pool["bad-account"].cooldownUntil)
+		}
+	}
+
+	pool := opencodeProxyPoolSnapshot(t, channel.ID)
+	assertOpencodeProxyCooldownDuration(t, pool["bad-account"].cooldownUntil, opencodeRejectCooldown("", time.Now()))
+	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", opencodeRejectCooldown("", time.Now()))
+	assertOpencodeProxyKeysNotCooling(t, channel)
 }
 
 func TestOpencodeProxy429StopsAtRetryLimit(t *testing.T) {
@@ -383,21 +445,17 @@ func TestOpencodeProxy429StopsAtRetryLimit(t *testing.T) {
 		unique[account] = struct{}{}
 	}
 	if len(unique) != len(seen) {
-		t.Fatalf("429 冷却账号不应被复用, 实际 %v", seen)
+		t.Fatalf("同会话不应重复使用同一账号, 实际 %v", seen)
 	}
 	pool := opencodeProxyPoolSnapshot(t, channel.ID)
 	if len(pool) != len(unique) {
-		t.Fatalf("尝试过的账号应全部入冷却槽, 实际 %+v", pool)
+		t.Fatalf("尝试过的账号应全部入池, 实际 %+v", pool)
 	}
 	for account, state := range pool {
-		if !state.cooldownUntil.After(time.Now()) {
-			t.Fatalf("账号 %s 应处于冷却中, 实际 %+v", account, state)
+		if !state.cooldownUntil.IsZero() {
+			t.Fatalf("单会话 429 不应冷却账号 %s, 实际 %+v", account, state)
 		}
 	}
-	waitFor(t, 2*time.Second, func() bool {
-		rows, err := op.LoadOpencodeProxyAccounts(channel.ID)
-		return err == nil && len(rows) == len(pool)
-	})
 
 	itemID := group.Items[0].ID
 	route := routeSnapshot(t, group.ID)
@@ -444,7 +502,9 @@ func TestOpencodeProxy429MultiKeySwitchesAccountWithoutKeyCooldown(t *testing.T)
 	if !ok {
 		t.Fatalf("被限速账号应留在池内, 实际 %+v", pool)
 	}
-	assertOpencodeProxyCooldownDuration(t, bad.cooldownUntil, opencodeRejectCooldown("", time.Now()))
+	if !bad.cooldownUntil.IsZero() {
+		t.Fatalf("单会话 429 只计票不应冷却账号, 实际 %v", bad.cooldownUntil)
+	}
 	assertOpencodeProxyKeysNotCooling(t, channel)
 
 	itemID := group.Items[0].ID
@@ -674,8 +734,8 @@ func TestOpencodeProxy403ConcurrentRetry(t *testing.T) {
 	}
 }
 
-// TestOpencodeProxy429UsesUpstreamRetryAfter 上游给出可信 Retry-After 时按其冷却,
-// 不再回落到 UTC 零点: 免费档的 429 携带到配额重置的精确秒数。
+// TestOpencodeProxy429UsesUpstreamRetryAfter 三个会话报 429 触发冷却后,
+// 上游给出可信 Retry-After 时按其冷却, 不再回落到 UTC 零点。
 func TestOpencodeProxy429UsesUpstreamRetryAfter(t *testing.T) {
 	setupFailoverTest(t)
 	resetChannelKeyHealth()
@@ -696,9 +756,12 @@ func TestOpencodeProxy429UsesUpstreamRetryAfter(t *testing.T) {
 	})
 	group := createIntegrationGroup(t, "opencode-proxy-429-retry-after", opencodeProxyTestConfig(), integrationLeafItem(t, channel, channel.Models[0].Name))
 
-	recorder := postOpencodeProxyRequest(t, group, nil)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "ok-from-next-account") {
-		t.Fatalf("429 换号后应成功, 实际 %d: %s", recorder.Code, recorder.Body.String())
+	for _, content := range []string{"hi-retry-after-1", "hi-retry-after-2", "hi-retry-after-3"} {
+		prioritizeOpencodeProxyAccount(t, channel.ID, "bad-account")
+		recorder := postOpencodeProxyRequestWithContent(t, group, content, nil)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("会话 %s 换号后应成功, 实际 %d: %s", content, recorder.Code, recorder.Body.String())
+		}
 	}
 	pool := opencodeProxyPoolSnapshot(t, channel.ID)
 	bad, ok := pool["bad-account"]

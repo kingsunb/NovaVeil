@@ -209,7 +209,7 @@ func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName,
 	if proxyNeedsOpencodeAccount(channel) {
 		candidate := account
 		if candidate == "" {
-			candidate = pickOpencodeProxyAccount(ctx, channel.ID)
+			candidate = pickOpencodeProxyAccount(ctx, channel.ID, "")
 		}
 		resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate)
 		if resolveErr != nil {

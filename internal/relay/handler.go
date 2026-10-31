@@ -183,6 +183,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		var requestRandomValue string
 		var requestOpencodeSession string
 		requestRandomValueResolved := false
+		opencodeSessionResolved := false
 		exclude := 0                                   // 本请求已放弃的成员 ID, 重扫时跳过以免再次选中。
 		refSkips := 0                                  // 本请求内结构性跳过的引用计数, 超过成员总数说明全部引用均不可用。
 		nonRetryable := make(map[int]bool)             // 出现过确定性 4xx(400/404/422)的成员集合, 全部成员都出现时终止请求。
@@ -480,11 +481,20 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 写入该 Key 的明文并使用其 Account/ID 解析代理模板; Remark 仅展示不参与。
 				effective, dispatchErr = effectiveChannelForKey(channel, selectedKey)
 			}
+			// 会话标识必须在选号之前派生: 同会话不重复使用同一代理账号/槽位。
+			if !opencodeSessionResolved && (proxyNeedsOpencodeAccount(channel) || isWarpProxy(channel)) {
+				callerScope := "console"
+				if apiKeyID > 0 {
+					callerScope = strconv.Itoa(apiKeyID)
+				}
+				requestOpencodeSession = opencodeid.DeriveSessionID(raw.Headers, raw.Body, callerScope, isOpencodeV1Lane(channel))
+				opencodeSessionResolved = true
+			}
 			// OpenCode 免费档按出口 IP 轮换代理账号; WARP 走槽位, 不生成树脂别名。
 			proxyAccount := ""
 			var warpLease *warpSlotLease
 			if dispatchErr == nil && !isWarpProxy(channel) && proxyNeedsOpencodeAccount(channel) {
-				candidate := pickOpencodeProxyAccount(ctx, channel.ID)
+				candidate := pickOpencodeProxyAccount(ctx, channel.ID, requestOpencodeSession)
 				if resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate); resolveErr == nil {
 					addr := resolved.String()
 					effective.ChannelProxy = &addr
@@ -551,7 +561,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			roundCtx, cancelRound := context.WithCancelCause(ctx)
 			lifecycle = newRoundLifecycle(cancelRound)
 			if isWarpProxy(channel) && channel.ChannelProxy != nil && model.HasAccountPlaceholder(*channel.ChannelProxy) {
-				lease, pickErr := pickWarpSlot(roundCtx, channel)
+				lease, pickErr := pickWarpSlot(roundCtx, channel, requestOpencodeSession)
 				if pickErr != nil {
 					lifecycle.Stop()
 					releaseRefChainHops(hops)
@@ -615,11 +625,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 请求级随机头值在首次发起上游前一次性解析, 之后所有重试复用同一值, 不在每次重试重新生成。
 			if !requestRandomValueResolved {
 				requestRandomValue = resolveRequestRandomValue(scopeKey, channel.ID, selectedKey.ID)
-				callerScope := "console"
-				if apiKeyID > 0 {
-					callerScope = strconv.Itoa(apiKeyID)
-				}
-				requestOpencodeSession = opencodeid.DeriveSessionID(raw.Headers, raw.Body, callerScope, isOpencodeV1Lane(channel))
 				requestRandomValueResolved = true
 			}
 			var result *upstreamResponse
@@ -683,7 +688,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					if code, ok := UpstreamStatusCode(err); ok {
 						proxyAccountRejection = code == http.StatusForbidden || code == http.StatusTooManyRequests
 						if proxyAccountRejection {
-							markOpencodeProxyRejected(channel.ID, proxyAccount, UpstreamRetryAfter(err))
+							if code == http.StatusTooManyRequests {
+								markOpencodeProxyRateLimited(channel.ID, proxyAccount, requestOpencodeSession, UpstreamRetryAfter(err))
+							} else {
+								markOpencodeProxyRejected(channel.ID, proxyAccount, UpstreamRetryAfter(err))
+							}
 						}
 					}
 					if !errors.Is(err, context.Canceled) {

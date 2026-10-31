@@ -68,3 +68,39 @@ func TestOpencodeRejectCooldown(t *testing.T) {
 		})
 	}
 }
+
+// 同一会话不重复使用同一账号, 账号耗尽后铸造新账号, 其他会话仍可复用。
+func TestOcProxyPoolPickSessionDedup(t *testing.T) {
+	now := time.Now()
+	pool := &ocProxyPool{accounts: map[string]*ocProxyAccount{
+		"a": {account: "a", verified: true, lastSuccessAt: now},
+		"b": {account: "b", verified: true, lastSuccessAt: now.Add(-time.Hour)},
+	}}
+
+	first := pool.pickLocked(now, "s1")
+	second := pool.pickLocked(now, "s1")
+	assert.NotEqual(t, first.account, second.account, "同会话第二次选号不应重复")
+	assert.Equal(t, "a", first.account, "首次应选最近成功账号")
+
+	assert.Equal(t, "a", pool.pickLocked(now, "s2").account, "其他会话不受去重影响")
+
+	third := pool.pickLocked(now, "s1")
+	assert.NotContains(t, []string{first.account, second.account}, third.account, "会话内账号耗尽后应铸造新账号")
+	assert.Equal(t, third.account, pool.accounts[third.account].account, "新账号应入池")
+}
+
+// 三个不同会话在窗口内报 429 才冷却, 重复会话不计票, 过期票作废。
+func TestOcProxyRateLimitedQuorum(t *testing.T) {
+	now := time.Now()
+	pool := &ocProxyPool{accounts: map[string]*ocProxyAccount{}}
+
+	assert.False(t, pool.recordRateLimitedLocked("s1", now), "单会话不应冷却")
+	assert.False(t, pool.recordRateLimitedLocked("s2", now), "两个会话不应冷却")
+	assert.False(t, pool.recordRateLimitedLocked("s1", now), "重复会话不计票")
+	assert.True(t, pool.recordRateLimitedLocked("s3", now), "三个不同会话应触发冷却")
+	assert.Empty(t, pool.rateLimited, "触发后计票应清零")
+
+	fresh := &ocProxyPool{accounts: map[string]*ocProxyAccount{}}
+	fresh.recordRateLimitedLocked("s1", now)
+	assert.False(t, fresh.recordRateLimitedLocked("s2", now.Add(ocProxy429VoteWindow+time.Minute)), "窗口过期后旧票不应累计")
+}

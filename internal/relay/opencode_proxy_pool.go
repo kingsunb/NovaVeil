@@ -27,6 +27,12 @@ const (
 	ocProxyMaxRetries = 3
 	// ocPruneInterval 限制淘汰查询频率, 避免每次落库都全表排序。
 	ocPruneInterval = 10 * time.Minute
+	// ocProxySessionTTL 是会话内账号去重的记忆时长。
+	ocProxySessionTTL = 24 * time.Hour
+	// ocProxy429VoteWindow 是 429 计票窗口。
+	ocProxy429VoteWindow = 10 * time.Minute
+	// ocProxy429Quorum 是触发冷却所需的不同会话数。
+	ocProxy429Quorum = 3
 )
 
 // ocProxyAccount 是一个代理账号的进程内状态。
@@ -44,6 +50,10 @@ type ocProxyPool struct {
 	loaded      bool
 	lastPruneAt time.Time
 	accounts    map[string]*ocProxyAccount
+	// sessionUsed 记录会话已用过的账号, 保证同会话不重复请求同一账号。
+	sessionUsed map[string]map[string]time.Time
+	// rateLimited 按会话累计 429 计票, 达到 quorum 才冷却账号。
+	rateLimited map[string]time.Time
 }
 
 var ocProxyPools sync.Map
@@ -53,7 +63,11 @@ func ocProxyPoolFor(channelID int) *ocProxyPool {
 	if cached, ok := ocProxyPools.Load(channelID); ok {
 		return cached.(*ocProxyPool)
 	}
-	pool := &ocProxyPool{accounts: make(map[string]*ocProxyAccount)}
+	pool := &ocProxyPool{
+		accounts:    make(map[string]*ocProxyAccount),
+		sessionUsed: make(map[string]map[string]time.Time),
+		rateLimited: make(map[string]time.Time),
+	}
 	actual, _ := ocProxyPools.LoadOrStore(channelID, pool)
 	return actual.(*ocProxyPool)
 }
@@ -90,15 +104,32 @@ func proxyNeedsOpencodeAccount(channel model.Channel) bool {
 }
 
 // pickOpencodeProxyAccount 选出本轮使用的账号并占用一个并发槽位。
-func pickOpencodeProxyAccount(ctx context.Context, channelID int) string {
+// session 非空时同一会话不重复使用同一账号, 会话内账号耗尽后铸造新账号。
+func pickOpencodeProxyAccount(ctx context.Context, channelID int, session string) string {
 	pool := ocProxyPoolFor(channelID)
 	pool.mu.Lock()
 	loadOpencodeProxyPool(pool, channelID)
-	now := time.Now()
+	picked := pool.pickLocked(time.Now(), session)
+	picked.active++
+	account := picked.account
+	pool.mu.Unlock()
+	context.AfterFunc(ctx, func() { releaseOpencodeProxyAccount(channelID, account) })
+	return account
+}
+
+// pickLocked 按可用性与最近成功优先选号, 并排除本会话已用过的账号; 调用方需持锁。
+func (p *ocProxyPool) pickLocked(now time.Time, session string) *ocProxyAccount {
+	p.pruneLocked(now)
+	used := p.sessionUsed[session]
 	var picked *ocProxyAccount
-	for _, candidate := range pool.accounts {
+	for _, candidate := range p.accounts {
 		if !ocProxyUsable(candidate, now) {
 			continue
+		}
+		if session != "" {
+			if _, seen := used[candidate.account]; seen {
+				continue
+			}
 		}
 		if picked == nil || candidate.verified && (!picked.verified || candidate.lastSuccessAt.After(picked.lastSuccessAt)) {
 			picked = candidate
@@ -106,14 +137,38 @@ func pickOpencodeProxyAccount(ctx context.Context, channelID int) string {
 	}
 	if picked == nil {
 		picked = &ocProxyAccount{account: newOpencodeProxyAccount()}
-		pool.accounts[picked.account] = picked
-		pool.trimLocked(picked.account)
+		p.accounts[picked.account] = picked
+		p.trimLocked(picked.account)
 	}
-	picked.active++
-	account := picked.account
-	pool.mu.Unlock()
-	context.AfterFunc(ctx, func() { releaseOpencodeProxyAccount(channelID, account) })
-	return account
+	if session != "" {
+		if p.sessionUsed == nil {
+			p.sessionUsed = map[string]map[string]time.Time{}
+		}
+		if p.sessionUsed[session] == nil {
+			p.sessionUsed[session] = map[string]time.Time{}
+		}
+		p.sessionUsed[session][picked.account] = now
+	}
+	return picked
+}
+
+// pruneLocked 清理过期的会话记忆与 429 计票; 调用方需持锁。
+func (p *ocProxyPool) pruneLocked(now time.Time) {
+	for session, used := range p.sessionUsed {
+		for account, at := range used {
+			if now.Sub(at) >= ocProxySessionTTL {
+				delete(used, account)
+			}
+		}
+		if len(used) == 0 {
+			delete(p.sessionUsed, session)
+		}
+	}
+	for session, at := range p.rateLimited {
+		if now.Sub(at) >= ocProxy429VoteWindow {
+			delete(p.rateLimited, session)
+		}
+	}
 }
 
 // ocProxyUsable 报告账号是否未冷却、未过期且并发未满。
@@ -231,9 +286,41 @@ func markOpencodeProxyRealFailure(channelID int, account string) {
 	}()
 }
 
-// 403/429 被拒后冷却账号并异步落库, 不区分拒绝原因。
+// 403 属于凭据/权限拒绝, 单次即冷却账号并异步落库。
 func markOpencodeProxyRejected(channelID int, account, retryAfter string) {
 	markOpencodeProxyCooldown(channelID, account, opencodeRejectCooldown(retryAfter, time.Now()))
+}
+
+// recordRateLimitedLocked 记录一次会话 429, 返回是否达到冷却 quorum; 调用方需持锁。
+func (p *ocProxyPool) recordRateLimitedLocked(session string, now time.Time) bool {
+	p.pruneLocked(now)
+	if p.rateLimited == nil {
+		p.rateLimited = map[string]time.Time{}
+	}
+	p.rateLimited[session] = now
+	if len(p.rateLimited) < ocProxy429Quorum {
+		return false
+	}
+	p.rateLimited = map[string]time.Time{}
+	return true
+}
+
+// markOpencodeProxyRateLimited 处理 429: 窗口内三个不同会话报出才冷却账号,
+// 单会话仅计票不冷却; 无会话标识时无法计票, 回退单次冷却避免反复使用被限流账号。
+func markOpencodeProxyRateLimited(channelID int, account, session, retryAfter string) {
+	now := time.Now()
+	if session == "" {
+		markOpencodeProxyCooldown(channelID, account, opencodeRejectCooldown(retryAfter, now))
+		return
+	}
+	pool := ocProxyPoolFor(channelID)
+	pool.mu.Lock()
+	loadOpencodeProxyPool(pool, channelID)
+	quorum := pool.recordRateLimitedLocked(session, now)
+	pool.mu.Unlock()
+	if quorum {
+		markOpencodeProxyCooldown(channelID, account, opencodeRejectCooldown(retryAfter, now))
+	}
 }
 
 // opencodeRejectCooldown 按上游 Retry-After(秒)定冷却时长; 缺失时回落到下一个

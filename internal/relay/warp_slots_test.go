@@ -31,7 +31,7 @@ func TestWarpSlotPoolPickRoundRobinAndRelease(t *testing.T) {
 		warpSlotInfo{Slot: 2, Account: "warp-2", Egress: "c", Prefix: "p2/64", State: "active"},
 	)
 
-	first, err := pool.pick()
+	first, err := pool.pick("")
 	if err != nil {
 		t.Fatalf("pick: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestWarpSlotPoolPickRoundRobinAndRelease(t *testing.T) {
 		t.Fatalf("Release 后不应残留占位: %+v", pool.reserved)
 	}
 
-	second, err := pool.pick()
+	second, err := pool.pick("")
 	if err != nil {
 		t.Fatalf("第二次 pick: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestWarpSlotPoolPickBusy(t *testing.T) {
 		warpSlotInfo{Slot: 0, Account: "warp-0", Egress: "a", State: "active", InFlight: 1},
 		warpSlotInfo{Slot: 1, Account: "warp-1", Egress: "b", State: "busy"},
 	)
-	_, err := pool.pick()
+	_, err := pool.pick("")
 	busy, ok := err.(*warpSlotsBusyError)
 	if !ok {
 		t.Fatalf("期望忙错误, 实际 %v", err)
@@ -71,6 +71,43 @@ func TestWarpSlotPoolPickBusy(t *testing.T) {
 	if busy.RetryAfter < time.Second {
 		t.Fatalf("RetryAfter 应至少 1s, 实际 %v", busy.RetryAfter)
 	}
+}
+
+// 同一会话不重复使用同一槽位, 槽位耗尽后允许复用, 其他会话不受影响。
+func TestWarpSlotPoolPickSessionDedup(t *testing.T) {
+	pool := warpTestPool(
+		warpSlotInfo{Slot: 0, Account: "warp-0", Egress: "a", State: "active"},
+		warpSlotInfo{Slot: 1, Account: "warp-1", Egress: "b", State: "active"},
+		warpSlotInfo{Slot: 2, Account: "warp-2", Egress: "c", State: "active"},
+	)
+
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		lease, err := pool.pick("s1")
+		if err != nil {
+			t.Fatalf("第 %d 次 pick: %v", i+1, err)
+		}
+		if seen[lease.Account()] {
+			t.Fatalf("同会话重复槽位 %q", lease.Account())
+		}
+		seen[lease.Account()] = true
+		lease.Release()
+	}
+	if len(seen) != 3 {
+		t.Fatalf("同会话应占满 3 个不同槽位, 实际 %d", len(seen))
+	}
+
+	fourth, err := pool.pick("s1")
+	if err != nil {
+		t.Fatalf("槽位耗尽后应允许复用: %v", err)
+	}
+	fourth.Release()
+
+	other, err := pool.pick("s2")
+	if err != nil {
+		t.Fatalf("其他会话 pick: %v", err)
+	}
+	other.Release()
 }
 
 // 三个不同 /64 才触发全槽冷却, 重复前缀不计数。
@@ -91,7 +128,7 @@ func TestWarpSlotRateLimitQuorum(t *testing.T) {
 	if !lease(2, "c/64").MarkRateLimited() {
 		t.Fatal("三个不同前缀应触发全槽冷却")
 	}
-	if _, err := pool.pick(); err == nil {
+	if _, err := pool.pick(""); err == nil {
 		t.Fatal("全槽冷却期间应拒绝派发")
 	}
 }

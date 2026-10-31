@@ -26,6 +26,8 @@ const (
 	warpSlotNetworkSuspect = 5 * time.Second
 	// warpSlotsRetryCap 限制返回给客户端的 Retry-After。
 	warpSlotsRetryCap = time.Minute
+	// warpSlotSessionTTL 是会话内槽位去重的记忆时长。
+	warpSlotSessionTTL = 24 * time.Hour
 )
 
 // warpSlotInfo 是 WARP /slots 返回的单个槽位。
@@ -62,6 +64,8 @@ type warpSlotPool struct {
 	votes           map[string]time.Time
 	allCoolingUntil time.Time
 	next            int
+	// sessionUsed 记录会话已用过的槽位, 同会话不重复请求同一账号。
+	sessionUsed map[string]map[int]time.Time
 }
 
 // warpSlotLease 是一次槽位占位, 必须在本轮结束时 Release。
@@ -91,8 +95,8 @@ func (e *warpSlotsBusyError) Unwrap() error {
 
 var warpSlotPools sync.Map
 
-// pickWarpSlot 为渠道选择一个可用槽位并占位。
-func pickWarpSlot(ctx context.Context, channel model.Channel) (*warpSlotLease, error) {
+// pickWarpSlot 为渠道选择一个可用槽位并占位; session 非空时同会话不重复用槽。
+func pickWarpSlot(ctx context.Context, channel model.Channel, session string) (*warpSlotLease, error) {
 	base, err := warpControlBase(channel)
 	if err != nil {
 		return nil, err
@@ -101,7 +105,7 @@ func pickWarpSlot(ctx context.Context, channel model.Channel) (*warpSlotLease, e
 	if err := pool.refresh(ctx); err != nil {
 		return nil, &warpSlotsBusyError{RetryAfter: time.Second, cause: err}
 	}
-	lease, err := pool.pick()
+	lease, err := pool.pick(session)
 	if err != nil {
 		return nil, err
 	}
@@ -120,9 +124,10 @@ func warpSlotPoolFor(base string) *warpSlotPool {
 			Timeout:   3 * time.Second,
 			Transport: &http.Transport{Proxy: nil},
 		},
-		reserved: map[int]int{},
-		suspect:  map[int]time.Time{},
-		votes:    map[string]time.Time{},
+		reserved:    map[int]int{},
+		suspect:     map[int]time.Time{},
+		votes:       map[string]time.Time{},
+		sessionUsed: map[string]map[int]time.Time{},
 	}
 	actual, _ := warpSlotPools.LoadOrStore(base, pool)
 	return actual.(*warpSlotPool)
@@ -190,17 +195,34 @@ func (p *warpSlotPool) fetch(ctx context.Context) (warpSlotsSnapshot, error) {
 	return snapshot, nil
 }
 
-func (p *warpSlotPool) pick() (*warpSlotLease, error) {
+func (p *warpSlotPool) pick(session string) (*warpSlotLease, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	now := time.Now()
 	p.pruneVotesLocked(now)
+	p.pruneSessionsLocked(now)
 	if now.Before(p.allCoolingUntil) {
 		return nil, &warpSlotsBusyError{RetryAfter: p.allCoolingUntil.Sub(now)}
 	}
 
+	for attempt := 0; attempt < 2; attempt++ {
+		if lease := p.pickAvailableLocked(now, session); lease != nil {
+			return lease, nil
+		}
+		if session == "" || len(p.sessionUsed[session]) == 0 {
+			break
+		}
+		// 本会话已用完全部候选槽位时允许复用, 避免把请求钉死。
+		delete(p.sessionUsed, session)
+	}
+	return nil, &warpSlotsBusyError{RetryAfter: p.retryAfterLocked(now)}
+}
+
+// pickAvailableLocked 按负载选空闲槽, 并排除本会话已用过的槽位; 调用方需持锁。
+func (p *warpSlotPool) pickAvailableLocked(now time.Time, session string) *warpSlotLease {
 	count := len(p.snapshot.Slots)
+	used := p.sessionUsed[session]
 	best := -1
 	bestLoad := 0
 	for offset := 0; offset < count; offset++ {
@@ -215,6 +237,11 @@ func (p *warpSlotPool) pick() (*warpSlotLease, error) {
 		if until, ok := p.suspect[slot.Slot]; ok && now.Before(until) {
 			continue
 		}
+		if session != "" {
+			if _, seen := used[slot.Slot]; seen {
+				continue
+			}
+		}
 		load := slot.InFlight + p.reserved[slot.Slot]
 		if best == -1 || load < bestLoad {
 			best = index
@@ -222,12 +249,21 @@ func (p *warpSlotPool) pick() (*warpSlotLease, error) {
 		}
 	}
 	if best == -1 {
-		return nil, &warpSlotsBusyError{RetryAfter: p.retryAfterLocked(now)}
+		return nil
 	}
 
 	slot := p.snapshot.Slots[best]
 	p.reserved[slot.Slot]++
 	p.next = (best + 1) % count
+	if session != "" {
+		if p.sessionUsed == nil {
+			p.sessionUsed = map[string]map[int]time.Time{}
+		}
+		if p.sessionUsed[session] == nil {
+			p.sessionUsed[session] = map[int]time.Time{}
+		}
+		p.sessionUsed[session][slot.Slot] = now
+	}
 	return &warpSlotLease{
 		pool:       p,
 		slot:       slot.Slot,
@@ -235,7 +271,21 @@ func (p *warpSlotPool) pick() (*warpSlotLease, error) {
 		egress:     slot.Egress,
 		prefix:     slot.Prefix,
 		generation: slot.Generation,
-	}, nil
+	}
+}
+
+// pruneSessionsLocked 清理过期的会话槽位记忆; 调用方需持锁。
+func (p *warpSlotPool) pruneSessionsLocked(now time.Time) {
+	for session, used := range p.sessionUsed {
+		for slot, at := range used {
+			if now.Sub(at) >= warpSlotSessionTTL {
+				delete(used, slot)
+			}
+		}
+		if len(used) == 0 {
+			delete(p.sessionUsed, session)
+		}
+	}
 }
 
 func (p *warpSlotPool) retryAfterLocked(now time.Time) time.Duration {
