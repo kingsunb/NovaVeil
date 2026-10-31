@@ -1,3 +1,6 @@
+overrides:
+  tslib: 2.8.1
+
 allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
