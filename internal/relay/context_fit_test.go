@@ -37,12 +37,16 @@ func TestEstimateModelTokensUsesSharedDensity(t *testing.T) {
 	t.Cleanup(func() { tokenDensityCache.Delete(key) })
 
 	body := []byte(strings.Repeat("a", 4000))
-	if got := estimateModelTokens(body, baseURL, modelName); got != 1000 {
-		t.Fatalf("未实测时按基准口径 = %d, want 1000", got)
+	if got := estimateModelTokens(body, baseURL, modelName); got != 563 {
+		t.Fatalf("未实测按默认密度 4/7.1 = %d, want 563", got)
 	}
 	tokenDensityCache.Store(key, 0.5)
 	if got := estimateModelTokens(body, baseURL, modelName); got != 500 {
 		t.Fatalf("实测密度 0.5 时 = %d, want 500", got)
+	}
+	tokenDensityCache.Store(key, 1.0)
+	if got := estimateModelTokens(body, baseURL, modelName); got != 1000 {
+		t.Fatalf("实测密度 1.0 覆盖默认后 = %d, want 1000", got)
 	}
 }
 
@@ -61,7 +65,8 @@ func TestEstimateModelTokensScale(t *testing.T) {
 			const baseURL = "https://scale.example/"
 			modelName := "model-" + tc.name
 			key := tokenDensityKey(baseURL, modelName)
-			tokenDensityCache.Delete(key)
+			// 实测密度 1 锚定基准口径, 验证大规模下线性。
+			tokenDensityCache.Store(key, 1.0)
 			t.Cleanup(func() { tokenDensityCache.Delete(key) })
 
 			body := []byte(strings.Repeat("a", tc.tokens*4))
@@ -76,7 +81,7 @@ func TestContextFitsWindow(t *testing.T) {
 	const baseURL = "https://upstream.example/"
 	const modelName = "window-model"
 	key := tokenDensityKey(baseURL, modelName)
-	tokenDensityCache.Delete(key)
+	tokenDensityCache.Store(key, 1.0)
 	t.Cleanup(func() { tokenDensityCache.Delete(key) })
 
 	body := []byte(strings.Repeat("a", 4000))
@@ -95,6 +100,24 @@ func TestContextFitsWindow(t *testing.T) {
 				t.Fatalf("contextFitsWindow(window=%d) = %v, want %v", tc.window, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestContextFitsWindowDefaultDensityMatchesUpstream(t *testing.T) {
+	const baseURL = "https://default-density.example/"
+	const modelName = "default-density-model"
+	key := tokenDensityKey(baseURL, modelName)
+	tokenDensityCache.Delete(key)
+	t.Cleanup(func() { tokenDensityCache.Delete(key) })
+
+	// 语料实测锚定: 约 1,420,000 个 ASCII 字符即上游 200K 实际 token。
+	fits := []byte(strings.Repeat("a", 1_420_000))
+	if !contextFitsWindow(fits, 200_000, baseURL, modelName) {
+		t.Fatal("1,420,000 字符按默认密度应装进 200K 手动窗口")
+	}
+	overflow := []byte(strings.Repeat("a", 1_500_000))
+	if contextFitsWindow(overflow, 200_000, baseURL, modelName) {
+		t.Fatal("1,500,000 字符按默认密度不应装进 200K 手动窗口")
 	}
 }
 

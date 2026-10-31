@@ -90,7 +90,7 @@ func ProbeContextWindow(ctx context.Context, channelID int, modelName string, to
 // recordProbeDensity 写入实测密度并返回夹取后的比值。
 func recordProbeDensity(baseURL, modelName string, actual, constructed int) float64 {
 	if constructed <= 0 {
-		return 1
+		return defaultTokenDensity
 	}
 	density := clampTokenDensity(float64(actual) / float64(constructed))
 	tokenDensityCache.Store(tokenDensityKey(baseURL, modelName), density)

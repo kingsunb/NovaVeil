@@ -296,7 +296,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					detail := fmt.Errorf(
 						"%s（请求约 %d token，手动窗口最大值 %d token）",
 						errContextWindowTooSmall.Error(),
-						estimateRequestTokens(raw.Body),
+						estimateDefaultTokens(estimateRequestTokens(raw.Body)),
 						maxCandidateWindow,
 					)
 					request.markFailed(detail, "", nil)
@@ -452,11 +452,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				clearSessionStickyByItem(group.ID, item.ID)
 				if len(contextSkipped) >= routableCandidateCount(hops[0].group) {
 					// 报出请求规模与最大手动窗口, 调用方可据此截断请求或换模型。
-					// 与预扫拒绝同用基准口径, 不随最后尝试成员的实测密度漂移。
+					// 与预扫拒绝同用未实测默认口径, 不随最后尝试成员的实测密度漂移。
 					detail := fmt.Errorf(
 						"%s（请求约 %d token，手动窗口最大值 %d token）",
 						errContextWindowTooSmall.Error(),
-						estimateRequestTokens(raw.Body),
+						estimateDefaultTokens(estimateRequestTokens(raw.Body)),
 						maxCandidateWindow,
 					)
 					request.markFailed(detail, "", nil)

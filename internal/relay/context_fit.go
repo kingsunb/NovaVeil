@@ -28,9 +28,12 @@ func estimateRequestTokens(body []byte) int {
 	return wide + narrow/4
 }
 
+// defaultTokenDensity 未实测默认密度: 实测英文词约 7.1 字符/token。
+const defaultTokenDensity = 4.0 / 7.1
+
 // tokenDensityCache 缓存「上游端点:模型」的实测 token 密度比:
 // 上游实际 token / 基准口径估算值。探测实测写入, 路由过滤与后续探测构造共用,
-// 保证「探测判定」与「路由过滤」对同一模型的估算同尺; 未实测的模型按 1(基准口径)处理。
+// 保证「探测判定」与「路由过滤」对同一模型的估算同尺; 未实测按默认密度处理。
 var tokenDensityCache sync.Map
 
 func tokenDensityKey(baseURL, modelName string) string {
@@ -48,7 +51,7 @@ func clampTokenDensity(d float64) float64 {
 	return d
 }
 
-// modelTokenDensity 返回实测密度比; 未实测的模型恒为 1(基准口径)。
+// modelTokenDensity 返回实测密度比; 未实测按默认密度(上游实际口径)。
 // 所有渠道同一规则, 不按上游类型或渠道白名单区别对待。
 func modelTokenDensity(baseURL, modelName string) float64 {
 	if cached, ok := tokenDensityCache.Load(tokenDensityKey(baseURL, modelName)); ok {
@@ -56,11 +59,11 @@ func modelTokenDensity(baseURL, modelName string) float64 {
 			return density
 		}
 	}
-	return 1
+	return defaultTokenDensity
 }
 
 // estimateModelTokens 按「上游端点+模型」的实测密度估算请求 token 数。
-// 密度比由上下文探测实测写入: 未实测的模型按基准口径, 实测过的模型按实测比例修正;
+// 密度比由上下文探测实测写入: 未实测按默认密度, 实测过的模型按实测比例修正;
 // 路由过滤与探测构造共用该函数, 探测说装得下的, 路由判定同尺。
 func estimateModelTokens(body []byte, baseURL, modelName string) int {
 	return estimateModelTokensFromBase(estimateRequestTokens(body), baseURL, modelName)
@@ -69,14 +72,24 @@ func estimateModelTokens(body []byte, baseURL, modelName string) int {
 // estimateModelTokensFromBase 按密度把基准估算换算到该模型的上游口径,
 // 供同一请求体多成员复用, 免去逐成员重扫请求体。
 func estimateModelTokensFromBase(base int, baseURL, modelName string) int {
+	return scaleBaseTokens(base, modelTokenDensity(baseURL, modelName))
+}
+
+// scaleBaseTokens 按密度比换算基准估算, 夹取到至少 1。
+func scaleBaseTokens(base int, density float64) int {
 	if base <= 0 {
 		return 0
 	}
-	scaled := int(float64(base) * modelTokenDensity(baseURL, modelName))
+	scaled := int(float64(base) * density)
 	if scaled < 1 {
 		scaled = 1
 	}
 	return scaled
+}
+
+// estimateDefaultTokens 按未实测默认口径换算, 供拒绝消息与过滤同尺。
+func estimateDefaultTokens(base int) int {
+	return scaleBaseTokens(base, defaultTokenDensity)
 }
 
 // contextFitsWindow 报告请求能否装进窗口; 窗口未知视为放行, 交上游判定。

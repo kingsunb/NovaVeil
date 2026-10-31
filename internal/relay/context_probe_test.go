@@ -183,6 +183,8 @@ func TestProbeContextWindowDensityAndRetry(t *testing.T) {
 		tokenDensityCache.Delete(key)
 		t.Cleanup(func() { tokenDensityCache.Delete(key) })
 
+		// 未实测按默认密度构造首测规模。
+		constructed := probeConstructedTokens(probeTargetTokens(10_000), defaultTokenDensity)
 		result, err := ProbeContextWindow(context.Background(), channel.ID, modelName, 10_000)
 		if err != nil {
 			t.Fatalf("探测失败: %v", err)
@@ -190,7 +192,7 @@ func TestProbeContextWindowDensityAndRetry(t *testing.T) {
 		if !result.Accepted || hits.Load() != 1 {
 			t.Fatalf("accepted=%v hits=%d, want true/1", result.Accepted, hits.Load())
 		}
-		want := clampTokenDensity(10_000.0 / 9_000.0)
+		want := clampTokenDensity(10_000.0 / float64(constructed))
 		if got := modelTokenDensity(channel.BaseURL, modelName); math.Abs(got-want) > 1e-9 {
 			t.Fatalf("密度 = %v, want %v", got, want)
 		}
@@ -234,7 +236,8 @@ func TestProbeContextWindowDensityAndRetry(t *testing.T) {
 		if hits.Load() != 2 {
 			t.Fatalf("超差应重测一次, hits=%d", hits.Load())
 		}
-		measured := clampTokenDensity(12_000.0 / 9_000.0)
+		firstConstructed := probeConstructedTokens(probeTargetTokens(10_000), defaultTokenDensity)
+		measured := clampTokenDensity(12_000.0 / float64(firstConstructed))
 		retryConstructed := probeConstructedTokens(probeRetryTarget(10_000), measured)
 		want := clampTokenDensity(6_000.0 / float64(retryConstructed))
 		if got := modelTokenDensity(channel.BaseURL, modelName); math.Abs(got-want) > 1e-9 {
@@ -289,7 +292,8 @@ func TestProbeContextWindowDensityAndRetry(t *testing.T) {
 		if hits.Load() != 2 {
 			t.Fatalf("解析到超差规模应重测一次, hits=%d", hits.Load())
 		}
-		measured := clampTokenDensity(12_345.0 / 9_000.0)
+		firstConstructed := probeConstructedTokens(probeTargetTokens(10_000), defaultTokenDensity)
+		measured := clampTokenDensity(12_345.0 / float64(firstConstructed))
 		retryConstructed := probeConstructedTokens(probeRetryTarget(10_000), measured)
 		want := clampTokenDensity(6_000.0 / float64(retryConstructed))
 		if got := modelTokenDensity(channel.BaseURL, modelName); math.Abs(got-want) > 1e-9 {
