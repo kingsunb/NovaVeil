@@ -415,7 +415,7 @@ func getProxyAccountProbeJob(c *gin.Context) {
 	resp.Success(c, job)
 }
 
-// listProxyAccounts 返回渠道账号台账, filter 取 all/usable/untested/unusable/error/historic。
+// listProxyAccounts 返回渠道账号台账, filter 取 all/usable/untested/unusable/error/historic; untested 指今日未测试。
 func listProxyAccounts(c *gin.Context) {
 	channelID, err := strconv.Atoi(c.Query("channel_id"))
 	if err != nil || channelID <= 0 {

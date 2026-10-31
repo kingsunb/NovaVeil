@@ -32,6 +32,8 @@ NovaVeil 的 OpenCode 兼容层已按 2026-10-15 的 v2 头集合对齐，但与
 
 ### patch 工具
 
+此处同名工具 schema 覆盖决定由 [免费档契约修复](../bug-fix/2026-10-30-opencode-free-contract-repair.md) 取代；当前保留客户端 `patch` 参数，下面记录历史取舍，会话头与 beta 决定不变。
+
 `opencode_tools.json` 从上游 `f0f064f` 逐字节加入 `patch` 定义，整个文件与该提交的最终版一致。`knownOpencodeTool` 因此能识别客户端自带的 `patch`；`ensureOpencodeFreeTools` 的同名替换条件从“仅比较 description”改为“description 与 parameters 都一致才保留”，避免同描述不同 schema 漏校正。`opencodeFreeCoreTools` 仍只有 `shell/edit/glob/grep/read`，`patch` 不参与缺失注入。
 
 ### v2 Anthropic beta

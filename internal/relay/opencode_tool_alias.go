@@ -3,7 +3,9 @@ package relay
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -25,10 +27,7 @@ func ocToolWireName(name string) string {
 	return ocToolAliasPrefix + hex.EncodeToString(sum[:])[:ocToolDigestLen]
 }
 
-// ocToolAliasWhitelist 是优先占位的客户端工具名, 按客户端分组维护。
-// 每个请求只携带单一客户端的工具集, 跨组重名(如 read/Agent)对匹配无影响。
-// 只保留核心工具; 与官方同名的条目(read/write/edit 等)不列——它们在官方
-// 名字集合内, 本就不会作为自定义工具改名。无名额上限后仅决定数组内顺序。
+// 白名单仅决定客户端工具顺序。
 var ocToolAliasWhitelist = map[string]bool{
 	// DSH(核心 13)
 	"pwsh": true, "read_image": true,
@@ -61,67 +60,62 @@ var ocToolAliasWhitelist = map[string]bool{
 	"source_check": true, "fetch_content": true, "get_search_content": true,
 }
 
-// ensureOfficialToolset 把免费档正文的工具集规范成官方会话形态(lane 取 v1/v2):
-//   - 客户端自定义工具改为摘要出站名, 定义原样保留;
-//   - 官方全集(体检模板的完整工具定义, 逐字节官方)替换/补齐工具数组前段;
-//   - 自定义工具白名单优先排序, 全部摘要改名进数组, 不设数量上限;
-//   - tool_choice 与历史 tool_calls 中的客户端名同步改写。
-//
-// 返回改写后正文与别名表(出站名 → 客户端名); 无需改写时原样返回空表。
+// 同名非官方定义仅改名隔离。
 func ensureOfficialToolset(body []byte, lane string) ([]byte, map[string]string) {
 	templates, err := loadOcProbeTemplates()
 	if err != nil || templates[lane] == nil {
 		return body, nil
 	}
 	official := templates[lane].Tools
-	officialNames := make(map[string]bool)
-	for _, t := range gjson.ParseBytes(official).Array() {
-		officialNames[t.Get("function.name").String()] = true
+	officialTools := make(map[string]gjson.Result)
+	taken := make(map[string]bool)
+	for _, tool := range gjson.ParseBytes(official).Array() {
+		name := tool.Get("function.name").String()
+		officialTools[name] = tool
+		taken[name] = true
 	}
 	tools := gjson.GetBytes(body, "tools")
 	if tools.Exists() && !tools.IsArray() {
 		return body, nil
 	}
-	aliases := make(map[string]string)
-	clientItems := make([]string, 0, len(tools.Array()))
-	taken := make(map[string]bool, len(tools.Array()))
-	presentTools := make(map[string]bool, len(officialNames))
+	for _, tool := range tools.Array() {
+		if name := tool.Get("function.name").String(); name != "" {
+			taken[name] = true
+		}
+	}
+	presentTools := make(map[string]bool, len(officialTools))
+	duplicateOfficial := false
 	var whitelisted, rest []gjson.Result
-	for _, t := range tools.Array() {
-		name := t.Get("function.name").String()
-		if name == "" || officialNames[name] {
+	for _, tool := range tools.Array() {
+		name := tool.Get("function.name").String()
+		if exact, exists := officialTools[name]; exists && ocToolDefinitionsEqual(tool.Raw, exact.Raw) {
+			duplicateOfficial = duplicateOfficial || presentTools[name]
 			presentTools[name] = true
 			continue
 		}
 		if ocToolAliasWhitelist[name] {
-			whitelisted = append(whitelisted, t)
+			whitelisted = append(whitelisted, tool)
+		} else {
+			rest = append(rest, tool)
+		}
+	}
+	aliases := make(map[string]string)
+	clientItems := make([]string, 0, len(whitelisted)+len(rest))
+	for _, tool := range append(whitelisted, rest...) {
+		name := tool.Get("function.name")
+		if tool.Get("type").String() != "function" || name.Type != gjson.String || name.String() == "" || ocToolIsWireName(name.String()) {
+			clientItems = append(clientItems, tool.Raw)
 			continue
 		}
-		rest = append(rest, t)
-	}
-	// 白名单优先排序, 全部自定义工具摘要改名进数组。
-	ordered := append(whitelisted, rest...)
-	for _, t := range ordered {
-		item, ok := ocToolRename(t.Raw, taken, aliases)
+		item, ok := ocToolRename(tool.Raw, taken, aliases)
 		if !ok {
 			return body, nil
 		}
 		clientItems = append(clientItems, item)
 	}
-	if len(aliases) == 0 && tools.Exists() {
-		missing := false
-		for name := range officialNames {
-			if !presentTools[name] {
-				missing = true
-				break
-			}
-		}
-		if !missing {
-			// 已是官方全集且无自定义工具, 幂等跳过。
-			return body, nil
-		}
+	if len(aliases) == 0 && len(presentTools) == len(officialTools) && !duplicateOfficial {
+		return body, nil
 	}
-	// official 是裸数组 "[...]": 剥掉外层括号后与客户端工具平级拼接。
 	inner := strings.TrimSpace(string(official))
 	inner = strings.TrimPrefix(strings.TrimSuffix(inner, "]"), "[")
 	items := make([]string, 0, len(clientItems)+1)
@@ -133,6 +127,32 @@ func ensureOfficialToolset(body []byte, lane string) ([]byte, map[string]string)
 	}
 	out = rewriteToolReferences(out, aliases)
 	return out, aliases
+}
+
+func ocToolDefinitionsEqual(left, right string) bool {
+	var a, b any
+	decode := func(raw string, target *any) error {
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.UseNumber()
+		return decoder.Decode(target)
+	}
+	if decode(left, &a) != nil || decode(right, &b) != nil {
+		return false
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+func ocToolIsWireName(name string) bool {
+	if !strings.HasPrefix(name, ocToolAliasPrefix) {
+		return false
+	}
+	digest := strings.TrimPrefix(name, ocToolAliasPrefix)
+	if len(digest) < ocToolDigestLen || strings.Trim(digest[ocToolDigestLen:], "_") != "" {
+		return false
+	}
+	hexPart := digest[:ocToolDigestLen]
+	_, err := hex.DecodeString(hexPart)
+	return err == nil && strings.ToLower(hexPart) == hexPart
 }
 
 // ocToolRename 把单个客户端工具改为摘要出站名并登记别名。
@@ -152,100 +172,121 @@ func ocToolRename(raw string, taken map[string]bool, aliases map[string]string) 
 	return string(next), true
 }
 
-// rewriteToolReferences 把 tool_choice 与历史 tool_calls 里的客户端工具名换成出站别名。
 func rewriteToolReferences(body []byte, aliases map[string]string) []byte {
 	if len(aliases) == 0 {
 		return body
 	}
-	// 别名表是出站名→客户端名; 请求侧改写需要反查客户端名→出站名。
 	reverse := make(map[string]string, len(aliases))
 	for outbound, client := range aliases {
-		reverse[client] = outbound
+		if prior, exists := reverse[client]; !exists || outbound < prior {
+			reverse[client] = outbound
+		}
 	}
-	out := body
-	if name := gjson.GetBytes(out, "tool_choice.function.name").String(); name != "" {
-		if renamed, ok := reverse[name]; ok {
-			if next, err := sjson.SetBytes(out, "tool_choice.function.name", renamed); err == nil {
-				out = next
+	out := rewriteToolNameAt(body, "tool_choice.function.name", reverse)
+	choice := gjson.GetBytes(out, "tool_choice")
+	switch choice.Get("type").String() {
+	case "function", "custom", "tool":
+		out = rewriteToolNameAt(out, "tool_choice.name", reverse)
+	case "allowed_tools":
+		for i, tool := range choice.Get("tools").Array() {
+			if kind := tool.Get("type").String(); kind == "function" || kind == "custom" {
+				out = rewriteToolNameAt(out, fmt.Sprintf("tool_choice.tools.%d.name", i), reverse)
+			}
+		}
+		for i, tool := range choice.Get("allowed_tools.tools").Array() {
+			if tool.Get("type").String() == "function" {
+				out = rewriteToolNameAt(out, fmt.Sprintf("tool_choice.allowed_tools.tools.%d.function.name", i), reverse)
 			}
 		}
 	}
-	messages := gjson.GetBytes(out, "messages")
-	if !messages.IsArray() {
-		return out
-	}
-	for i, msg := range messages.Array() {
-		calls := msg.Get("tool_calls")
-		if !calls.IsArray() {
-			continue
+	for i, msg := range gjson.GetBytes(out, "messages").Array() {
+		for j := range msg.Get("tool_calls").Array() {
+			out = rewriteToolNameAt(out, fmt.Sprintf("messages.%d.tool_calls.%d.function.name", i, j), reverse)
 		}
-		for j, call := range calls.Array() {
-			name := call.Get("function.name").String()
-			renamed, ok := reverse[name]
-			if !ok {
-				continue
+		for j, block := range msg.Get("content").Array() {
+			if block.Get("type").String() == "tool_use" {
+				out = rewriteToolNameAt(out, fmt.Sprintf("messages.%d.content.%d.name", i, j), reverse)
 			}
-			path := fmt.Sprintf("messages.%d.tool_calls.%d.function.name", i, j)
-			if next, err := sjson.SetBytes(out, path, renamed); err == nil {
-				out = next
-			}
+		}
+		if role := msg.Get("role").String(); role == "tool" || role == "function" {
+			out = rewriteToolNameAt(out, fmt.Sprintf("messages.%d.name", i), reverse)
+		}
+	}
+	for i, item := range gjson.GetBytes(out, "input").Array() {
+		if isOpencodeToolCall(item) {
+			out = rewriteToolNameAt(out, fmt.Sprintf("input.%d.name", i), reverse)
 		}
 	}
 	return out
 }
 
-// restoreToolAliasesInBody 把非流式正文里的出站工具别名还原为客户端声明名。
+func rewriteToolNameAt(body []byte, path string, names map[string]string) []byte {
+	name := gjson.GetBytes(body, path)
+	if name.Type != gjson.String {
+		return body
+	}
+	replacement, ok := names[name.String()]
+	if !ok || replacement == name.String() {
+		return body
+	}
+	next, err := sjson.SetBytes(body, path, replacement)
+	if err != nil {
+		return body
+	}
+	return next
+}
+
+func isOpencodeToolCall(item gjson.Result) bool {
+	switch item.Get("type").String() {
+	case "function_call", "custom_tool_call":
+		return true
+	default:
+		return false
+	}
+}
+
 func restoreToolAliasesInBody(body []byte, aliases map[string]string) []byte {
 	if len(aliases) == 0 {
 		return body
 	}
 	out := body
-	choices := gjson.GetBytes(out, "choices")
-	for i, choice := range choices.Array() {
-		calls := choice.Get("message.tool_calls")
-		if !calls.IsArray() {
-			continue
+	for i, choice := range gjson.GetBytes(out, "choices").Array() {
+		for j := range choice.Get("message.tool_calls").Array() {
+			out = rewriteToolNameAt(out, fmt.Sprintf("choices.%d.message.tool_calls.%d.function.name", i, j), aliases)
 		}
-		for j, call := range calls.Array() {
-			name := call.Get("function.name").String()
-			client, ok := aliases[name]
-			if !ok {
-				continue
-			}
-			path := fmt.Sprintf("choices.%d.message.tool_calls.%d.function.name", i, j)
-			if next, err := sjson.SetBytes(out, path, client); err == nil {
-				out = next
-			}
+	}
+	for i, block := range gjson.GetBytes(out, "content").Array() {
+		if block.Get("type").String() == "tool_use" {
+			out = rewriteToolNameAt(out, fmt.Sprintf("content.%d.name", i), aliases)
+		}
+	}
+	for i, item := range gjson.GetBytes(out, "output").Array() {
+		if isOpencodeToolCall(item) {
+			out = rewriteToolNameAt(out, fmt.Sprintf("output.%d.name", i), aliases)
 		}
 	}
 	return out
 }
 
-// restoreToolAliasesInEvent 把流式事件增量里的出站工具别名还原为客户端声明名。
 func restoreToolAliasesInEvent(data []byte, aliases map[string]string) []byte {
 	if len(aliases) == 0 || len(data) == 0 {
 		return data
 	}
-	choices := gjson.GetBytes(data, "choices")
-	if !choices.IsArray() {
-		return data
-	}
-	out := data
-	for i, choice := range choices.Array() {
-		calls := choice.Get("delta.tool_calls")
-		if !calls.IsArray() {
-			continue
+	out := restoreToolAliasesInBody(data, aliases)
+	for i, choice := range gjson.GetBytes(out, "choices").Array() {
+		for j := range choice.Get("delta.tool_calls").Array() {
+			out = rewriteToolNameAt(out, fmt.Sprintf("choices.%d.delta.tool_calls.%d.function.name", i, j), aliases)
 		}
-		for j, call := range calls.Array() {
-			name := call.Get("function.name").String()
-			client, ok := aliases[name]
-			if !ok {
-				continue
-			}
-			path := fmt.Sprintf("choices.%d.delta.tool_calls.%d.function.name", i, j)
-			if next, err := sjson.SetBytes(out, path, client); err == nil {
-				out = next
-			}
+	}
+	if gjson.GetBytes(out, "content_block.type").String() == "tool_use" {
+		out = rewriteToolNameAt(out, "content_block.name", aliases)
+	}
+	if isOpencodeToolCall(gjson.GetBytes(out, "item")) {
+		out = rewriteToolNameAt(out, "item.name", aliases)
+	}
+	for i, item := range gjson.GetBytes(out, "response.output").Array() {
+		if isOpencodeToolCall(item) {
+			out = rewriteToolNameAt(out, fmt.Sprintf("response.output.%d.name", i), aliases)
 		}
 	}
 	return out

@@ -31,7 +31,7 @@ OpenCode 免费档的思考模型频繁断流：客户端看到流被截断，�
 ## 后果
 
 - **收益**：思考阶段静默不再掐流，免费档长轮次可以完整跑完；`unexpected EOF` 这一类错误从根上消失，客户端不再整轮重试。
-- **代价**：sidecar 不再回收"空闲"连接，连接释放依赖 Go 侧取消与 transport 的 `IdleConnTimeout`（90 秒）；bun 进程随父进程退出，泄漏窗口有界。
+- **代价**：sidecar 不再回收活动请求的空闲连接，Go 请求取消经本地连接传递到 `req.signal`，上游 `fetch` 显式使用该 signal；`IdleConnTimeout`（90 秒）只回收空闲连接池连接，不替代活动请求取消。进程随父进程退出。取消能否及时到达实际 Bun 上游仍须运行进程级测试验证。
 - **作用面**：只影响走 `BunTransport` 的渠道（OpenCode 免费档 `OpencodeCompat && tier=zen`）。常规 Go 客户端路径不受影响。
 - **口径提醒**：`unexpected EOF` 之前被归到 `upstream_network`，本次修复后若仍出现，才是真正的上游或链路截断。
 

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	_ "embed"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,7 +27,7 @@ type bunForwardRequest struct {
 	Method  string      `json:"method"`
 	URL     string      `json:"url"`
 	Headers [][2]string `json:"headers,omitempty"`
-	Body    string      `json:"body,omitempty"`
+	Body    []byte      `json:"body,omitempty"`
 	Proxy   string      `json:"proxy,omitempty"`
 }
 
@@ -41,10 +40,14 @@ type bunSidecar struct {
 
 // bunSidecarManager 管理全局 sidecar 并在进程退出后按需重启。
 type bunSidecarManager struct {
-	mu       sync.Mutex
-	sidecar  *bunSidecar
-	startErr error
+	mu        sync.Mutex
+	sidecar   *bunSidecar
+	startErr  error
+	nextStart time.Time
 }
+
+// 启动失败后冷却，避免进程风暴。
+const bunSidecarStartRetryDelay = time.Second
 
 var bunSidecars = &bunSidecarManager{}
 
@@ -82,25 +85,25 @@ func (m *bunSidecarManager) current() (*bunSidecar, error) {
 	if m.sidecar != nil && m.sidecar.alive() {
 		return m.sidecar, nil
 	}
-	if m.startErr != nil {
+	if m.startErr != nil && time.Now().Before(m.nextStart) {
 		return nil, m.startErr
 	}
+	m.sidecar = nil
 	binary, _, err := bunSidecarCommand()
+	if err == nil {
+		if binary == "" {
+			err = errors.New("bun runtime not found")
+		} else {
+			m.sidecar, err = startBunSidecar(binary)
+		}
+	}
+	m.startErr = err
 	if err != nil {
-		m.startErr = err
+		m.nextStart = time.Now().Add(bunSidecarStartRetryDelay)
 		return nil, err
 	}
-	if binary == "" {
-		m.startErr = errors.New("bun runtime not found")
-		return nil, m.startErr
-	}
-	sidecar, err := startBunSidecar(binary)
-	if err != nil {
-		m.startErr = err
-		return nil, err
-	}
-	m.sidecar = sidecar
-	return sidecar, nil
+	m.nextStart = time.Time{}
+	return m.sidecar, nil
 }
 
 // startBunSidecar 启动 sidecar 并等待其回传监听端口。
@@ -261,6 +264,12 @@ func newBunSidecarClient(proxyURL *url.URL) (*bunSidecarTransport, error) {
 
 // RoundTrip 序列化请求并流式回传 Bun fetch 的上游响应。
 func (t *bunSidecarTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := req.Context().Err(); err != nil {
+		if req.Body != nil {
+			req.Body.Close()
+		}
+		return nil, bunContextError(req.Context(), err)
+	}
 	body, err := readRequestBody(req)
 	if err != nil {
 		return nil, err
@@ -273,10 +282,8 @@ func (t *bunSidecarTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		Method:  req.Method,
 		URL:     req.URL.String(),
 		Headers: bunSidecarHeaders(req),
+		Body:    body,
 		Proxy:   "",
-	}
-	if body != nil {
-		payload.Body = base64.StdEncoding.EncodeToString(body)
 	}
 	if t.proxy != nil {
 		payload.Proxy = t.proxy.String()

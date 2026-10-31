@@ -11,6 +11,8 @@ v2 档调查(见 [v2 调查笔记](../bug-fix/2026-10-25-opencode-v2-lane-invest
 
 ## Decision
 
+工具 schema 覆盖及客户端同名工具替换部分由 [免费档契约修复](../bug-fix/2026-10-30-opencode-free-contract-repair.md) 取代；历史决定保留，会话号天锚不变。当前两档 Chat 都隔离冲突工具并保留客户端参数定义。
+
 1. **v2 工具改名 + 官方全集(`internal/relay/opencode_tool_alias.go`)**: `ensureOfficialV2Toolset` 在 v2 chat 整形链(系统提示注入之后)把客户端自定义工具改名 `clint_` 前缀的无冲突出站名(非法字符转 `_`、重名追加 `_`), 工具数组重排为「官方 12 工具全集(体检模板原文, 顺序一致) + clint_* 客户端工具」; `tool_choice.function.name` 与历史 `tool_calls[].function.name` 同步改名(反查客户端名→出站名)。`shapeOpencodeFreeBody` 第三返回值从 v1 单别名 string 泛化为别名表 `map[出站名]客户端名`, 转发路径(`applyToolAliasRestore`/`restoreToolAliasesInBody`/`restoreToolAliasesInEvent`)对非流式正文、流式窗口事件与剩余事件流统一还原客户端声明名, 未映射名透传。v1 档行为锁定不变(仅 read 占位别名, 无 clint_ 改名)。已知核心工具(如 `patch`, 在 opencode_tools.json 的 14 工具集内但不在官方 12 模板内)仍先按 `ensureOpencodeFreeTools` 校正为真实定义再改名。
 2. **会话号天锚(`internal/utils/opencodeid/opencodeid.go`)**: `SessionIDFromSignal` 时间段改为「当前 UTC 日 − 哈希偏移(至多 30 天)」: `current = day_ms<<12 | 无counter`, 与 opencode2api 95331011 同构。48 位字只保留低 36 位毫秒, 上游按当前纪元(k×2^36)展开解码, 拒绝距此刻约一年以上的值——哈希直构的任意 36 位值约半数落在拒绝窗(解释了旧版「多数出口 429」), 天锚值恒在窗内。同一信号全日内恒定派生同一号, 确定性优于小时锚。
 

@@ -93,19 +93,22 @@ func TestShapeOpencodeFreeBodyIdempotent(t *testing.T) {
 	}
 }
 
-// TestShapeOpencodeFreeBodyReplacesSameNameTools 验证客户端声明的同名核心工具被替换为真实定义。
-func TestShapeOpencodeFreeBodyReplacesSameNameTools(t *testing.T) {
-	body, changed, _ := shapeOpencodeFreeBody([]byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[{"type":"function","function":{"name":"shell","description":"my custom","parameters":{"type":"object","properties":{"x":{"type":"string"}}}}}]}`), false, model.UpstreamProtocolChat)
-	if !changed {
-		t.Fatalf("同名核心工具应被替换为真实定义")
+func TestShapeOpencodeFreeBodyPreservesSameNameTools(t *testing.T) {
+	client := `{"type":"function","function":{"name":"shell","description":"my custom","parameters":{"type":"object","properties":{"x":{"type":"string"}}}}}`
+	body, changed, aliases := shapeOpencodeFreeBody([]byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[`+client+`]}`), false, model.UpstreamProtocolChat)
+	if !changed || aliases[ocExpectWireName("shell")] != "shell" {
+		t.Fatalf("同名客户端工具应独立改名: %v", aliases)
 	}
-	desc := gjson.GetBytes(body, "tools.0.function.description").String()
-	if desc == "my custom" {
-		t.Fatalf("客户端自定义 description 应被真实定义替换, 仍为 custom")
+	want := strings.Replace(client, `"name":"shell"`, `"name":"`+ocExpectWireName("shell")+`"`, 1)
+	for _, tool := range gjson.GetBytes(body, "tools").Array() {
+		if tool.Get("function.name").String() == ocExpectWireName("shell") {
+			if tool.Raw != want {
+				t.Fatalf("仅允许改名，不能覆盖定义: %s", tool.Raw)
+			}
+			return
+		}
 	}
-	if desc == "" {
-		t.Fatalf("替换后 description 不应为空")
-	}
+	t.Fatal("客户端工具丢失")
 }
 
 // TestShapeOpencodeFreeBodyMergesMissingTools 验证非核心工具原样保留、缺失核心工具被追加。
@@ -140,17 +143,19 @@ func TestShapeOpencodeFreeBodyNonArrayToolsUntouched(t *testing.T) {
 	_ = changed
 }
 
-// TestShapeOpencodeFreeBodyV1ReadTool 验证 v1 档补齐官方全集并替换同名工具定义。
-// 2026-10-30 起 v1 与 v2 统一走 ensureOfficialToolset: 客户端同名工具用官方定义覆盖。
 func TestShapeOpencodeFreeBodyV1ReadTool(t *testing.T) {
 	t.Run("无工具时补官方全集", func(t *testing.T) {
 		body, changed, _ := shapeOpencodeFreeBody([]byte(`{"model":"x-free","messages":[]}`), true, model.UpstreamProtocolChat)
 		if !changed {
 			t.Fatalf("v1 档缺工具时应补齐官方全集")
 		}
+		templates, err := loadOcProbeTemplates()
+		if err != nil {
+			t.Fatal(err)
+		}
 		tools := gjson.GetBytes(body, "tools").Array()
-		if len(tools) < 40 {
-			t.Fatalf("v1 应补齐官方全集(>=40), 实际 %d", len(tools))
+		if len(tools) != len(gjson.ParseBytes(templates["v1"].Tools).Array()) {
+			t.Fatalf("v1 应补齐官方全集，实际 %d", len(tools))
 		}
 		found := false
 		for _, tool := range tools {
@@ -163,28 +168,28 @@ func TestShapeOpencodeFreeBodyV1ReadTool(t *testing.T) {
 		}
 	})
 
-	t.Run("同名工具用官方定义覆盖", func(t *testing.T) {
+	t.Run("同名工具隔离且保留定义", func(t *testing.T) {
 		body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[{"type":"function","function":{"name":"read","description":"client","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}}]}`)
-		got, changed, _ := shapeOpencodeFreeBody(body, true, model.UpstreamProtocolChat)
-		if !changed {
-			t.Fatalf("应补齐官方默认字段: %s", got)
+		got, changed, aliases := shapeOpencodeFreeBody(body, true, model.UpstreamProtocolChat)
+		if !changed || aliases[ocExpectWireName("read")] != "read" {
+			t.Fatalf("应隔离客户端同名 read: %v", aliases)
 		}
-		if strings.Contains(string(got), `"description":"client"`) {
-			t.Fatalf("客户端 read 定义应被官方定义替换: %s", got)
+		if !strings.Contains(string(got), `"description":"client"`) {
+			t.Fatalf("客户端 read 定义丢失: %s", got)
 		}
 		if gjson.GetBytes(got, "max_tokens").Int() != 32000 || gjson.GetBytes(got, "tool_choice").String() != "auto" {
 			t.Fatalf("v1 默认字段缺失: %s", got)
 		}
 	})
 
-	t.Run("read 变体改名并补占位", func(t *testing.T) {
+	t.Run("read 变体独立摘要改名", func(t *testing.T) {
 		body, _, aliases := shapeOpencodeFreeBody([]byte(`{"model":"x-free","tools":[{"type":"function","function":{"name":"ReadFile","description":"client","parameters":{"type":"object","properties":{}}}}]}`), true, model.UpstreamProtocolChat)
-		if aliases[v1ReadToolName] != "ReadFile" {
-			t.Fatalf("应返回别名表 read→ReadFile, 实际 %v", aliases)
+		if aliases[ocExpectWireName("ReadFile")] != "ReadFile" || aliases[v1ReadToolName] != "" {
+			t.Fatalf("别名不能指向官方 read: %v", aliases)
 		}
 		raw := gjson.GetBytes(body, "tools").Raw
 		if strings.Contains(raw, `"name":"ReadFile"`) {
-			t.Fatalf("ReadFile 应被改名为 read: %s", raw)
+			t.Fatalf("ReadFile 应被摘要改名: %s", raw)
 		}
 		readCount := 0
 		for _, tool := range gjson.GetBytes(body, "tools").Array() {
@@ -192,8 +197,8 @@ func TestShapeOpencodeFreeBodyV1ReadTool(t *testing.T) {
 				readCount++
 			}
 		}
-		if readCount < 1 {
-			t.Fatalf("应存在 read 工具: %s", raw)
+		if readCount != 1 {
+			t.Fatalf("官方 read 应只存在一次: %s", raw)
 		}
 	})
 }
@@ -331,36 +336,28 @@ func TestOpencodeToolDescriptionPlatform(t *testing.T) {
 	}
 }
 
-// TestShapeOpencodeFreeBodyCorrectsClientPatch 锁定 patch 的新语义: patch 不在
-// 官方工具集内, 客户端 patch 改名摘要名出站且定义原样保留, 响应侧还原。
-// 官方 v2 全集为 41 个(12 核心 + 29 chrome-devtools), 客户端工具排在其后。
-func TestShapeOpencodeFreeBodyCorrectsClientPatch(t *testing.T) {
+func TestShapeOpencodeFreeBodyPreservesClientPatch(t *testing.T) {
 	def, ok := knownOpencodeTool("patch")
 	if !ok {
 		t.Fatal("knownOpencodeTool 应识别 patch")
 	}
-	body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[{"type":"function","function":{"name":"patch","description":` + quoteJSON(t, def.Description) + `,"parameters":{"type":"object","properties":{"diff":{"type":"string"}}}}}]}`)
+	client := `{"type":"function","function":{"name":"patch","description":` + quoteJSON(t, def.Description) + `,"parameters":{"type":"object","properties":{"diff":{"type":"string"}}}}}`
+	body := []byte(`{"model":"x-free","stream":true,"stream_options":{"include_usage":true},"tools":[` + client + `]}`)
 	got, changed, aliases := shapeOpencodeFreeBody(body, false, model.UpstreamProtocolChat)
-	if !changed {
-		t.Fatal("客户端 patch 应改名出站")
-	}
 	wire := ocExpectWireName("patch")
-	if aliases[wire] != "patch" {
-		t.Fatalf("别名表应含 %s→patch, 实际 %v", wire, aliases)
+	if !changed || aliases[wire] != "patch" {
+		t.Fatalf("客户端 patch 应独立改名出站: %v", aliases)
 	}
-	if gjson.GetBytes(got, "tools.41.function.name").String() != wire {
-		t.Fatalf("patch 应排在官方集之后并改名: %s", gjson.GetBytes(got, "tools.#").Raw)
+	want := strings.Replace(client, `"name":"patch"`, `"name":"`+wire+`"`, 1)
+	for _, tool := range gjson.GetBytes(got, "tools").Array() {
+		if tool.Get("function.name").String() == wire {
+			if tool.Raw != want {
+				t.Fatalf("客户端 diff 参数定义不能被覆盖: %s", tool.Raw)
+			}
+			return
+		}
 	}
-	var parameters map[string]any
-	if err := json.Unmarshal([]byte(gjson.GetBytes(got, "tools.41.function.parameters").Raw), &parameters); err != nil {
-		t.Fatalf("解析 %s parameters: %v", wire, err)
-	}
-	// ensureOpencodeFreeTools 先把已知工具校正为真实定义, 再由改名层改名出站。
-	want, _ := json.Marshal(def.Parameters)
-	gotParams, _ := json.Marshal(parameters)
-	if string(gotParams) != string(want) {
-		t.Fatalf("patch 定义应校正为真实定义, 实际 %#v", parameters)
-	}
+	t.Fatal("客户端 patch 工具丢失")
 }
 
 // TestShapeOpencodeFreeBodyKeepsExactPatch 同锁新语义: 客户端 patch 即使定义与

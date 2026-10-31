@@ -820,8 +820,8 @@ func isInfrastructureError(err error) bool {
 		return false
 	}
 	var httpErr *httpclient.Error
-	if errors.As(err, &httpErr) && httpErr.StatusCode == 0 {
-		return true
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode == 0
 	}
 	// net.OpError / net.Error 在三方库深度 wrap 时 errors.As 链路可能断, 同时用文本兜底
 	var opErr *net.OpError

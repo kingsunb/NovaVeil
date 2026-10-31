@@ -21,6 +21,7 @@ Status: implemented
 
 - 新增 `opencodeRejectCooldown(retryAfter string, now time.Time) time.Duration`（`internal/relay/opencode_proxy_pool.go`）：上游 `Retry-After` 为秒数时按该秒数冷却；缺失或非秒数时回落到「距下一个 UTC 零点」；一律钳到上限 `ocProxyRejectedCooldown`（24h，保留为上限与兜底值，不再是定值）。
 - `markOpencodeProxyRejected` 增加 `retryAfter string` 参数，两个调用点各自取值：业务路径 `internal/relay/handler.go` 用新增的 `UpstreamRetryAfter(err)`（从 `*httpclient.Error.Headers` 取，已核实该结构体带 `Headers http.Header`），容量探测 `internal/relay/context_probe.go` 直接读 `response.Header`。
+- 同协议流式 HTTP 失败也保存 `*httpclient.Error.Headers`；错误正文读取或关闭失败与 HTTP 错误一同保留，已确认的非零状态码优先于网络错误分类。`TestPassthroughStreamErrorPreservesRetryAfter` 覆盖头保留、正文截断、关闭错误与秒数冷却。见 [免费档契约修复](./2026-10-30-opencode-free-contract-repair.md)。
 - 探测探针 `opencodeProxyProbe` 增加只读 `headers` 字段，用于让上游响应携带 `Retry-After`；既有用例的 `respond` 签名不变。
 - 事实同步：`docs/DEVELOPMENT_routing.md` 代理账号退避条目改为「优先取 `Retry-After`，缺失回落 UTC 零点，上限 24 小时」。
 

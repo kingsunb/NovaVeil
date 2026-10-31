@@ -34,7 +34,7 @@ Status: implemented
 
 ### 账号台账与自动体检（同日追加）
 
-生成/粘贴的账号**探测前即落账**（`op.UpsertOpencodeGeneratedAccounts`，source=generated），探测结论同步回写（`SaveOpencodeProbeResult`），台账长期保存。`GET /channel/proxy-accounts?filter=` 返回派生视图：可用=未冷却且（最近探测健康或 7 天内有转发成功）；未测试=从未探测且从未成功；不可用=冷却中或最近探测被拒且无在效成功；网络错误=最近探测遇基础设施故障且无在效成功（不代表账号被封，单独筛选可复测）；**历史可用=累计成功过（success_count > 0，不依赖 last_success_at——存量库有旧版冷却落库伪造的非零最近成功时间，按时间判会把从未成功的账号误入历史可用）**。`DELETE /channel/proxy-accounts` 删除台账账号并同步清理进程内池。自动体检：设置键 `opencode_account_auto_probe`（默认开启，台账为空时空转；不进 DefaultSettings，随缓存初始化惰性补种），后台任务每 24 小时跑一轮，只测距上次体检超过周期的账号（最早优先，单渠道单轮上限与单次体检对齐，30000），健康探测会清除既有冷却（复用成功回填）。
+生成/粘贴的账号**探测前即落账**（`op.UpsertOpencodeGeneratedAccounts`，source=generated），探测结论同步回写（`SaveOpencodeProbeResult`），台账长期保存。`GET /channel/proxy-accounts?filter=` 返回派生视图：可用=未冷却且（最近探测健康或 7 天内有转发成功）；今日未测试=今日既无体检也无成功（原「未测试」口径已被 [今日未测试笔记](2026-10-31-opencode-account-untested-today.md) 取代）；不可用=冷却中或最近探测被拒且无在效成功；网络错误=最近探测遇基础设施故障且无在效成功（不代表账号被封，单独筛选可复测）；**历史可用=累计成功过（success_count > 0，不依赖 last_success_at——存量库有旧版冷却落库伪造的非零最近成功时间，按时间判会把从未成功的账号误入历史可用）**。`DELETE /channel/proxy-accounts` 删除台账账号并同步清理进程内池。自动体检：设置键 `opencode_account_auto_probe`（默认开启，台账为空时空转；不进 DefaultSettings，随缓存初始化惰性补种），后台任务每 24 小时跑一轮，只测距上次体检超过周期的账号（最早优先，单渠道单轮上限与单次体检对齐，30000），健康探测会清除既有冷却（复用成功回填）。
 
 **成功/失败计数按来源拆分**：台账新增 `real_success_count` / `real_failure_count` / `probe_success_count` 三列——下游真实转发在 handler 回填处计成功与失败（客户端取消/管理端中止不算失败，403/429 同时计失败并冷却），体检探测（账号体检与上下文探测）只计体检成功；`success_count` 仍为两路合计，成功天数口径不变。**成功落库同时清除库内 cooldown_until**（与池内回填语义对齐；旧行为只清内存不清库，台账页会在冷却期持续显示「健康但不可用」且重启后回退）。台账列表默认按「真实成功 + 体检成功」降序、同数按账号名升序。转发选号「已验证优先、最近成功优先」由 `TestOpencodeRelayPrefersVerifiedAccountAndCountsRealTraffic` 端到端锁定。
 
@@ -63,7 +63,7 @@ cd web-next && pnpm typecheck && pnpm lint && pnpm test -- ProxyAccounts
 
 - `TestProbeOpencodeAccountsClassifiesAndSeedsPool`：假 CONNECT 代理按账号返回 200/403/502，断言三分类与池状态（verified / 冷却 / 失败仅普通候选）。
 - `TestProbeOpencodeAccountsGenerateAndValidate`：生成模式（去重、`opencode` 前缀格式）、非法字符拒绝、超上限拒绝、非 `{account}` 渠道拒绝。
-- `TestOpencodeAccountLedgerStates`：三态派生（健康/冷却/未测试/被拒无在效成功）、筛选与删除。
+- `TestOpencodeAccountLedgerStates`：状态派生（健康/冷却/今日未测试/被拒无在效成功）、筛选与删除。
 - `TestOpencodeLedgerHistoricFilterAndSplitCounters`：历史可用筛选口径（曾成功含冷却好号）与三类拆分计数。
 - `TestProbeOpencodeAccountsRecordsProbeSuccessCounter`：体检成功只计体检计数。
 - `TestOpencodeRelayPrefersVerifiedAccountAndCountsRealTraffic`：下游真实请求先选已验证健康账号，成功计真实计数。

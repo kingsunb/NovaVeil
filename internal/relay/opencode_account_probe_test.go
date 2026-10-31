@@ -136,7 +136,7 @@ func TestProbeOpencodeAccountsGenerateAndValidate(t *testing.T) {
 }
 
 // TestOpencodeAccountLedgerStates 验证台账状态派生、筛选与删除:
-// 可用=健康探测; 未测试=仅录入; 不可用=冷却中或被上游拒绝; 网络错误=基础设施故障可复测。
+// 可用=健康探测; 今日未测试=今日无体检且无成功; 不可用=冷却中或被上游拒绝; 网络错误=基础设施故障可复测。
 func TestOpencodeAccountLedgerStates(t *testing.T) {
 	setupFailoverTest(t)
 	probe := newOpencodeProxyProbe(t, func(string) (int, []byte) {
@@ -160,19 +160,29 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 	if err := op.SaveOpencodeProbeResult(channel.ID, "acct_neterr", model.OpencodeAccountOutcomeError, 502, now); err != nil {
 		t.Fatalf("写探测结论失败: %v", err)
 	}
+	if err := op.SaveOpencodeProbeResult(channel.ID, "acct_stale", model.OpencodeAccountOutcomeHealthy, 200, now.Add(-24*time.Hour)); err != nil {
+		t.Fatalf("写昨日探测结论失败: %v", err)
+	}
+	if err := op.SaveOpencodeProbeResult(channel.ID, "acct_today_success", model.OpencodeAccountOutcomeRejected, 403, now.Add(-24*time.Hour)); err != nil {
+		t.Fatalf("写昨日探测结论失败: %v", err)
+	}
+	if err := op.SaveOpencodeProxySuccess(channel.ID, "acct_today_success", now); err != nil {
+		t.Fatalf("写今日成功记录失败: %v", err)
+	}
 
 	ledger, err := ListOpencodeAccountStates(channel.ID, "all")
 	if err != nil {
 		t.Fatalf("读台账失败: %v", err)
 	}
-	if ledger.Usable != 1 || ledger.Unusable != 2 || ledger.Untested != 1 || ledger.ProbeError != 1 {
+	if ledger.Total != 7 || ledger.Usable != 3 || ledger.Unusable != 2 || ledger.Untested != 3 || ledger.ProbeError != 1 {
 		t.Fatalf("状态计数异常: %+v", ledger)
 	}
 	states := make(map[string]string, len(ledger.Items))
 	for _, item := range ledger.Items {
 		states[item.Account] = item.State
 	}
-	if states["acct_ok"] != "usable" || states["acct_cooling"] != "unusable" ||
+	if states["acct_ok"] != "usable" || states["acct_stale"] != "usable" ||
+		states["acct_today_success"] != "usable" || states["acct_cooling"] != "unusable" ||
 		states["acct_untested"] != "untested" || states["acct_rejected"] != "unusable" ||
 		states["acct_neterr"] != "error" {
 		t.Fatalf("状态派生异常: %+v", states)
@@ -186,12 +196,25 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 		t.Fatalf("error 筛选异常: %+v", filtered.Items)
 	}
 
+	untested, err := ListOpencodeAccountStates(channel.ID, "untested")
+	if err != nil {
+		t.Fatalf("筛选失败: %v", err)
+	}
+	if len(untested.Items) != 3 {
+		t.Fatalf("untested 筛选应返回 3 条: %+v", untested.Items)
+	}
+	for i, account := range []string{"acct_cooling", "acct_stale", "acct_untested"} {
+		if untested.Items[i].Account != account {
+			t.Fatalf("untested 筛选异常: %+v", untested.Items)
+		}
+	}
+
 	deleted, err := DeleteOpencodeAccountsFromLedger(channel.ID, []string{"acct_untested"})
 	if err != nil || deleted != 1 {
 		t.Fatalf("删除应移除 1 行: deleted=%d err=%v", deleted, err)
 	}
-	if ledger2, _ := ListOpencodeAccountStates(channel.ID, "all"); ledger2.Total != 4 {
-		t.Fatalf("删除后台账应剩 4 行: %d", ledger2.Total)
+	if ledger2, _ := ListOpencodeAccountStates(channel.ID, "all"); ledger2.Total != 6 || ledger2.Untested != 2 {
+		t.Fatalf("删除后台账应剩 6 行且今日未测试 2 条: %+v", ledger2)
 	}
 
 	// 成功统计: 同一自然日多次成功只累计次数不增天数, 跨自然日天数 +1。

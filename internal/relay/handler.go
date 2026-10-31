@@ -175,9 +175,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			trimmed, truncated := truncateMaskMatches(matches)
 			request.applyMaskResult(string(masked), trimmed, truncated)
 		}
-		// opencode 身份别名: 把客户端身份关键词替换为 "opencode", 响应时在内容字段还原。
-		aliasBody, aliasState := applyOpencodeAlias(raw.Body)
-		raw.Body = aliasBody
 		// 有会话键的映射跨请求保留(多轮同一占位符), 由 SessionStore TTL 回收;
 		// 无会话键时 Apply 使用请求级 Mapping, 不入表, 请求结束即释放。
 		// 请求级随机头与 opencode 会话头都在首次发起上游前解析一次, 之后所有重试复用。
@@ -927,8 +924,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				request.markCommitted()
 				// 脱敏还原: 非流式响应占位符→原文(文档 01 §3.1)。
 				result.body = restoreNonStream(result.body, maskMapping)
-				// opencode 身份别名还原: 内容字段 "opencode"→原关键词。
-				result.body = restoreOpencodeAliasNonStream(result.body, format, aliasState)
 				// 响应模型回显: 把真实上游模型名改写回客户端请求的分组名, 避免聚合分组泄露上游模型。
 				if relayConfig.EchoResponseModel {
 					result.body = echoNonStreamResponseModel(result.body, format, request.Model)
@@ -1090,8 +1085,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				if streamRestorer != nil {
 					event.Data = restoreStreamEvent(event.Data, format, streamRestorer)
 				}
-				// opencode 身份别名还原: SSE 内容字段 "opencode"→原关键词。
-				event.Data = restoreOpencodeAliasStream(event.Data, format, aliasState)
 				// 响应模型回显: 流式事件里的真实上游模型名改写回客户端请求的分组名。
 				if relayConfig.EchoResponseModel {
 					event.Data = echoStreamResponseModel(event.Data, format, request.Model)

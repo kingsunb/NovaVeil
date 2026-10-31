@@ -854,7 +854,7 @@ export const api = {
     };
   },
 
-  /** 账号台账: 五类筛选 all/usable/untested/unusable/error/historic。 */
+  /** 账号台账: 五类筛选 all/usable/untested/unusable/error/historic, untested 指今日未测试。 */
   listProxyAccounts: async (channelId: number, filter: string) =>
     (await http<unknown>(
       `/channel/proxy-accounts?channel_id=${channelId}&filter=${encodeURIComponent(filter)}`,

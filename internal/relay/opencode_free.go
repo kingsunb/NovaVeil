@@ -230,10 +230,10 @@ func opencodeFreeLaneAccept(channel model.Channel) string {
 }
 
 // applyOpencodeFreeLaneHeaders 在连线上游前按档位设置 OpenCode 免费档的请求头:
-//   - v1 档(/zen): User-Agent 用协议相关的 opencode/1.19.4 ai-sdk/provider-utils/<ver>
+//   - v1 档(/zen): User-Agent 用协议相关的 opencode/1.19.5 ai-sdk/provider-utils/<ver>
 //     runtime/bun/1.4.4(<ver> 按出站协议), Accept 用 */*, 并发送 x-opencode-request
 //     (msg_ 升序 id);
-//   - v2 档(/inference): User-Agent 动态覆盖为 opencode/latest/2.1.4/cli,
+//   - v2 档(/inference): User-Agent 动态覆盖为 opencode/latest/2.2.1/cli,
 //     Accept 用 */*, 同样发送 x-opencode-request(官方 v2 客户端实抓两个头都发);
 //     Anthropic 出站补 beta=true。
 //
@@ -304,99 +304,87 @@ func bodyModelName(body []byte) string {
 	return gjson.GetBytes(body, "model").String()
 }
 
-// shapeOpencodeFreeBody 把免费档正文规范成 Agent 形态。
-// shapeOpencodeFreeBody 把免费档正文规范成 Agent 形态。第三返回值是出站
-// 工具别名表(出站名 → 客户端名), 转发路径据此把响应里的出站名还原给客户端。
+// 返回本轮新增的工具别名。
 func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, bool, map[string]string) {
+	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
+		return body, false, nil
+	}
+	switch protocol {
+	case model.UpstreamProtocolChat, model.UpstreamProtocolResponses, model.UpstreamProtocolAnthropic:
+	default:
+		return body, false, nil
+	}
 	out := body
 	changed := false
-
+	lane := "v2"
+	if v1Lane {
+		lane = "v1"
+	}
 	if !gjson.GetBytes(out, "stream").Bool() {
 		if next, err := sjson.SetBytes(out, "stream", true); err == nil {
 			out, changed = next, true
 		}
 	}
-	if protocol == model.UpstreamProtocolChat {
-		if !gjson.GetBytes(out, "stream_options.include_usage").Bool() {
-			if next, err := sjson.SetBytes(out, "stream_options.include_usage", true); err == nil {
+	if protocol == model.UpstreamProtocolResponses {
+		if next, injected := ensureOfficialOpencodeInstructions(out, lane, bodyModelName(out)); injected {
+			out, changed = next, true
+		}
+	}
+	if !v1Lane {
+		if protocol != model.UpstreamProtocolChat {
+			if next, injected := ensureOpencodeFreeTools(out, protocol); injected {
+				out, changed = next, true
+			}
+		}
+		if !gjson.GetBytes(out, "max_tokens").Exists() && !gjson.GetBytes(out, "max_completion_tokens").Exists() && !gjson.GetBytes(out, "max_output_tokens").Exists() {
+			if next, err := sjson.SetBytes(out, protocolTokenLimitField(protocol), opencodeV2CompletionLimit); err == nil {
 				out, changed = next, true
 			}
 		}
 	}
-	if v1Lane {
-		next, alias, injected := ensureV1ReadTool(out)
-		if injected {
+	if protocol != model.UpstreamProtocolChat {
+		return out, changed, nil
+	}
+	if !gjson.GetBytes(out, "stream_options.include_usage").Bool() {
+		if next, err := sjson.SetBytes(out, "stream_options.include_usage", true); err == nil {
 			out, changed = next, true
 		}
-		if protocol == model.UpstreamProtocolChat {
-			if sysNext, sysChanged := ensureOfficialOpencodeSystem(out, "v1", bodyModelName(out)); sysChanged {
-				out, changed = sysNext, true
-			}
-			if crlfNext, crlfChanged := normalizeOpencodeSystemCRLF(out); crlfChanged {
-				out, changed = crlfNext, true
-			}
-			// 黑名单: v1 剥离客户端新式顶层参数。
-			for _, key := range []string{"store", "prompt_cache_key", "max_completion_tokens"} {
-				if gjson.GetBytes(out, key).Exists() {
-					if next, err := sjson.DeleteBytes(out, key); err == nil {
-						out, changed = next, true
-					}
-				}
-			}
-			// 缺 max_tokens 时补官方实抓值。
-			if !gjson.GetBytes(out, "max_tokens").Exists() {
-				if next, err := sjson.SetBytes(out, "max_tokens", opencodeV1CompletionLimit); err == nil {
-					out, changed = next, true
-				}
-			}
-			if !gjson.GetBytes(out, "tool_choice").Exists() {
-				if next, err := sjson.SetBytes(out, "tool_choice", "auto"); err == nil {
-					out, changed = next, true
-				}
-			}
-			if normalized := normalizeOpencodeChatBody(out, v1ChatKeyOrder); normalized != nil {
-				out = normalized
-			}
-		}
-		if toolNext, aliases := ensureOfficialToolset(out, "v1"); aliases != nil {
-			out, changed = toolNext, true
-			if alias != "" {
-				aliases[v1ReadToolName] = alias
-			}
-			if normalized := normalizeOpencodeChatBody(out, v1ChatKeyOrder); normalized != nil {
-				out = normalized
-			}
-			return out, changed, aliases
-		}
-		if alias == "" {
-			return out, changed, nil
-		}
-		return out, changed, map[string]string{v1ReadToolName: alias}
 	}
-	if next, injected := ensureOpencodeFreeTools(out, protocol); injected {
+	if next, injected := ensureOfficialOpencodeSystem(out, lane, bodyModelName(out)); injected {
 		out, changed = next, true
 	}
-	if !gjson.GetBytes(out, "max_tokens").Exists() && !gjson.GetBytes(out, "max_completion_tokens").Exists() && !gjson.GetBytes(out, "max_output_tokens").Exists() {
-		if next, err := sjson.SetBytes(out, protocolTokenLimitField(protocol), opencodeV2CompletionLimit); err == nil {
+	keyOrder := v2ChatKeyOrder
+	if v1Lane {
+		keyOrder = v1ChatKeyOrder
+		if next, normalized := normalizeOpencodeSystemCRLF(out); normalized {
 			out, changed = next, true
 		}
-	}
-	if protocol == model.UpstreamProtocolChat {
-		if sysNext, sysChanged := ensureOfficialOpencodeSystem(out, "v2", bodyModelName(out)); sysChanged {
-			out, changed = sysNext, true
-		}
-		if toolNext, aliases := ensureOfficialToolset(out, "v2"); aliases != nil {
-			out, changed = toolNext, true
-			if normalized := normalizeOpencodeChatBody(out, v2ChatKeyOrder); normalized != nil {
-				out = normalized
+		for _, key := range []string{"store", "prompt_cache_key", "max_completion_tokens"} {
+			if gjson.GetBytes(out, key).Exists() {
+				if next, err := sjson.DeleteBytes(out, key); err == nil {
+					out, changed = next, true
+				}
 			}
-			return out, changed, aliases
 		}
-		if normalized := normalizeOpencodeChatBody(out, v2ChatKeyOrder); normalized != nil {
-			out = normalized
+		if !gjson.GetBytes(out, "max_tokens").Exists() {
+			if next, err := sjson.SetBytes(out, "max_tokens", opencodeV1CompletionLimit); err == nil {
+				out, changed = next, true
+			}
+		}
+		if !gjson.GetBytes(out, "tool_choice").Exists() {
+			if next, err := sjson.SetBytes(out, "tool_choice", "auto"); err == nil {
+				out, changed = next, true
+			}
 		}
 	}
-	return out, changed, nil
+	next, aliases := ensureOfficialToolset(out, lane)
+	if !bytes.Equal(next, out) {
+		out, changed = next, true
+	}
+	if normalized := normalizeOpencodeChatBody(out, keyOrder); normalized != nil {
+		out = normalized
+	}
+	return out, changed, aliases
 }
 
 // ocOfficialSystemPrefixLen 是官方系统提示幂等判定的前缀长度。
@@ -763,12 +751,7 @@ func v1DeprecatedReadTool() string {
 	return string(b)
 }
 
-// ensureOpencodeFreeTools 确保核心工具存在且定义真实, 报告是否改写。
-//   - 客户端已声明的同名核心工具: 替换为真实定义(上游逐字节比对, 客户端自带的不匹配会 403)。
-//   - 缺失的核心工具: 追加真实定义。
-//   - 非核心工具原样保留。
-//
-// tools 字段存在但不是数组时视为客户端输入异常, 不改写。
+// 只补缺失工具，保留客户端定义。
 func ensureOpencodeFreeTools(body []byte, protocol string) ([]byte, bool) {
 	tools := gjson.GetBytes(body, "tools")
 	if tools.Exists() && !tools.IsArray() {
@@ -787,16 +770,6 @@ func ensureOpencodeFreeTools(body []byte, protocol string) ([]byte, bool) {
 			continue
 		}
 		present[name] = true
-		// 同名已知工具: description 或 parameters 不一致时替换。上游逐字节比对
-		// description/parameters, 客户端自带的定义几乎不可能恰好匹配。已一致的
-		// 不替换, 保持幂等。
-		if def, known := knownOpencodeTool(name); known {
-			if !opencodeToolMatches(def, t, protocol) {
-				items = append(items, opencodeFreeTool(name, protocol))
-				changed = true
-				continue
-			}
-		}
 		items = append(items, t.Raw)
 	}
 
@@ -880,7 +853,7 @@ func marshalOpencodeJSON(value any) ([]byte, error) {
 // v2ChatKeyOrder 是免费档 v2 Chat 正文的固定键序, 对齐官方客户端逐字节指纹。
 var v2ChatKeyOrder = []string{"model", "messages", "tools", "stream", "stream_options", "max_completion_tokens"}
 
-// v1ChatKeyOrder 是 v1 档(/zen)官方 1.19.4 客户端的 Chat 键序, 由实抓核实。
+// v1ChatKeyOrder 是 v1 档(/zen)官方 1.19.5 客户端的 Chat 键序, 由实抓核实。
 var v1ChatKeyOrder = []string{"model", "max_tokens", "messages", "tools", "tool_choice", "stream", "stream_options"}
 
 // normalizeOpencodeChatBody 把免费档 Chat 正文重编码为固定键序且不转义 HTML,

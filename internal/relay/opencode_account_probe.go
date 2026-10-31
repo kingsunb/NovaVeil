@@ -589,6 +589,7 @@ type OpencodeAccountLedger struct {
 	Items     []OpencodeAccountLedgerItem `json:"items"`
 	Total     int                         `json:"total"`
 	Usable    int                         `json:"usable"`
+	// Untested 为今日既未体检也未成功的账号数。
 	Untested  int                         `json:"untested"`
 	Unusable  int                         `json:"unusable"`
 	// ProbeError 是最近一次体检遇基础设施故障(网络/代理/上游 5xx)的账号数:
@@ -600,7 +601,7 @@ type OpencodeAccountLedger struct {
 
 // ListOpencodeAccountStates 返回渠道账号台账并按状态派生与筛选。
 // filter: all(默认)/usable/untested/unusable/error/historic。派生口径:
-// 可用 = 未冷却且(最近探测健康 或 7 天内有转发成功); 未测试 = 从未探测且从未成功;
+// 可用 = 未冷却且(最近探测健康 或 7 天内有转发成功); 今日未测试 = 今日既无体检也无成功;
 // 不可用 = 冷却中或最近探测被上游拒绝; 网络错误 = 最近探测遇基础设施故障且无在效成功;
 // 历史可用 = 累计成功过(success_count > 0, 不依赖 last_success_at, 免受存量脏数据干扰)。
 // 条目默认按「真实成功 + 体检成功」降序, 同数按账号名升序, 好号置顶。
@@ -620,17 +621,21 @@ func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLe
 		return nil, err
 	}
 	now := time.Now()
+	today := now.Format("2006-01-02")
 	ledger := &OpencodeAccountLedger{ChannelID: channelID}
 	for _, row := range rows {
 		state := ocAccountLedgerState(row, now)
 		hasSuccess := row.SuccessCount > 0
+		testedToday := ocAccountTestedToday(row, today)
+		if !testedToday {
+			ledger.Untested++
+		}
 		switch state {
 		case "usable":
 			ledger.Usable++
-		case "untested":
-			ledger.Untested++
 		case "error":
 			ledger.ProbeError++
+		case "untested":
 		default:
 			ledger.Unusable++
 		}
@@ -639,6 +644,10 @@ func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLe
 		}
 		if filter == "historic" {
 			if !hasSuccess {
+				continue
+			}
+		} else if filter == "untested" {
+			if testedToday {
 				continue
 			}
 		} else if filter != "all" && filter != state {
@@ -670,6 +679,13 @@ func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLe
 	})
 	ledger.Total = len(rows)
 	return ledger, nil
+}
+
+// ocAccountTestedToday 判断账号今日是否体检或成功过。
+func ocAccountTestedToday(row model.OpencodeProxyAccount, today string) bool {
+	probeToday := !row.LastProbeAt.IsZero() && row.LastProbeAt.In(time.Local).Format("2006-01-02") == today
+	successToday := !row.LastSuccessAt.IsZero() && row.LastSuccessAt.In(time.Local).Format("2006-01-02") == today
+	return probeToday || successToday
 }
 
 // ocAccountLedgerState 派生台账条目的四态: usable/untested/unusable/error。

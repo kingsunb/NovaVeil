@@ -95,17 +95,18 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	// 的默认 text/event-stream; 其余渠道留空, 行为与改动前完全一致。
 	opencodeAccept := ""
 	var toolAliases map[string]string
+	var identityAliases *opencodeAliasState
 	if isOpencodeFreeModel(channel, bodyModelName(request.Body)) {
-		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)补 Accept, Anthropic 另补 beta。
 		applyOpencodeFreeLaneHeaders(channel, request, bodyModelName(request.Body))
 		opencodeAccept = opencodeFreeLaneAccept(channel)
 		if isChatFormat(format) {
-			var shaped bool
-			request.Body, shaped, toolAliases = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(channel), formatToProtocol(format))
-			collapsed = shaped && !streaming
-		} else if formatToProtocol(format) == model.UpstreamProtocolResponses {
-			// Responses 的系统提示走 instructions, 单独补齐官方形态。
-			request.Body, _ = ensureOfficialOpencodeInstructions(request.Body, opencodeLaneKey(channel), bodyModelName(request.Body))
+			request.Body, identityAliases, err = applyOpencodeAlias(request.Body, format)
+			if err != nil {
+				releaseConcurrency()
+				return nil, err
+			}
+			request.Body, _, toolAliases = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(channel), formatToProtocol(format))
+			collapsed = !streaming && gjson.GetBytes(request.Body, "stream").Bool()
 		}
 	}
 	if streaming {
@@ -118,7 +119,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		// 失败路径已在 sendPassthroughStream 内部 close events 后返回, 此处无需再释放。
 		resp.release = releaseConcurrency
 		applyToolAliasRestore(resp, toolAliases)
-		return resp, nil
+		return finishOpencodeResponse(resp, format, identityAliases)
 	}
 	if collapsed {
 		resp, err := sendPassthroughStream(ctx, format, request, client, opencodeAccept)
@@ -136,7 +137,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 			return nil, err
 		}
 		body = restoreToolAliasesInBody(body, toolAliases)
-		return &upstreamResponse{body: body, usage: usage, release: releaseConcurrency}, nil
+		return finishOpencodeResponse(&upstreamResponse{body: body, usage: usage, release: releaseConcurrency}, format, identityAliases)
 	}
 
 	response, err := httpclient.NewHttpClientWithClient(client).Do(ctx, request)
@@ -153,7 +154,8 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	// 完全渠道透传下, outbound transformer 按渠道类型创建(如 OpenAI), 但响应格式由客户端
 	// 协议决定(可能是 Anthropic), 用 OpenAI outbound 解析会失败, 因此也跳过。
 	if !isChatFormat(format) || channel.PassThroughBodyEnabled {
-		return &upstreamResponse{body: response.Body, header: response.Headers.Clone(), release: releaseConcurrency}, nil
+		response.Body = restoreToolAliasesInBody(response.Body, toolAliases)
+		return finishOpencodeResponse(&upstreamResponse{body: response.Body, header: response.Headers.Clone(), release: releaseConcurrency}, format, identityAliases)
 	}
 	// 同协议下响应可原样回给客户端, 仍需解析一次以取得用量并识别以 200 下发的失败终态;
 	// validateResponse 同时应用终止原因白名单, 异常 finish_reason 的响应在此整轮判无效。
@@ -179,7 +181,16 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	}
 	// response.Body 是本请求的独立读取缓冲, 直接移交所有权, 不再整包克隆一份。
 	response.Body = restoreToolAliasesInBody(response.Body, toolAliases)
-	return &upstreamResponse{body: response.Body, header: response.Headers.Clone(), usage: parsed.Usage, release: releaseConcurrency}, nil
+	return finishOpencodeResponse(&upstreamResponse{body: response.Body, header: response.Headers.Clone(), usage: parsed.Usage, release: releaseConcurrency}, format, identityAliases)
+}
+
+// 还原失败必须释放上游资源。
+func finishOpencodeResponse(resp *upstreamResponse, format llm.APIFormat, state *opencodeAliasState) (*upstreamResponse, error) {
+	if err := applyOpencodeIdentityRestore(resp, format, state); err != nil {
+		resp.Close()
+		return nil, err
+	}
+	return resp, nil
 }
 
 // applyToolAliasRestore 对流式响应按别名表还原工具名: 窗口内已缓冲事件就地
@@ -238,14 +249,17 @@ func sendPassthroughStream(ctx context.Context, format llm.APIFormat, request *h
 		return nil, err
 	}
 	if response.StatusCode >= http.StatusBadRequest {
-		failure, readErr := readUpstreamErrorBody(response.Body)
-		if closeErr := response.Body.Close(); readErr == nil {
-			readErr = closeErr
+		body, readErr := readUpstreamErrorBody(response.Body)
+		closeErr := response.Body.Close()
+		failure := &httpclient.Error{
+			Method:     rawRequest.Method,
+			URL:        rawRequest.URL.String(),
+			StatusCode: response.StatusCode,
+			Status:     response.Status,
+			Body:       body,
+			Headers:    response.Header.Clone(),
 		}
-		if readErr != nil {
-			return nil, readErr
-		}
-		return nil, fmt.Errorf("upstream responded %s: %s", response.Status, errBodySnippet(failure))
+		return nil, errors.Join(fmt.Errorf("%w: %s", failure, errBodySnippet(body)), readErr, closeErr)
 	}
 
 	events := httpclient.NewDefaultSSEDecoder(ctx, response.Body)
@@ -282,6 +296,44 @@ type conversionMiddleware struct {
 	terminal                 string        // 非流式统一响应的终止原因, 供空输出保险丝区分合法空终态。
 	traceEnabled             bool          // 是否捕获转换后请求体(供协议转换追踪); 关闭时不捕获, 零开销。
 	convertedRequestBody     []byte        // 转换后的上游请求体快照; 仅 traceEnabled=true 时填充, 供追踪诊断对比。
+	toolAliases              map[string]string
+	toolSchemas              map[string][]string
+}
+
+func opencodeToolSchemaSnapshot(body []byte, format llm.APIFormat) map[string][]string {
+	namePath, _, schemaPath := toolFieldPaths(formatToProtocol(format))
+	schemas := make(map[string][]string)
+	for _, tool := range gjson.GetBytes(body, "tools").Array() {
+		name := tool.Get(namePath).String()
+		schema := tool.Get(schemaPath)
+		if name != "" && schema.Exists() {
+			schemas[name] = append(schemas[name], schema.Raw)
+		}
+	}
+	return schemas
+}
+
+func restoreOpencodeToolSchemas(body []byte, format llm.APIFormat, schemas map[string][]string) ([]byte, error) {
+	if len(schemas) == 0 {
+		return body, nil
+	}
+	namePath, _, schemaPath := toolFieldPaths(formatToProtocol(format))
+	used := make(map[string]int)
+	for i, tool := range gjson.GetBytes(body, "tools").Array() {
+		name := tool.Get(namePath).String()
+		index := used[name]
+		if index >= len(schemas[name]) {
+			continue
+		}
+		used[name]++
+		path := "tools." + itoa(i) + "." + schemaPath
+		var err error
+		body, err = sjson.SetRawBytes(body, path, []byte(schemas[name][index]))
+		if err != nil {
+			return nil, fmt.Errorf("restore opencode tool schema: %w", err)
+		}
+	}
+	return body, nil
 }
 
 // OnInboundLlmRequest 在统一请求进入出站转换前, 把渠道模型输出上限写入 TransformOptions。
@@ -319,28 +371,34 @@ func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *
 		request.Headers.Del("X-Api-Key")
 		request.Headers.Del("X-Goog-Api-Key")
 	}
+	m.toolAliases = nil
 	if m.format == llm.APIFormatOpenAIChatCompletion {
+		toolChoice := gjson.GetBytes(request.Body, "tool_choice")
 		request.Body = normalizeChatRoles(request.Body)
+		if toolChoice.Exists() && isOpencodeFreeModel(m.channel, bodyModelName(request.Body)) && !gjson.GetBytes(request.Body, "tool_choice").Exists() {
+			var err error
+			request.Body, err = sjson.SetRawBytes(request.Body, "tool_choice", []byte(toolChoice.Raw))
+			if err != nil {
+				return nil, fmt.Errorf("preserve opencode tool choice: %w", err)
+			}
+		}
+	}
+	var schemaErr error
+	request.Body, schemaErr = restoreOpencodeToolSchemas(request.Body, m.format, m.toolSchemas)
+	if schemaErr != nil {
+		return nil, schemaErr
 	}
 	if err := applyChannelConfig(m.channel, request, m.randomValue, m.opencodeSession); err != nil {
 		return nil, err
 	}
-	// OpenCode Zen 免费档改写: 转换路径与透传路径须同形, 否则免费档以 403 FreeTierError
-	// 拒绝。Chat 归一与渠道参数已应用、model 名已最终化, 此时把出站 Chat 正文规范成
-	// Agent 形态(stream + 核心工具)。客户端非流式的折叠由 sendConverted 依据 !streaming 判定。
+	// 回写不能绕过免费档字段过滤。
+	request.Body = restorePromptCacheKey(request.Body, m.promptCacheKey, m.format)
 	if isOpencodeFreeModel(m.channel, bodyModelName(request.Body)) {
-		// v1 档(/zen)按出站协议设置 User-Agent 并发送 x-opencode-request; v2 档(/inference)补 Accept, Anthropic 另补 beta。
 		applyOpencodeFreeLaneHeaders(m.channel, request, bodyModelName(request.Body))
 		if isChatFormat(m.format) {
-			request.Body, _, _ = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(m.channel), formatToProtocol(m.format))
-		} else if formatToProtocol(m.format) == model.UpstreamProtocolResponses {
-			// Responses 的系统提示走 instructions, 单独补齐官方形态。
-			request.Body, _ = ensureOfficialOpencodeInstructions(request.Body, opencodeLaneKey(m.channel), bodyModelName(request.Body))
+			request.Body, _, m.toolAliases = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(m.channel), formatToProtocol(m.format))
 		}
 	}
-	// 角色归一与渠道参数覆盖之后再回写。Chat 归一会剥掉白名单外的顶层字段,
-	// 必须在那之后补回, 且只补出站 JSON 里还没有的字段。不回写 JSONBody, 避免该值进日志副本。
-	request.Body = restorePromptCacheKey(request.Body, m.promptCacheKey, m.format)
 	return request, nil
 }
 
@@ -544,7 +602,16 @@ func (m *conversionMiddleware) OnOutboundRawError(_ context.Context, err error) 
 // 只截断保存片段而非整包克隆, 避免成功路径为诊断常驻一份完整响应副本。
 func (m *conversionMiddleware) OnOutboundRawResponse(_ context.Context, response *httpclient.Response) (*httpclient.Response, error) {
 	m.rawBody = errBodySnippet(response.Body)
+	response.Body = restoreToolAliasesInBody(response.Body, m.toolAliases)
 	return response, nil
+}
+
+// OnOutboundRawStream 在转换前还原工具名。
+func (m *conversionMiddleware) OnOutboundRawStream(_ context.Context, events streams.Stream[*httpclient.StreamEvent]) (streams.Stream[*httpclient.StreamEvent], error) {
+	if len(m.toolAliases) == 0 {
+		return events, nil
+	}
+	return &toolAliasStream{inner: events, aliases: m.toolAliases}, nil
 }
 
 // OnOutboundLlmResponse 取得非流式用量与终止原因, 并在回转客户端协议前校验上游终态与终止原因白名单。
@@ -604,6 +671,17 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		promptCacheKey:  promptCacheKeyFromClient(raw.Body),
 		traceEnabled:    traceOn,
 	}
+	requestCopy := *raw
+	raw = &requestCopy
+	var identityAliases *opencodeAliasState
+	if isChatFormat(format) && isOpencodeFreeModel(channel, bodyModelName(raw.Body)) {
+		middleware.toolSchemas = opencodeToolSchemaSnapshot(raw.Body, format)
+		raw.Body, identityAliases, err = applyOpencodeAlias(raw.Body, format)
+		if err != nil {
+			releaseConcurrency()
+			return nil, err
+		}
+	}
 	processor := pipeline.NewFactory(httpclient.NewHttpClientWithClient(client)).Pipeline(
 		inbound,
 		outbound,
@@ -614,8 +692,10 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 	// 免费档只接受 Agent 形态的流式请求, 非流式直连必然 403 FreeTierError。
 	collapse := !streaming && isChatFormat(outbound.APIFormat()) && isOpencodeFreeModel(channel, bodyModelName(raw.Body))
 	if collapse {
-		if next, err := sjson.SetBytes(raw.Body, "stream", true); err == nil {
-			raw.Body = next
+		raw.Body, err = sjson.SetBytes(raw.Body, "stream", true)
+		if err != nil {
+			releaseConcurrency()
+			return nil, fmt.Errorf("enable opencode upstream stream: %w", err)
 		}
 	}
 	result, err := processor.Process(ctx, raw)
@@ -640,6 +720,7 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 			return nil, err
 		}
 		resp := &upstreamResponse{events: events, window: window, last: ended, terminated: terminated, release: releaseConcurrency}
+		applyToolAliasRestore(resp, middleware.toolAliases)
 		body, usage, err := collapseOpencodeFreeStream(ctx, format, resp)
 		resp.Close()
 		if err != nil {
@@ -648,7 +729,7 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		if err := validateCollapsedFreeBody(format, body, usage); err != nil {
 			return nil, fmt.Errorf("%w: %s", err, middleware.rawBody)
 		}
-		return &upstreamResponse{body: body, usage: usage, release: releaseConcurrency}, nil
+		return finishOpencodeResponse(&upstreamResponse{body: body, usage: usage, release: releaseConcurrency}, format, identityAliases)
 	}
 	if !streaming {
 		// 输出 token 明确为 0 的响应按无效处理, 在提交前换目标重试;
@@ -663,7 +744,7 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 			return nil, fmt.Errorf("%w: %s", err, middleware.rawBody)
 		}
 		// pipeline 输出的响应体是本请求的独立缓冲, 直接移交所有权, 不再整包克隆。
-		return &upstreamResponse{body: result.Response.Body, usage: middleware.usage, release: releaseConcurrency}, nil
+		return finishOpencodeResponse(&upstreamResponse{body: result.Response.Body, usage: middleware.usage, release: releaseConcurrency}, format, identityAliases)
 	}
 
 	events := result.EventStream
@@ -673,7 +754,7 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		releaseConcurrency()
 		return nil, err
 	}
-	return &upstreamResponse{events: events, window: window, last: ended, terminated: terminated, release: releaseConcurrency}, nil
+	return finishOpencodeResponse(&upstreamResponse{events: events, window: window, last: ended, terminated: terminated, release: releaseConcurrency}, format, identityAliases)
 }
 
 // readStreamWindow 预读流式事件直到出现首个内容承载信号(提交点)或流结束(有效性窗口关闭)。
@@ -776,13 +857,10 @@ const (
 func readUpstreamErrorBody(body io.Reader) ([]byte, error) {
 	limited := io.LimitReader(body, errBodySnippetLimit+1)
 	data, err := io.ReadAll(limited)
-	if err != nil {
-		return nil, err
-	}
 	if len(data) > errBodySnippetLimit {
 		data = append(data[:errBodySnippetLimit], []byte("...[truncated]")...)
 	}
-	return data, nil
+	return data, err
 }
 
 // errBodySnippet 把上游报文截断为诊断片段(UTF-8 边界安全), 供错误文本嵌入。

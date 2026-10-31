@@ -21,8 +21,9 @@ Status: implemented
 3. 代理按请求传给 sidecar，而不是按代理启动进程。因此几千个 `{account}` 出口仍只对应一个 Bun 进程。
 4. 上游的所有 HTTP 响应（包括 429/403）原样透传；只有 sidecar 自身网络失败才返回带 `x-noveil-sidecar-error` 头的 502。这样 NovaVeil 能读到真实状态码与 `Retry-After`，账号池才会正确冷却、换号。
 5. sidecar 的响应体由 Bun fetch 自动解压，因此回传时删除上游的 `content-encoding` 与 `content-length`，避免长度/编码与已解压正文不一致。
-6. sidecar 启动时把父进程 PID 传入，父进程退出后自行退出；Go 侧在 sidecar 异常退出后按需重启。
-7. 免费档 system 提示的 `Working directory` 改为运行时进程 cwd（模板占位符 `{{WORKDIR}}`），与官方客户端写自身 cwd 同口径；`Today's date` 本就按 `{{DATE}}` + 本地时间动态生成。两处曾固化抓包机器值，会随时间与环境漂移。
+6. sidecar 启动时把父进程 PID 传入，父进程退出后自行退出；Go 侧在 sidecar 异常退出后按需重启。启动失败仅缓存 1 秒冷却期，之后由后续请求重新解析配置并串行尝试启动；成功清空失败状态，不自动重放上游请求。
+7. 上游 `fetch` 绑定入站 `req.signal`；Go 已取消的请求在读取正文或启动进程前直接失败。JSON 的正文线格式仍为 base64：Go 用 `[]byte` 交给 JSON 编码器，Bun 直接使用解码后的 Buffer，移除显式 base64 字符串与重复字节数组复制。
+8. 免费档 system 提示的 `Working directory` 改为运行时进程 cwd（模板占位符 `{{WORKDIR}}`），与官方客户端写自身 cwd 同口径；`Today's date` 本就按 `{{DATE}}` + 本地时间动态生成。两处曾固化抓包机器值，会随时间与环境漂移。
 
 ## Alternatives considered
 

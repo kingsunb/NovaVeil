@@ -17,12 +17,13 @@ const server = Bun.serve({
     for (const [name, value] of input.headers || []) {
       headers.append(name, value)
     }
-    const body = input.body ? new Uint8Array(Buffer.from(input.body, "base64")) : undefined
+    const body = input.body ? Buffer.from(input.body, "base64") : undefined
     try {
       const upstream = await fetch(input.url, {
         method: input.method,
         headers,
         body,
+        signal: req.signal,
         redirect: "manual",
         proxy: input.proxy || undefined,
       })

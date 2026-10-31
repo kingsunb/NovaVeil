@@ -100,6 +100,8 @@ const jobDone = {
   summary: report.summary,
 };
 
+const ledgerNow = new Date().toISOString();
+
 const ledger = {
   channel_id: 7,
   items: [
@@ -108,7 +110,7 @@ const ledger = {
       state: "usable",
       outcome: "healthy",
       last_probe_status: 200,
-      last_probe_at: "2026-10-24T12:00:00Z",
+      last_probe_at: ledgerNow,
       last_success_at: "2026-10-24T12:00:00Z",
       cooldown_until: "0001-01-01T00:00:00Z",
       source: "generated",
@@ -166,11 +168,24 @@ const ledger = {
   ],
   total: 4,
   usable: 1,
-  untested: 1,
+  untested: 3,
   unusable: 1,
   probe_error: 1,
   historic: 2,
 };
+
+function isTestedToday(item: (typeof ledger.items)[number]) {
+  const now = new Date();
+  const sameLocalDay = (value: string) => {
+    const at = new Date(value);
+    return (
+      at.getFullYear() === now.getFullYear() &&
+      at.getMonth() === now.getMonth() &&
+      at.getDate() === now.getDate()
+    );
+  };
+  return sameLocalDay(item.last_probe_at) || sameLocalDay(item.last_success_at);
+}
 
 /** 按台账接口口径过滤, 供 fetch mock 复用。 */
 function ledgerFor(url: string) {
@@ -179,15 +194,17 @@ function ledgerFor(url: string) {
   const items = ledger.items.filter((item) => {
     if (filter === "all") return true;
     if (filter === "historic") return hasSuccess(item);
+    if (filter === "untested") return !isTestedToday(item);
     return item.state === filter;
   });
   return jsonResponse({
     ...ledger,
     items,
-    total: items.length,
-    usable: items.filter((item) => item.state === "usable").length,
-    untested: items.filter((item) => item.state === "untested").length,
-    unusable: items.filter((item) => item.state === "unusable").length,
+    total: ledger.items.length,
+    usable: ledger.items.filter((item) => item.state === "usable").length,
+    untested: ledger.items.filter((item) => !isTestedToday(item)).length,
+    unusable: ledger.items.filter((item) => item.state === "unusable").length,
+    probe_error: ledger.items.filter((item) => item.state === "error").length,
     historic: ledger.items.filter(hasSuccess).length,
   });
 }
@@ -373,7 +390,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
 
     await screen.findByText("opencode0a1b2c3d");
     expect(await screen.findByText("可用 1")).toBeInTheDocument();
-    expect(screen.getByText("未测试 1")).toBeInTheDocument();
+    expect(screen.getByText("今日未测试 3")).toBeInTheDocument();
     expect(screen.getByText("不可用 1")).toBeInTheDocument();
     expect(screen.getByText("网络错误 1")).toBeInTheDocument();
     expect(screen.getByText(/冷却至/)).toBeInTheDocument();
@@ -394,6 +411,11 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     // 网络错误筛选: 台账只剩网络错误账号(结果表仍展示批量体检结果)
     await user.click(screen.getByText("网络错误 1"));
     expect(await screen.findByText("opencode0d9e0f1a2")).toBeInTheDocument();
+    expect(screen.getAllByText("opencode0a1b2c3d")).toHaveLength(1);
+
+    // 今日未测试筛选: 今日无体检且无成功的账号(含冷却与旧体检), 今日已测的可用账号不在台账
+    await user.click(screen.getByText("今日未测试 3"));
+    expect(await screen.findByText("opencode0c7d8e9f")).toBeInTheDocument();
     expect(screen.getAllByText("opencode0a1b2c3d")).toHaveLength(1);
 
     // 历史可用筛选: 只显示曾成功过的账号(含冷却中的好号), 未成功账号不出现在台账
