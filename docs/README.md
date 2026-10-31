@@ -18,6 +18,7 @@
 | [CHANNEL_PASSTHROUGH.md](CHANNEL_PASSTHROUGH.md) | 渠道 PassThrough 透传机制设计文档 |
 | [OPENCODE_MODEL_CAPABILITY_PLAN.md](OPENCODE_MODEL_CAPABILITY_PLAN.md) | OpenCode 同步能力快照，不带计价（仍未实施） |
 | [DEVELOPMENT_routing.md](DEVELOPMENT_routing.md) | 请求路由与故障转移开发文档 |
+| [DEVELOPMENT_errors.md](DEVELOPMENT_errors.md) | 下游错误响应契约：格式、状态码与提示文案 |
 | [STABILITY_UX_BASELINE.md](STABILITY_UX_BASELINE.md) | 稳定性与 UX 验收基线 |
 | [FEATURES.md](FEATURES.md) | 功能需求清单（REQ/BUG 记录与设计意图） |
 | [FREELLMAPI_PROVIDERS.md](FREELLMAPI_PROVIDERS.md) | FreeLLMAPI 免费 LLM 供应商清单（48 个供应商，含适配器与配额信息） |
