@@ -262,7 +262,7 @@ func markOpencodeProxySuccess(channelID int, account string, probe bool) {
 	if probe {
 		save = op.SaveOpencodeProxyProbeSuccess
 	}
-	go func() {
+	goSafe("opencode-proxy-success", func() {
 		if err := save(channelID, account, now); err != nil {
 			log.Warnf("opencode 代理账号成功记录落库失败: %v", err)
 			return
@@ -273,17 +273,17 @@ func markOpencodeProxySuccess(channelID int, account string, probe bool) {
 		if err := op.PruneOpencodeProxyAccounts(channelID, ocProxyMaxAccounts); err != nil {
 			log.Warnf("opencode 代理账号清理失败: %v", err)
 		}
-	}()
+	})
 }
 
 // markOpencodeProxyRealFailure 累计一次下游真实转发失败并异步落库;
 // 只计数, 不影响池内可用性与冷却。
 func markOpencodeProxyRealFailure(channelID int, account string) {
-	go func() {
+	goSafe("opencode-proxy-failure", func() {
 		if err := op.SaveOpencodeProxyRealFailure(channelID, account); err != nil {
 			log.Warnf("opencode 代理账号失败记录落库失败: %v", err)
 		}
-	}()
+	})
 }
 
 // 403 属于凭据/权限拒绝, 单次即冷却账号并异步落库。
@@ -356,7 +356,7 @@ func markOpencodeProxyCooldown(channelID int, account string, cooldown time.Dura
 	state.cooldownUntil = until
 	prune := pool.needsPrune()
 	pool.mu.Unlock()
-	go func() {
+	goSafe("opencode-proxy-cooldown", func() {
 		if err := op.SaveOpencodeProxyCooldown(channelID, account, until); err != nil {
 			log.Warnf("opencode 代理账号冷却落库失败: %v", err)
 			return
@@ -367,7 +367,7 @@ func markOpencodeProxyCooldown(channelID int, account string, cooldown time.Dura
 		if err := op.PruneOpencodeProxyAccounts(channelID, ocProxyMaxAccounts); err != nil {
 			log.Warnf("opencode 代理账号清理失败: %v", err)
 		}
-	}()
+	})
 }
 
 // newOpencodeProxyAccount 生成新的随机账号标识。

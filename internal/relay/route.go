@@ -436,12 +436,12 @@ func recoverExpiredItems(ctx context.Context, group model.Group, candidates []mo
 			continue
 		}
 		probeWG.Add(1)
-		go func(item model.GroupItem, channel model.Channel) {
+		goSafe("group-probe", func() {
 			defer probeWG.Done()
 			probeCtx, cancelProbe := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 			defer cancelProbe()
 			results <- probeResult{item: item, err: runProbeSafely(probeCtx, channel, item.ChannelModel.Name)}
-		}(item, channel)
+		})
 	}
 
 	var winner model.GroupItem

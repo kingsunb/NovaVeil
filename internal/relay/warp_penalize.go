@@ -91,7 +91,7 @@ func warpPostControlAsync(controlBase, path string, query url.Values) {
 	if len(query) > 0 {
 		endpoint += "?" + query.Encode()
 	}
-	go func() {
+	goSafe("warp-control", func() {
 		client := &http.Client{
 			Timeout:   3 * time.Second,
 			Transport: &http.Transport{Proxy: nil},
@@ -105,7 +105,7 @@ func warpPostControlAsync(controlBase, path string, query url.Values) {
 			return
 		}
 		resp.Body.Close()
-	}()
+	})
 }
 
 // isWarpProxyRejection 判断错误是否来自 WARP 代理自身的 407/503 拒绝。

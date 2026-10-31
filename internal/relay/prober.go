@@ -52,7 +52,7 @@ func ensureProbeLocked(route *RouteState, group model.Group, item model.GroupIte
 	if !claimHalfOpenLocked(route, item.ID, now) {
 		return false
 	}
-	go runAsyncProbe(group, item)
+	goSafe("async-probe", func() { runAsyncProbe(group, item) })
 	return true
 }
 

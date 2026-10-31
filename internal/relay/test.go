@@ -301,7 +301,7 @@ func testChannelKeysWithChannel(ctx context.Context, channel model.Channel, mode
 	var wg sync.WaitGroup
 	for worker := 0; worker < min(KEY_TEST_CONCURRENCY, len(candidates)); worker++ {
 		wg.Add(1)
-		go func() {
+		goSafe("channel-key-test", func() {
 			defer wg.Done()
 			for {
 				index := int(cursor.Add(1)) - 1
@@ -310,7 +310,7 @@ func testChannelKeysWithChannel(ctx context.Context, channel model.Channel, mode
 				}
 				results[index] = testChannelKeyOnce(ctx, channel, index, candidates[index], modelName, message)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	return results, nil
@@ -711,7 +711,7 @@ func TestGroup(ctx context.Context, groupID int, message string) ([]GroupTestRes
 	var wg sync.WaitGroup
 	for worker := 0; worker < min(groupTestConcurrency, len(members)); worker++ {
 		wg.Add(1)
-		go func() {
+		goSafe("group-test", func() {
 			defer wg.Done()
 			for {
 				index := int(cursor.Add(1)) - 1
@@ -720,7 +720,7 @@ func TestGroup(ctx context.Context, groupID int, message string) ([]GroupTestRes
 				}
 				results[index] = testGroupMember(ctx, members[index], group.Name, message)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	return results, nil

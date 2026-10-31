@@ -110,7 +110,7 @@ func StartOpencodeAccountProbe(ctx context.Context, channelID int, accounts []st
 		}
 	}
 	ocProbeJobs.mu.Unlock()
-	go entry.run(jobCtx, plan, concurrency, perAccount)
+	goSafe("opencode-probe-job", func() { entry.run(jobCtx, plan, concurrency, perAccount) })
 	return entry.snapshot(), nil
 }
 

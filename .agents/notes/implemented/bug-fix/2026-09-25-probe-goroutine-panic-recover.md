@@ -19,7 +19,7 @@ Status: implemented
 
 ## 决定
 
-- `internal/relay/prober.go` 新增 `runProbeSafely(ctx, channel, modelName)`：`defer recover` 把探测实现抛出的 panic 转为 `fmt.Errorf("probe panic: %v")` 返回，并 `log.Errorf` 记录 panic 值与完整栈——它是探测 goroutine 的唯一 recover 防线，"两处调用场景都依赖必有结论"的调用约定写进函数注释。
+- `internal/relay/prober.go` 新增 `runProbeSafely(ctx, channel, modelName)`：`defer recover` 把探测实现抛出的 panic 转为 `fmt.Errorf("probe panic: %v")` 返回，并 `log.Errorf` 记录 panic 值与完整栈——它是探测 panic 的语义防线（panic 转失败结论），进程级最后防线由 relay 全体 fire-and-forget 派生点共用的 [goSafe 兜底](../architecture/2026-11-01-relay-gosafe-panic-containment.md)承担，"两处调用场景都依赖必有结论"的调用约定写进函数注释。
 - 两处调用点统一改走它：route.go 批量探测的 results 写入、prober.go `runAsyncProbe` 的探测调用。panic 按探测失败落账——批量场景必写一条失败 results，收集器按候选数收齐后走整批失败的指数退避；异步场景走既有失败落账 `reopenItemLocked`（等级加一、按倍数退避重新 OPEN）。
 
 ## 备选方案
