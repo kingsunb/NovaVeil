@@ -407,6 +407,9 @@ func (s *opencodeIdentityStream) transform(event *httpclient.StreamEvent) ([]*ht
 	if !bytes.Equal(bytes.TrimSpace(event.Data), []byte("[DONE]")) && (!gjson.ValidBytes(event.Data) || !gjson.ParseBytes(event.Data).IsObject()) {
 		return nil, errors.New("opencode identity stream event must be a JSON object")
 	}
+	if upstreamErr := gjson.GetBytes(event.Data, "error"); upstreamErr.Exists() && upstreamErr.Type != gjson.Null {
+		return nil, errors.New("opencode identity upstream error event")
+	}
 	if s.format == llm.APIFormatOpenAIResponse && !s.sequenceChecked {
 		s.sequenceChecked = true
 		if value := gjson.GetBytes(event.Data, "sequence_number"); value.Exists() {
