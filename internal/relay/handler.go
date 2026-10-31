@@ -149,32 +149,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		// 控制台 api_key_id=0 时是 `console:` 前缀。不把脱敏键剥回原始 sessionKey。
 		apiKeyID := c.GetInt("api_key_id")
 		scopeKey := sessionScopeKey(apiKeyID, sessionKey)
-		// 脱敏: 全局开关 + 分组开关均开时对请求体执行一次脱敏, 映射表供响应还原复用。
-		// 每轮重试复用同一脱敏结果, 不重复扫描(文档 01 §二)。fail-closed: 脱敏失败拒绝放行明文。
-		// 分组暂不可得时跳过脱敏(循环内会等待分组出现), 开关任一关时零开销短路(文档 04 §1.4)。
 		var maskMapping *mask.Mapping
 		var streamRestorer *mask.StreamRestorer
-		if g, gErr := op.GroupGetByName(metadataModel); gErr == nil {
-			masked, mapping, matches, mErr := requestMask(raw.Body, scopeKey, g.RelayConfig.MaskEnabled)
-			if mErr != nil {
-				// 全文已经进了请求状态。失败必须定稿, 否则截断不会发生, 明文会一直留在 running 记录里。
-				maskErr := fmt.Errorf("脱敏失败, 拒绝放行明文: %w", mErr)
-				request.markFailed(maskErr, "", nil)
-				recordErrorLog(request)
-				rejectRequest(c, inbound, maskErr)
-				return
-			}
-			raw.Body = masked
-			maskMapping = mapping
-			if maskMapping != nil {
-				streamRestorer = mask.NewStreamRestorer(maskMapping)
-				request.Masked = true
-			}
-			// 用脱敏后的请求体替换状态中的原始明文, 同时记录裁剪后的命中明细与截断标记并发布状态,
-			// 使日志/审计/对话留存只记录脱敏后内容, 日志详情实时收到命中信息(文档 07 §3.1)。
-			trimmed, truncated := truncateMaskMatches(matches)
-			request.applyMaskResult(string(masked), trimmed, truncated)
-		}
+		maskDone := false // 脱敏只执行一次的守卫
 		// 有会话键的映射跨请求保留(多轮同一占位符), 由 SessionStore TTL 回收;
 		// 无会话键时 Apply 使用请求级 Mapping, 不入表, 请求结束即释放。
 		// 请求级随机头与 opencode 会话头都在首次发起上游前解析一次, 之后所有重试复用。
@@ -237,7 +214,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			}
 
 			// 分组配置和成员随时可改, 故每轮重新读取; 分组被删除时等待它重新出现。
-			group, err := op.GroupGetByName(metadataModel)
+			group, err := groupLookupFunc(metadataModel)
 			if err != nil {
 				if !request.wait(ctx, model.DefaultGroupRelayConfig().MemberRetryIntervalSeconds) {
 					return
@@ -245,6 +222,31 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				continue
 			}
 			relayConfig = group.RelayConfig
+
+			// 脱敏: 首轮分组可用时执行一次, 失败即拒绝(文档 01 §二)。
+			// 分组暂不可得时不脱敏也不转发, 恢复那一轮先脱敏再放行。
+			if !maskDone {
+				masked, mapping, matches, mErr := requestMask(raw.Body, scopeKey, group.RelayConfig.MaskEnabled)
+				if mErr != nil {
+					// 全文已经进了请求状态。失败必须定稿, 否则截断不会发生, 明文会一直留在 running 记录里。
+					maskErr := fmt.Errorf("脱敏失败, 拒绝放行明文: %w", mErr)
+					request.markFailed(maskErr, "", nil)
+					recordErrorLog(request)
+					rejectRequest(c, inbound, maskErr)
+					return
+				}
+				raw.Body = masked
+				maskMapping = mapping
+				if maskMapping != nil {
+					streamRestorer = mask.NewStreamRestorer(maskMapping)
+					request.Masked = true
+				}
+				// 用脱敏后的请求体替换状态中的原始明文, 同时记录裁剪后的命中明细与截断标记并发布状态,
+				// 使日志/审计/对话留存只记录脱敏后内容, 日志详情实时收到命中信息(文档 07 §3.1)。
+				trimmed, truncated := truncateMaskMatches(matches)
+				request.applyMaskResult(string(masked), trimmed, truncated)
+				maskDone = true
+			}
 
 			selectionSkipped := contextSkipped
 			allContextSkipped := false
