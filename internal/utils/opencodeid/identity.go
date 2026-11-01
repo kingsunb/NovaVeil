@@ -90,7 +90,7 @@ func DeriveSessionID(headers http.Header, body []byte, scope string, v1Lane bool
 // 账号变更即换号——同一会话标识跨代理出口复用会被上游关联标记。
 // 信号混入账号后再派生, 官方形态校验对混合信号必然失效, 故换号必出新号。
 // 账号为空时等价 DeriveSessionID。
-func DeriveSessionIDForAccount(headers http.Header, body []byte, scope, lane, account string) string {
+func DeriveSessionIDForAccount(headers http.Header, body []byte, scope string, v1Lane bool, account string) string {
 	signal := ExtractSessionSignal(headers, body)
 	if signal == "" {
 		signal = GenerateSessionID()
@@ -98,7 +98,7 @@ func DeriveSessionIDForAccount(headers http.Header, body []byte, scope, lane, ac
 	if account != "" {
 		signal = signal + "\x00account:" + account
 	}
-	return ScopedSessionID(scope, signal, lane)
+	return ScopedSessionID(scope, signal, v1Lane)
 }
 
 // ConversationSeed 指纹对话开头: system/instructions + 首条 user turn。

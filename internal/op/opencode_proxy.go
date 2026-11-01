@@ -115,14 +115,14 @@ func SaveOpencodeProxyRealFailure(channelID int, account string) error {
 			"failure_window_start": gorm.Expr(
 				"CASE WHEN NOT ("+open+") THEN failure_window_start "+
 					"WHEN "+stale+" THEN ? ELSE failure_window_start END",
-				now, time.Time{}, now.Add(-ocProxyFailureWindow), window, now,
+				now, time.Time{}, now.Add(-ocProxyFailureWindow), now,
 			),
 			"failure_window_count": gorm.Expr(
 				"CASE WHEN NOT ("+open+") THEN failure_window_count "+
 					"WHEN "+stale+" THEN 1 "+
 					"WHEN failure_window_count + 1 >= ? THEN 0 "+
 					"ELSE failure_window_count + 1 END",
-				now, time.Time{}, now.Add(-ocProxyFailureWindow), window, ocProxyFailureWindowLimit,
+				now, time.Time{}, now.Add(-ocProxyFailureWindow), ocProxyFailureWindowLimit,
 			),
 			"updated_at": now,
 		}),
