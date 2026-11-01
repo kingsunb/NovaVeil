@@ -27,7 +27,7 @@ const (
 	ocProxyMaxRetries = 3
 	// ocPruneInterval 限制淘汰查询频率, 避免每次落库都全表排序。
 	ocPruneInterval = 10 * time.Minute
-	// ocProxySessionTTL 是会话内账号去重的记忆时长。
+	// ocProxySessionTTL 是会话与账号粘合的记忆时长。
 	ocProxySessionTTL = 24 * time.Hour
 	// ocProxy429VoteWindow 是 429 计票窗口。
 	ocProxy429VoteWindow = 24 * time.Hour
@@ -126,7 +126,7 @@ func proxyNeedsOpencodeAccount(channel model.Channel) bool {
 }
 
 // pickOpencodeProxyAccount 选出本轮使用的账号并占用一个并发槽位。
-// session 非空时同一会话不重复使用同一账号, 会话内账号耗尽后铸造新账号。
+// session 非空时同一会话粘合同一账号, 绑定账号不可用才换号。
 func pickOpencodeProxyAccount(ctx context.Context, channelID int, session string) string {
 	pool := ocProxyPoolFor(channelID)
 	pool.mu.Lock()

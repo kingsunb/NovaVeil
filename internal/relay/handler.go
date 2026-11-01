@@ -160,6 +160,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		var requestRandomValue string
 		var requestOpencodeSession string
 		var ocSessionBindingKey string // 账号粘合键: 不含账号维度的派生会话, 跨轮稳定
+		var ocSessionSignal string     // 出站会话派生的原始信号, 换号重试复用, 不重抽随机回退
 		requestRandomValueResolved := false
 		opencodeSessionResolved := false
 		exclude := 0                                   // 本请求已放弃的成员 ID, 重扫时跳过以免再次选中。
@@ -490,7 +491,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				callerScope = strconv.Itoa(apiKeyID)
 			}
 			if !opencodeSessionResolved && (channel.OpencodeCompat || isWarpProxy(channel)) {
-				requestOpencodeSession = opencodeid.DeriveSessionID(raw.Headers, raw.Body, callerScope, isOpencodeV1Lane(channel))
+				ocSessionSignal = opencodeid.ExtractSessionSignal(raw.Headers, raw.Body)
+				if ocSessionSignal == "" {
+					ocSessionSignal = opencodeid.GenerateSessionID()
+				}
+				requestOpencodeSession = opencodeid.SessionIDForAccount(callerScope, ocSessionSignal, isOpencodeV1Lane(channel), "")
 				ocSessionBindingKey = requestOpencodeSession
 				opencodeSessionResolved = true
 			}
@@ -505,7 +510,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					proxyAccount = candidate
 					// 会话↔账号粘合: 出站会话按 (信号, 账号) 派生, 同账号恒定,
 					// 换账号必换——同一会话标识跨出口复用会被上游关联标记。
-					requestOpencodeSession = opencodeid.DeriveSessionIDForAccount(raw.Headers, raw.Body, callerScope, isOpencodeV1Lane(channel), candidate)
+					// 复用首次提取的信号, 避免空信号的随机回退在换号重试时重抽。
+					requestOpencodeSession = opencodeid.SessionIDForAccount(callerScope, ocSessionSignal, isOpencodeV1Lane(channel), candidate)
 				}
 			}
 

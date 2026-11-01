@@ -104,4 +104,26 @@ func TestDeriveSessionIDForAccount(t *testing.T) {
 			t.Fatalf("派生号形态异常: %q", v)
 		}
 	}
+	// 换号重试复用同一信号: 同账号恒定、换账号必换。
+	pinned := "conv-pinned"
+	empty := SessionIDForAccount("scope", pinned, false, "")
+	p1 := SessionIDForAccount("scope", pinned, false, "acct-a")
+	p1b := SessionIDForAccount("scope", pinned, false, "acct-a")
+	p2 := SessionIDForAccount("scope", pinned, false, "acct-b")
+	if p1 != p1b {
+		t.Fatalf("钉住信号同账号应恒定: %s vs %s", p1, p1b)
+	}
+	if p1 == p2 || p1 == empty {
+		t.Fatalf("钉住信号换账号应换号: empty=%s a=%s b=%s", empty, p1, p2)
+	}
+	official := GenerateSessionID()
+	if !IsOfficialSessionID(official) {
+		t.Fatalf("GenerateSessionID 应产出官方形态: %s", official)
+	}
+	if got := SessionIDForAccount("scope", official, false, ""); got != official {
+		t.Fatalf("无账号时官方号应原样保留, 得到 %s", got)
+	}
+	if got := SessionIDForAccount("scope", official, false, "acct-a"); got == official {
+		t.Fatal("带账号时官方号不得原样透传")
+	}
 }

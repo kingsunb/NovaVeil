@@ -95,6 +95,13 @@ func DeriveSessionIDForAccount(headers http.Header, body []byte, scope string, v
 	if signal == "" {
 		signal = GenerateSessionID()
 	}
+	return SessionIDForAccount(scope, signal, v1Lane, account)
+}
+
+// SessionIDForAccount 用调用方已提取的信号按账号派生会话号。
+// 同一次请求的换号重试必须复用同一个 signal: 信号为空时的随机回退若在此重抽,
+// 同账号的两次派生就会得到两个号。账号为空时等价 ScopedSessionID。
+func SessionIDForAccount(scope, signal string, v1Lane bool, account string) string {
 	if account != "" {
 		signal = signal + "\x00account:" + account
 	}

@@ -11,7 +11,7 @@ Status: implemented
 **会话与代理账号粘合**，两个改动点：
 
 1. **账号池粘合**（`internal/relay/opencode_proxy_pool.go`）：`sessionUsed`（去重表）改为 `sessionBound`（粘合表）——同一会话粘合键恒定绑定同一账号，绑定账号可用即复用；绑定账号冷却/淘汰/失败降级不可用时才换号改绑（换号排除旧绑定，改绑后不回跳），换号即清该会话的 429 计票痕迹（改绑后出站标识已更新）。粘合记录带 TTL（`ocProxySessionTTL`）与淘汰联动（账号被清理时删除其粘合）。
-2. **出站会话按账号派生**（`internal/utils/opencodeid/identity.go` 新增 `DeriveSessionIDForAccount` + `internal/relay/handler.go` 接线）：出站 `ses_` = 派生（客户端信号 + 账号）——同一（信号, 账号）**恒定**同一出站会话（prompt cache/亲和不受损），**账号变更必然换号**（信号混入账号后官方形态校验必然失效，强制派生新号）。粘合键（不含账号的派生值）与出站值分离：跨 failover 轮次粘合键稳定，出站值随账号走。
+2. **出站会话按账号派生**（`internal/utils/opencodeid/identity.go` 的 `SessionIDForAccount` + `internal/relay/handler.go` 接线）：出站 `ses_` = 派生（客户端信号 + 账号）——同一（信号, 账号）**恒定**同一出站会话（prompt cache/亲和不受损），**账号变更必然换号**（信号混入账号后官方形态校验必然失效，强制派生新号）。粘合键（不含账号的派生值）与出站值分离：跨 failover 轮次粘合键稳定，出站值随账号走。信号在请求首轮提取一次并钉住（空信号的随机回退只抽一次），换号重试复用同一信号，不重新抽取。
 
 WARP 槽位渠道不走账号池，行为不变（按会话去重槽位）；探针路径自铸会话，不受影响。
 

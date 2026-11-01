@@ -96,6 +96,7 @@ func SaveOpencodeProxyRealFailure(channelID int, account string) error {
 		return nil
 	}
 	now := time.Now()
+	window := ocProxyFailureWindow.Seconds()
 	row := model.OpencodeProxyAccount{
 		ChannelID:          channelID,
 		Account:            account,
@@ -114,14 +115,14 @@ func SaveOpencodeProxyRealFailure(channelID int, account string) error {
 			"failure_window_start": gorm.Expr(
 				"CASE WHEN NOT ("+open+") THEN failure_window_start "+
 					"WHEN "+stale+" THEN ? ELSE failure_window_start END",
-				now, time.Time{}, now.Add(-ocProxyFailureWindow), now,
+				now, time.Time{}, now.Add(-ocProxyFailureWindow), window, now,
 			),
 			"failure_window_count": gorm.Expr(
 				"CASE WHEN NOT ("+open+") THEN failure_window_count "+
 					"WHEN "+stale+" THEN 1 "+
 					"WHEN failure_window_count + 1 >= ? THEN 0 "+
 					"ELSE failure_window_count + 1 END",
-				now, time.Time{}, now.Add(-ocProxyFailureWindow), ocProxyFailureWindowLimit,
+				now, time.Time{}, now.Add(-ocProxyFailureWindow), window, ocProxyFailureWindowLimit,
 			),
 			"updated_at": now,
 		}),
