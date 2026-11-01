@@ -2,6 +2,7 @@ package opencodeid
 
 import (
 	"encoding/hex"
+	"net/http"
 	"regexp"
 	"sync"
 	"testing"
@@ -75,5 +76,31 @@ func TestSessionIDFromSignalSaltedPerProcess(t *testing.T) {
 	}
 	if again := SessionIDFromSignal("conv-salt", false); again != rebooted {
 		t.Fatalf("换盐后进程内应恒定派生: %s vs %s", rebooted, again)
+	}
+}
+
+// TestDeriveSessionIDForAccount 锁定账号维度派生: 同(信号,账号)恒定、
+// 换账号必换、账号为空等价 DeriveSessionID, 且派生号形态合法。
+func TestDeriveSessionIDForAccount(t *testing.T) {
+	headers := http.Header{}
+	body := []byte(`{}`)
+	base := DeriveSessionID(headers, body, "scope", false)
+	a1 := DeriveSessionIDForAccount(headers, body, "scope", false, "acct-a")
+	a1b := DeriveSessionIDForAccount(headers, body, "scope", false, "acct-a")
+	a2 := DeriveSessionIDForAccount(headers, body, "scope", false, "acct-b")
+	if a1 != a1b {
+		t.Fatalf("同账号应恒定派生: %s vs %s", a1, a1b)
+	}
+	if a1 == a2 {
+		t.Fatalf("不同账号应派生不同会话: %s", a1)
+	}
+	if a1 == base {
+		t.Fatal("账号维度应改变派生结果")
+	}
+	pattern := regexp.MustCompile(`^ses_([0-9a-f]{12})[0-9A-Za-z]{14}$`)
+	for _, v := range []string{a1, a2} {
+		if !pattern.MatchString(v) {
+			t.Fatalf("派生号形态异常: %q", v)
+		}
 	}
 }

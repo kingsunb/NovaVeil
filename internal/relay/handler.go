@@ -159,6 +159,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		// x-opencode-session 单独取值, 不写入这组共享随机值。
 		var requestRandomValue string
 		var requestOpencodeSession string
+		var ocSessionBindingKey string // 账号粘合键: 不含账号维度的派生会话, 跨轮稳定
 		requestRandomValueResolved := false
 		opencodeSessionResolved := false
 		exclude := 0                                   // 本请求已放弃的成员 ID, 重扫时跳过以免再次选中。
@@ -483,24 +484,28 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 写入该 Key 的明文并使用其 Account/ID 解析代理模板; Remark 仅展示不参与。
 				effective, dispatchErr = effectiveChannelForKey(channel, selectedKey)
 			}
-			// 会话标识必须在选号之前派生: 同会话不重复使用同一代理账号/槽位。
+			// 会话粘合键必须在选号之前派生: 同 (信号, 调用方) 恒定, 供账号池粘合查找。
+			callerScope := "console"
+			if apiKeyID > 0 {
+				callerScope = strconv.Itoa(apiKeyID)
+			}
 			if !opencodeSessionResolved && (channel.OpencodeCompat || isWarpProxy(channel)) {
-				callerScope := "console"
-				if apiKeyID > 0 {
-					callerScope = strconv.Itoa(apiKeyID)
-				}
 				requestOpencodeSession = opencodeid.DeriveSessionID(raw.Headers, raw.Body, callerScope, isOpencodeV1Lane(channel))
+				ocSessionBindingKey = requestOpencodeSession
 				opencodeSessionResolved = true
 			}
-			// OpenCode 免费档按出口 IP 轮换代理账号; WARP 走槽位, 不生成树脂别名。
+			// OpenCode 免费档按会话粘合代理账号: 同会话恒定同一出口, 换号由池改绑。
 			proxyAccount := ""
 			var warpLease *warpSlotLease
 			if dispatchErr == nil && !isWarpProxy(channel) && proxyNeedsOpencodeAccount(channel) {
-				candidate := pickOpencodeProxyAccount(ctx, channel.ID, requestOpencodeSession)
+				candidate := pickOpencodeProxyAccount(ctx, channel.ID, ocSessionBindingKey)
 				if resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate); resolveErr == nil {
 					addr := resolved.String()
 					effective.ChannelProxy = &addr
 					proxyAccount = candidate
+					// 会话↔账号粘合: 出站会话按 (信号, 账号) 派生, 同账号恒定,
+					// 换账号必换——同一会话标识跨出口复用会被上游关联标记。
+					requestOpencodeSession = opencodeid.DeriveSessionIDForAccount(raw.Headers, raw.Body, callerScope, isOpencodeV1Lane(channel), candidate)
 				}
 			}
 

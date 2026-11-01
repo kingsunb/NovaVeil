@@ -86,6 +86,21 @@ func DeriveSessionID(headers http.Header, body []byte, scope string, v1Lane bool
 	return ScopedSessionID(scope, signal, v1Lane)
 }
 
+// DeriveSessionIDForAccount 在账号维度派生会话: 同一(信号, 账号)恒定同一 ses_,
+// 账号变更即换号——同一会话标识跨代理出口复用会被上游关联标记。
+// 信号混入账号后再派生, 官方形态校验对混合信号必然失效, 故换号必出新号。
+// 账号为空时等价 DeriveSessionID。
+func DeriveSessionIDForAccount(headers http.Header, body []byte, scope, lane, account string) string {
+	signal := ExtractSessionSignal(headers, body)
+	if signal == "" {
+		signal = GenerateSessionID()
+	}
+	if account != "" {
+		signal = signal + "\x00account:" + account
+	}
+	return ScopedSessionID(scope, signal, lane)
+}
+
 // ConversationSeed 指纹对话开头: system/instructions + 首条 user turn。
 func ConversationSeed(body []byte) string {
 	var b map[string]any

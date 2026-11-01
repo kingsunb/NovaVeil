@@ -69,8 +69,9 @@ func TestOpencodeRejectCooldown(t *testing.T) {
 	}
 }
 
-// 同一会话不重复使用同一账号, 账号耗尽后铸造新账号, 其他会话仍可复用。
-func TestOcProxyPoolPickSessionDedup(t *testing.T) {
+// 同一会话粘合同一账号: 粘合账号可用即复用, 失效才换号并改绑;
+// 改绑后不回跳旧账号; 其他会话独立粘合。
+func TestOcProxyPoolPickSessionSticky(t *testing.T) {
 	now := time.Now()
 	pool := &ocProxyPool{accounts: map[string]*ocProxyAccount{
 		"a": {account: "a", verified: true, lastSuccessAt: now},
@@ -78,15 +79,23 @@ func TestOcProxyPoolPickSessionDedup(t *testing.T) {
 	}}
 
 	first := pool.pickLocked(now, "s1")
-	second := pool.pickLocked(now, "s1")
-	assert.NotEqual(t, first.account, second.account, "同会话第二次选号不应重复")
 	assert.Equal(t, "a", first.account, "首次应选最近成功账号")
+	second := pool.pickLocked(now, "s1")
+	assert.Equal(t, first.account, second.account, "同会话应粘合同一账号")
 
-	assert.Equal(t, "a", pool.pickLocked(now, "s2").account, "其他会话不受去重影响")
+	third := pool.pickLocked(now, "s2")
+	assert.Equal(t, "a", third.account, "其他会话独立粘合")
 
-	third := pool.pickLocked(now, "s1")
-	assert.NotContains(t, []string{first.account, second.account}, third.account, "会话内账号耗尽后应铸造新账号")
-	assert.Equal(t, third.account, pool.accounts[third.account].account, "新账号应入池")
+	// 粘合账号失效: 冷却 a 后 s1 应换到 b 并改绑。
+	pool.accounts["a"].cooldownUntil = now.Add(time.Hour)
+	fourth := pool.pickLocked(now, "s1")
+	assert.Equal(t, "b", fourth.account, "粘合账号失效应换号")
+	assert.Equal(t, "b", pool.sessionBound["s1"].account, "换号后应改绑新账号")
+
+	// 旧账号恢复可用也不回跳(粘合已改绑)。
+	pool.accounts["a"].cooldownUntil = time.Time{}
+	fifth := pool.pickLocked(now, "s1")
+	assert.Equal(t, "b", fifth.account, "改绑后不回跳旧账号")
 }
 
 // 两个不同会话在 24 小时窗口内报 429 才冷却, 重复会话不计票, 过期票作废。

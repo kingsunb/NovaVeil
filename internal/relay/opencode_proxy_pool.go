@@ -59,10 +59,17 @@ type ocProxyPool struct {
 	loaded      bool
 	lastPruneAt time.Time
 	accounts    map[string]*ocProxyAccount
-	// sessionUsed 记录会话已用过的账号, 保证同会话不重复请求同一账号。
-	sessionUsed map[string]map[string]time.Time
+	// sessionBound 记录会话粘合的账号: 同会话恒定同一出口, 跨轮稳定;
+	// 同一会话标识跨出口复用会被上游关联标记, 故换号必须换会话标识。
+	sessionBound map[string]ocSessionBinding
 	// rateLimited 按会话累计 429 计票, 达到 quorum 才冷却账号。
 	rateLimited map[string]time.Time
+}
+
+// ocSessionBinding 是会话与账号的粘合记录, at 用于 TTL 清理。
+type ocSessionBinding struct {
+	account string
+	at      time.Time
 }
 
 var ocProxyPools sync.Map
@@ -73,9 +80,9 @@ func ocProxyPoolFor(channelID int) *ocProxyPool {
 		return cached.(*ocProxyPool)
 	}
 	pool := &ocProxyPool{
-		accounts:    make(map[string]*ocProxyAccount),
-		sessionUsed: make(map[string]map[string]time.Time),
-		rateLimited: make(map[string]time.Time),
+		accounts:     make(map[string]*ocProxyAccount),
+		sessionBound: make(map[string]ocSessionBinding),
+		rateLimited:  make(map[string]time.Time),
 	}
 	actual, _ := ocProxyPools.LoadOrStore(channelID, pool)
 	return actual.(*ocProxyPool)
@@ -132,19 +139,28 @@ func pickOpencodeProxyAccount(ctx context.Context, channelID int, session string
 	return account
 }
 
-// pickLocked 按可用性与连续失败降级选号, 并排除本会话已用过的账号; 调用方需持锁。
+// pickLocked 按会话粘合选号: 同会话绑定同一账号, 绑定账号不可用才换号改绑;
+// 调用方需持锁。
 func (p *ocProxyPool) pickLocked(now time.Time, session string) *ocProxyAccount {
 	p.pruneLocked(now)
-	used := p.sessionUsed[session]
+	bound := ""
+	if session != "" {
+		if binding, ok := p.sessionBound[session]; ok {
+			bound = binding.account
+			if a, ok := p.accounts[bound]; ok && ocProxyUsable(a, now) {
+				p.sessionBound[session] = ocSessionBinding{account: bound, at: now}
+				return a
+			}
+		}
+	}
+	// 换号: 排除失效的旧绑定, 避免换号后落回同一出口。
 	var picked *ocProxyAccount
 	for _, candidate := range p.accounts {
 		if !ocProxyUsable(candidate, now) {
 			continue
 		}
-		if session != "" {
-			if _, seen := used[candidate.account]; seen {
-				continue
-			}
+		if bound != "" && candidate.account == bound {
+			continue
 		}
 		if picked == nil || ocProxyCandidateBetter(candidate, picked) {
 			picked = candidate
@@ -156,13 +172,10 @@ func (p *ocProxyPool) pickLocked(now time.Time, session string) *ocProxyAccount 
 		p.trimLocked(picked.account)
 	}
 	if session != "" {
-		if p.sessionUsed == nil {
-			p.sessionUsed = map[string]map[string]time.Time{}
+		if p.sessionBound == nil {
+			p.sessionBound = make(map[string]ocSessionBinding)
 		}
-		if p.sessionUsed[session] == nil {
-			p.sessionUsed[session] = map[string]time.Time{}
-		}
-		p.sessionUsed[session][picked.account] = now
+		p.sessionBound[session] = ocSessionBinding{account: picked.account, at: now}
 	}
 	return picked
 }
@@ -181,14 +194,9 @@ func ocProxyCandidateBetter(a, b *ocProxyAccount) bool {
 
 // pruneLocked 清理过期的会话记忆与 429 计票; 调用方需持锁。
 func (p *ocProxyPool) pruneLocked(now time.Time) {
-	for session, used := range p.sessionUsed {
-		for account, at := range used {
-			if now.Sub(at) >= ocProxySessionTTL {
-				delete(used, account)
-			}
-		}
-		if len(used) == 0 {
-			delete(p.sessionUsed, session)
+	for session, binding := range p.sessionBound {
+		if now.Sub(binding.at) >= ocProxySessionTTL {
+			delete(p.sessionBound, session)
 		}
 	}
 	for session, at := range p.rateLimited {
@@ -238,6 +246,11 @@ func (p *ocProxyPool) trimLocked(keep string) {
 			return
 		}
 		delete(p.accounts, oldest.account)
+		for session, binding := range p.sessionBound {
+			if binding.account == oldest.account {
+				delete(p.sessionBound, session)
+			}
+		}
 	}
 }
 
