@@ -702,7 +702,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 						proxyAccountRejection = code == http.StatusForbidden || code == http.StatusTooManyRequests
 						if proxyAccountRejection {
 							if code == http.StatusTooManyRequests {
-								markOpencodeProxyRateLimited(channel.ID, proxyAccount, requestOpencodeSession, UpstreamRetryAfter(err))
+								// 计票用粘合键, 不用带账号的出站号: 同一段对话换出口
+								// 不能被当成两个不同会话凑满 quorum。
+								markOpencodeProxyRateLimited(channel.ID, proxyAccount, ocSessionBindingKey, UpstreamRetryAfter(err))
 							} else {
 								markOpencodeProxyRejected(channel.ID, proxyAccount, UpstreamRetryAfter(err))
 							}

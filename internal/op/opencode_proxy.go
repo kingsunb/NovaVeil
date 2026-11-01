@@ -86,65 +86,60 @@ const ocProxyFailureWindow = 24 * time.Hour
 // ocProxyFailureWindowLimit 与池内同名常量对齐: 窗口内触发冷却的失败次数。
 const ocProxyFailureWindowLimit = 6
 
-// SaveOpencodeProxyRealFailure 累计一次下游真实转发失败, 并用库内旧值维护
-// 24h 翻滚窗口, 供重启恢复。窗口起点为零或距今超过 24h 则改写为当前时间且计数
-// 置 1, 否则只加 1; 加满 6 次清零。该行仍在冷却中时窗口不动, 只加总失败数。
-// 成功字段与冷却截止时间不在这里改。判定全部用 UPDATE 时的旧列, 并发写可组合。
+// SaveOpencodeProxyRealFailure 累计一次下游真实转发失败, 并在事务内维护
+// 24h 翻滚窗口: 窗口起点为零或距今超过 24h 则重开(起点=当前、计数=1), 否则
+// 计数加一; 计满 6 次窗口清零(起点归零)。该行仍在冷却中时只加总失败数,
+// 窗口与冷却截止不动。成功字段与冷却截止时间不在这里改。
 func SaveOpencodeProxyRealFailure(channelID int, account string) error {
 	conn := db.GetDB()
 	if conn == nil {
 		return nil
 	}
 	now := time.Now()
-	window := ocProxyFailureWindow.Seconds()
-	row := model.OpencodeProxyAccount{
-		ChannelID:          channelID,
-		Account:            account,
-		Source:             model.OpencodeAccountSourceTraffic,
-		RealFailureCount:   1,
-		FailureWindowStart: now,
-		FailureWindowCount: 1,
-	}
-	stale := "failure_window_start IS NULL OR failure_window_start <= ? OR " +
-		secondsSince("failure_window_start") + " > ?"
-	open := "cooldown_until IS NULL OR cooldown_until <= ?"
-	result := conn.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "channel_id"}, {Name: "account"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"real_failure_count": gorm.Expr("real_failure_count + 1"),
-			"failure_window_start": gorm.Expr(
-				"CASE WHEN NOT ("+open+") THEN failure_window_start "+
-					"WHEN "+stale+" THEN ? ELSE failure_window_start END",
-				now, time.Time{}, now.Add(-ocProxyFailureWindow), window, now,
-			),
-			"failure_window_count": gorm.Expr(
-				"CASE WHEN NOT ("+open+") THEN failure_window_count "+
-					"WHEN "+stale+" THEN 1 "+
-					"WHEN failure_window_count + 1 >= ? THEN 0 "+
-					"ELSE failure_window_count + 1 END",
-				now, time.Time{}, now.Add(-ocProxyFailureWindow), window, ocProxyFailureWindowLimit,
-			),
-			"updated_at": now,
-		}),
-	}).Create(&row)
-	if result.Error != nil {
-		return fmt.Errorf("保存代理账号失败记录失败: %w", result.Error)
-	}
-	return nil
+	return conn.Transaction(func(tx *gorm.DB) error {
+		var row model.OpencodeProxyAccount
+		err := tx.Where("channel_id = ? AND account = ?", channelID, account).First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fresh := model.OpencodeProxyAccount{
+				ChannelID:          channelID,
+				Account:            account,
+				Source:             model.OpencodeAccountSourceTraffic,
+				RealFailureCount:   1,
+				FailureWindowStart: now,
+				FailureWindowCount: 1,
+			}
+			if cerr := tx.Create(&fresh).Error; cerr != nil {
+				return fmt.Errorf("保存代理账号失败记录失败: %w", cerr)
+			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		row.RealFailureCount++
+		if row.CooldownUntil.After(now) {
+			// 冷却中的失败只加总失败数, 窗口与冷却截止不动。
+		} else if stale := row.FailureWindowStart.IsZero() || now.Sub(row.FailureWindowStart) > ocProxyFailureWindow; stale {
+			row.FailureWindowStart = now
+			row.FailureWindowCount = 1
+		} else if row.FailureWindowCount+1 >= ocProxyFailureWindowLimit {
+			row.FailureWindowStart = time.Time{}
+			row.FailureWindowCount = 0
+		} else {
+			row.FailureWindowCount++
+		}
+		row.UpdatedAt = now
+		return tx.Model(&model.OpencodeProxyAccount{}).
+			Where("channel_id = ? AND account = ?", channelID, account).
+			Select("real_failure_count", "failure_window_start", "failure_window_count", "updated_at").
+			Updates(model.OpencodeProxyAccount{
+				RealFailureCount:   row.RealFailureCount,
+				FailureWindowStart: row.FailureWindowStart,
+				FailureWindowCount: row.FailureWindowCount,
+				UpdatedAt:          now,
+			})
+	})
 }
-
-// secondsSince 返回当前时间与列的秒差, 三方言通用。
-func secondsSince(column string) string {
-	switch db.GetDB().Dialector.Name() {
-	case "mysql":
-		return "TIMESTAMPDIFF(SECOND, " + column + ", CURRENT_TIMESTAMP)"
-	case "postgres":
-		return "EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - " + column + "))"
-	default:
-		return "(strftime('%s','now') - strftime('%s', " + column + "))"
-	}
-}
-
 // SaveOpencodeProxyCooldown 记录账号冷却截止时间, 不存在则插入。
 // 不伪造最近成功时间: 未成功过的账号冷却行保持零值, 由冷却字段本身驱动可用性。
 func SaveOpencodeProxyCooldown(channelID int, account string, until time.Time) error {
