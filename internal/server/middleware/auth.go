@@ -18,7 +18,7 @@ const (
 	// AuthCookieName 认证 cookie 名称
 	AuthCookieName = "auth"
 	// AuthCookiePath 认证 cookie 作用路径
-	AuthCookiePath = "/"
+	AuthCookiePath = "/api"
 )
 
 // mustChangePasswordWhitelist 标记未清除时(必须修改密码)仍可访问的路径

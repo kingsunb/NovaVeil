@@ -90,7 +90,19 @@ func logout(c *gin.Context) {
 	resp.Success(c, nil)
 }
 
+// credentialVerifyLimitKey 改密与改用户名共用计数, 与登录隔离。
+func credentialVerifyLimitKey(c *gin.Context) string {
+	return "credential-verify:" + c.ClientIP()
+}
+
 func changePassword(c *gin.Context) {
+	limitKey := credentialVerifyLimitKey(c)
+	unlock := loginLimiter.lockIP(limitKey)
+	defer unlock()
+	if allowed, retryAfter := loginLimiter.check(c.Request.Context(), limitKey); !allowed {
+		rejectRateLimited(c, retryAfter)
+		return
+	}
 	var user model.UserChangePassword
 	if err := c.ShouldBindJSON(&user); err != nil {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
@@ -98,6 +110,7 @@ func changePassword(c *gin.Context) {
 	}
 	if err := op.UserChangePassword(user.OldPassword, user.NewPassword); err != nil {
 		if errors.Is(err, op.ErrIncorrectOldPassword) {
+			loginLimiter.recordFailure(c.Request.Context(), limitKey)
 			resp.Error(c, http.StatusBadRequest, "原密码不正确")
 			return
 		}
@@ -108,16 +121,25 @@ func changePassword(c *gin.Context) {
 		if errors.Is(err, op.ErrInitialPasswordFileCleanupFailed) {
 			// 改密已生效, 仅初始密码文件清理失败: 返回成功并附带告警,
 			// 不让客户端误以为改密未发生。
+			loginLimiter.reset(c.Request.Context(), limitKey)
 			resp.Success(c, "密码已修改，但删除初始密码文件失败")
 			return
 		}
 		resp.Error(c, http.StatusInternalServerError, resp.ErrDatabase)
 		return
 	}
+	loginLimiter.reset(c.Request.Context(), limitKey)
 	resp.Success(c, "密码已修改")
 }
 
 func changeUsername(c *gin.Context) {
+	limitKey := credentialVerifyLimitKey(c)
+	unlock := loginLimiter.lockIP(limitKey)
+	defer unlock()
+	if allowed, retryAfter := loginLimiter.check(c.Request.Context(), limitKey); !allowed {
+		rejectRateLimited(c, retryAfter)
+		return
+	}
 	var user model.UserChangeUsername
 	if err := c.ShouldBindJSON(&user); err != nil {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
@@ -135,12 +157,15 @@ func changeUsername(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, op.ErrIncorrectOldPassword) {
+			loginLimiter.recordFailure(c.Request.Context(), limitKey)
 			resp.Error(c, http.StatusBadRequest, "密码不正确")
 			return
 		}
-		resp.Error(c, http.StatusInternalServerError, "修改密码失败: "+err.Error())
+		log.Errorf("change username failed: %v", err)
+		resp.Error(c, http.StatusInternalServerError, resp.ErrDatabase)
 		return
 	}
+	loginLimiter.reset(c.Request.Context(), limitKey)
 	resp.Success(c, "用户名已修改")
 }
 

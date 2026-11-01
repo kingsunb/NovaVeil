@@ -86,6 +86,9 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		releaseConcurrency()
 		return nil, err
 	}
+	if !streaming {
+		client = withResponseBodyLimit(client, maxRelayResponseBodyBytes)
+	}
 	// OpenCode Zen 免费档请求改写: 见 opencode_free.go。改写须在连线上游前完成, 否则
 	// 免费档以 403 FreeTierError 拒绝任何非 Agent 形态请求。改写放在 buildPassthroughRequest
 	// 之后, 保证 model 名已写入正文且渠道参数/请求头已应用; 折叠仅在客户端非流式且改写
@@ -681,6 +684,9 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 	if err != nil {
 		releaseConcurrency()
 		return nil, err
+	}
+	if !streaming {
+		client = withResponseBodyLimit(client, maxRelayResponseBodyBytes)
 	}
 	session := ""
 	if len(opencodeSession) > 0 {

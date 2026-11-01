@@ -123,7 +123,13 @@ trusted proxies remains an open ROADMAP item.
 `security.cookie_secure` defaults to false (`NOVAVEIL_SECURITY_COOKIE_SECURE`).
 The auth cookie is also marked Secure when the request itself is TLS. A proxy that
 terminates TLS presents plain HTTP to the process, so set the flag there. Leave it
-false for direct HTTP, or the browser will not send the cookie back.
+false for direct HTTP, or the browser will not send the cookie back. The auth
+cookie's `Path` is `/api`, so it is only sent to management API requests.
+
+The bundled nginx templates send `X-Frame-Options: DENY`, `frame-ancestors 'none'`,
+and `Strict-Transport-Security: max-age=31536000` on every response, matching the
+Go-side headers. HSTS only takes effect when the outer TLS terminator passes
+response headers through.
 
 ## Updates
 

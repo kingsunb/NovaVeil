@@ -106,8 +106,8 @@ func cookieAttrs(t *testing.T, w *httptest.ResponseRecorder) map[string]string {
 	if attrs["__name"] != AuthCookieName {
 		t.Fatalf("cookie name = %q, want %q", attrs["__name"], AuthCookieName)
 	}
-	if _, ok := attrs["Path"]; !ok {
-		t.Fatal("cookie missing Path attribute")
+	if attrs["Path"] != AuthCookiePath {
+		t.Fatalf("cookie Path = %q, want %q", attrs["Path"], AuthCookiePath)
 	}
 	if _, ok := attrs["HttpOnly"]; !ok {
 		t.Fatal("cookie must be HttpOnly")

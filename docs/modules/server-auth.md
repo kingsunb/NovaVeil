@@ -12,9 +12,9 @@ server 是唯一的 HTTP 入口：gin 路由、管理台 JWT Cookie 鉴权、`/v
 
 - HS256 算法钉死，拒绝其他 alg；`exp` / `iss` / `aud` 强制校验，登录时长 24 小时封顶（服务端固定，客户端不可配置）。
 - 签名密钥 32 字节 crypto/rand 生成，以 `nv1:` 密文落 settings；**登出与改密都轮换密钥**，使全部旧 token 立即失效；改密在事务内同步轮换。
-- Cookie 带 HttpOnly + SameSite=Lax；Secure 在 `cookie_secure` 配置、直接 TLS、或入站 `X-Forwarded-Proto: https` 三种情况下置位。
+- Cookie 带 HttpOnly + SameSite=Lax，Path 固定为 `/api`（只随管理 API 请求发送）；Secure 在 `cookie_secure` 配置、直接 TLS、或入站 `X-Forwarded-Proto: https` 三种情况下置位。
 - 强制改密门：首登未改密的会话只放行 change-password / logout / status 三条路径，其余全部 403 并带 `X-NovaVeil-Error` 头；前端在路由树之上整体替换页面，URL 直跳无法绕过。
-- 登录限速：15 分钟内失败 5 次，计数持久化在 `login_attempts` 表（多副本共享）、按 IP 互斥、DB 故障 fail-close（拒绝登录而不是放行）；文案统一且用户名不匹配也做同代价 bcrypt 比对，抹平时序与用户枚举。
+- 登录限速：15 分钟内失败 5 次，计数持久化在 `login_attempts` 表（多副本共享）、按 IP 互斥、DB 故障 fail-close（拒绝登录而不是放行）；文案统一且用户名不匹配也做同代价 bcrypt 比对，抹平时序与用户枚举。改密、改用户名验证旧密码失败同样计数（独立命名空间，不阻塞登录接口），成功后清零。
 
 ### /v1 转发鉴权（API Key）
 
@@ -40,7 +40,7 @@ server 是唯一的 HTTP 入口：gin 路由、管理台 JWT Cookie 鉴权、`/v
 ## 已知边界
 
 - `X-Forwarded-Proto` 仍任意来源即影响 Cookie Secure（方向 fail-safe：只会把 Cookie 设得更严，不会放宽），是 ROADMAP 自认未修项。
-- 反代后未配置 `trusted_proxies` 时，登录 / 管理限速按代理 IP 共桶，单 IP 可把全站锁死——部署在反代后必须配置该 CIDR。
+- 反代后未配置 `trusted_proxies` 时，登录 / 改密 / 管理限速按代理 IP 共桶，单 IP 可把全站锁死——部署在反代后必须配置该 CIDR。
 - 管理 API 令牌桶限速已实现但默认关闭，暴露公网时需显式开启。
 
 ## 深入阅读

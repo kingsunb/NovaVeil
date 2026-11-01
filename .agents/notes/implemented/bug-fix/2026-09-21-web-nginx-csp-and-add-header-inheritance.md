@@ -15,6 +15,9 @@ Status: implemented
 - `/healthz`、`/__flags/`、`/assets/`、静态文件 location 内显式重复五条安全头
   （X-Content-Type-Options、X-Frame-Options、Referrer-Policy、Permissions-Policy、Content-Security-Policy），
   避免 `add_header` 继承规则导致安全头丢失。nginx 无 header 变量/片段导入，选择内联重复。
+- 2026-11-01 起取值与 Go 侧对齐：`X-Frame-Options` 为 `DENY`，CSP 追加
+  `frame-ancestors 'none'`，每个区块再加 `Strict-Transport-Security: max-age=31536000`；
+  `web-next/nginx.conf` 与 `web-next/router.nginx.conf` 各 5 处同步。
 
 ## 备选方案
 
@@ -26,10 +29,11 @@ Status: implemented
 ## 后果
 
 - **收益**：所有 public 路径都携带一致的严格安全头，内联脚本被 CSP 拒绝。
-- **代价与已知上限**：五条头在 nginx.conf 内重复多份，后续改安全头需同步改 5 处；如容器镜像允许引入
-  片段文件可再收敛。`router.nginx.conf` 的 `/healthz`、`/legacy`、`/assets/`、`/__flags/` 同样重复这五条头，见 [web mutation 缓存与导航防护](./2026-09-22-web-mutation-cache-and-nav-guards.md)。
+- **代价与已知上限**：六条头在 nginx.conf 内重复多份，后续改安全头需同步改 5 处（两个配置文件共 10 处）；如容器镜像允许引入
+  片段文件可再收敛。`router.nginx.conf` 的 `/healthz`、`/legacy`、`/assets/`、`/__flags/` 同样重复这六条头，见 [web mutation 缓存与导航防护](./2026-09-22-web-mutation-cache-and-nav-guards.md)。HSTS 在明文监听上被浏览器忽略，只有外层终止 TLS 且透传响应头时才生效。
 
 ## 验证
 
-- `web-next/nginx.conf`：server 级与四个 location 均包含 `script-src 'self'` 且无 `'unsafe-inline'`。
+- `web-next/nginx.conf`：server 级与四个 location 均包含 `script-src 'self'` 且无 `'unsafe-inline'`；
+  `X-Frame-Options` 为 `DENY`，CSP 含 `frame-ancestors 'none'`，每处都有 HSTS。
 - 本文件为 envsubst 模板，未在本机 nginx 运行；语法经人工核对。

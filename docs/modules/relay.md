@@ -18,6 +18,7 @@
 8. 多 Key `selectChannelKey`（游标轮询 + Key 级冷却）+ 渠道 RPM 滑动窗口等待。
 9. `buildOutbound` 按渠道类型与模型协议装配出站转换器，判定 `supportsNativeFormat` 走透传。
 10. 失败分类记账（业务/基础设施错误独立计数）→ 熔断/冷却 → `exclude` 换下一成员重试。
+11. 非流式上游成功响应体超过 64 MiB 即失败（`responselimit.go` 的 RoundTripper；`Content-Length` 超限时不读正文），客户端流式响应不设总字节上限。
 
 ### 三态熔断与紧急兜底
 
