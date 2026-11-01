@@ -62,6 +62,9 @@ type ocProxyPool struct {
 	// sessionBound 记录会话粘合的账号: 同会话恒定同一出口, 跨轮稳定;
 	// 同一会话标识跨出口复用会被上游关联标记, 故换号必须换会话标识。
 	sessionBound map[string]ocSessionBinding
+	// sessionBanned 记录会话内已被 429/403 拉黑的账号: 粘合选号时排除,
+	// 防止换号重试落回刚被拒绝的出口。带时间戳供 TTL 清理。
+	sessionBanned map[string]map[string]time.Time
 	// rateLimited 按会话累计 429 计票, 达到 quorum 才冷却账号。
 	rateLimited map[string]time.Time
 }
@@ -80,9 +83,10 @@ func ocProxyPoolFor(channelID int) *ocProxyPool {
 		return cached.(*ocProxyPool)
 	}
 	pool := &ocProxyPool{
-		accounts:     make(map[string]*ocProxyAccount),
-		sessionBound: make(map[string]ocSessionBinding),
-		rateLimited:  make(map[string]time.Time),
+		accounts:      make(map[string]*ocProxyAccount),
+		sessionBound:  make(map[string]ocSessionBinding),
+		sessionBanned: make(map[string]map[string]time.Time),
+		rateLimited:   make(map[string]time.Time),
 	}
 	actual, _ := ocProxyPools.LoadOrStore(channelID, pool)
 	return actual.(*ocProxyPool)
@@ -144,19 +148,25 @@ func pickOpencodeProxyAccount(ctx context.Context, channelID int, session string
 func (p *ocProxyPool) pickLocked(now time.Time, session string) *ocProxyAccount {
 	p.pruneLocked(now)
 	bound := ""
+	banned := p.sessionBanned[session]
 	if session != "" {
 		if binding, ok := p.sessionBound[session]; ok {
 			bound = binding.account
-			if a, ok := p.accounts[bound]; ok && ocProxyUsable(a, now) {
-				p.sessionBound[session] = ocSessionBinding{account: bound, at: now}
-				return a
+			if _, isBanned := banned[bound]; !isBanned {
+				if a, ok := p.accounts[bound]; ok && ocProxyUsable(a, now) {
+					p.sessionBound[session] = ocSessionBinding{account: bound, at: now}
+					return a
+				}
 			}
 		}
 	}
-	// 换号: 排除失效的旧绑定, 避免换号后落回同一出口。
+	// 换号: 排除失效的旧绑定与本会话拉黑的账号, 避免落回被拒出口。
 	var picked *ocProxyAccount
 	for _, candidate := range p.accounts {
 		if !ocProxyUsable(candidate, now) {
+			continue
+		}
+		if _, isBanned := banned[candidate.account]; isBanned {
 			continue
 		}
 		if bound != "" && candidate.account == bound {
@@ -197,6 +207,16 @@ func (p *ocProxyPool) pruneLocked(now time.Time) {
 	for session, binding := range p.sessionBound {
 		if now.Sub(binding.at) >= ocProxySessionTTL {
 			delete(p.sessionBound, session)
+		}
+	}
+	for session, accounts := range p.sessionBanned {
+		for account, at := range accounts {
+			if now.Sub(at) >= ocProxySessionTTL {
+				delete(accounts, account)
+			}
+		}
+		if len(accounts) == 0 {
+			delete(p.sessionBanned, session)
 		}
 	}
 	for session, at := range p.rateLimited {
@@ -358,6 +378,25 @@ func markOpencodeProxyRealFailure(channelID int, account string) {
 	if cooldown > 0 {
 		markOpencodeProxyCooldown(channelID, account, cooldown)
 	}
+}
+
+// banOpencodeProxyAccount 在会话维度拉黑账号并解除粘合: 429/403 后同会话
+// 不再使用该账号, 下次选号换新出口, 出站会话标识随新账号重派。
+func banOpencodeProxyAccount(channelID int, session, account string) {
+	pool := ocProxyPoolFor(channelID)
+	pool.mu.Lock()
+	loadOpencodeProxyPool(pool, channelID)
+	if pool.sessionBanned == nil {
+		pool.sessionBanned = make(map[string]map[string]time.Time)
+	}
+	if pool.sessionBanned[session] == nil {
+		pool.sessionBanned[session] = make(map[string]time.Time)
+	}
+	pool.sessionBanned[session][account] = time.Now()
+	if binding, ok := pool.sessionBound[session]; ok && binding.account == account {
+		delete(pool.sessionBound, session)
+	}
+	pool.mu.Unlock()
 }
 
 // 403 属于凭据/权限拒绝, 单次即冷却账号并异步落库。

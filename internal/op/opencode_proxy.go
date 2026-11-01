@@ -96,49 +96,47 @@ func SaveOpencodeProxyRealFailure(channelID int, account string) error {
 		return nil
 	}
 	now := time.Now()
-	return conn.Transaction(func(tx *gorm.DB) error {
-		var row model.OpencodeProxyAccount
-		err := tx.Where("channel_id = ? AND account = ?", channelID, account).First(&row).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			fresh := model.OpencodeProxyAccount{
-				ChannelID:          channelID,
-				Account:            account,
-				Source:             model.OpencodeAccountSourceTraffic,
-				RealFailureCount:   1,
-				FailureWindowStart: now,
-				FailureWindowCount: 1,
-			}
-			if cerr := tx.Create(&fresh).Error; cerr != nil {
-				return fmt.Errorf("保存代理账号失败记录失败: %w", cerr)
-			}
-			return nil
+	var row model.OpencodeProxyAccount
+	err := conn.Where("channel_id = ? AND account = ?", channelID, account).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		fresh := model.OpencodeProxyAccount{
+			ChannelID:          channelID,
+			Account:            account,
+			Source:             model.OpencodeAccountSourceTraffic,
+			RealFailureCount:   1,
+			FailureWindowStart: now,
+			FailureWindowCount: 1,
 		}
-		if err != nil {
-			return err
+		if cerr := conn.Create(&fresh).Error; cerr != nil {
+			return fmt.Errorf("保存代理账号失败记录失败: %w", cerr)
 		}
-		row.RealFailureCount++
-		if row.CooldownUntil.After(now) {
-			// 冷却中的失败只加总失败数, 窗口与冷却截止不动。
-		} else if stale := row.FailureWindowStart.IsZero() || now.Sub(row.FailureWindowStart) > ocProxyFailureWindow; stale {
-			row.FailureWindowStart = now
-			row.FailureWindowCount = 1
-		} else if row.FailureWindowCount+1 >= ocProxyFailureWindowLimit {
-			row.FailureWindowStart = time.Time{}
-			row.FailureWindowCount = 0
-		} else {
-			row.FailureWindowCount++
-		}
-		row.UpdatedAt = now
-		return tx.Model(&model.OpencodeProxyAccount{}).
-			Where("channel_id = ? AND account = ?", channelID, account).
-			Select("real_failure_count", "failure_window_start", "failure_window_count", "updated_at").
-			Updates(model.OpencodeProxyAccount{
-				RealFailureCount:   row.RealFailureCount,
-				FailureWindowStart: row.FailureWindowStart,
-				FailureWindowCount: row.FailureWindowCount,
-				UpdatedAt:          now,
-			}).Error
-	})
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	row.RealFailureCount++
+	if row.CooldownUntil.After(now) {
+		// 冷却中的失败只加总失败数, 窗口与冷却截止不动。
+	} else if stale := row.FailureWindowStart.IsZero() || now.Sub(row.FailureWindowStart) > ocProxyFailureWindow; stale {
+		row.FailureWindowStart = now
+		row.FailureWindowCount = 1
+	} else if row.FailureWindowCount+1 >= ocProxyFailureWindowLimit {
+		row.FailureWindowStart = time.Time{}
+		row.FailureWindowCount = 0
+	} else {
+		row.FailureWindowCount++
+	}
+	row.UpdatedAt = now
+	return conn.Model(&model.OpencodeProxyAccount{}).
+		Where("channel_id = ? AND account = ?", channelID, account).
+		Select("real_failure_count", "failure_window_start", "failure_window_count", "updated_at").
+		Updates(model.OpencodeProxyAccount{
+			RealFailureCount:   row.RealFailureCount,
+			FailureWindowStart: row.FailureWindowStart,
+			FailureWindowCount: row.FailureWindowCount,
+			UpdatedAt:          now,
+		}).Error
 }
 // SaveOpencodeProxyCooldown 记录账号冷却截止时间, 不存在则插入。
 // 不伪造最近成功时间: 未成功过的账号冷却行保持零值, 由冷却字段本身驱动可用性。

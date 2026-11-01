@@ -705,6 +705,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 								// 计票用粘合键, 不用带账号的出站号: 同一段对话换出口
 								// 不能被当成两个不同会话凑满 quorum。
 								markOpencodeProxyRateLimited(channel.ID, proxyAccount, ocSessionBindingKey, UpstreamRetryAfter(err))
+								// 429 拉黑该账号并解除粘合: 重试换新出口, 出站会话随之重派。
+								banOpencodeProxyAccount(channel.ID, ocSessionBindingKey, proxyAccount)
 							} else {
 								markOpencodeProxyRejected(channel.ID, proxyAccount, UpstreamRetryAfter(err))
 							}
