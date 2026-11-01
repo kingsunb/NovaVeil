@@ -258,6 +258,7 @@ func prioritizeOpencodeProxyAccount(t *testing.T, channelID int, account string)
 	}
 	state.verified = true
 	state.lastSuccessAt = time.Now()
+	state.consecutiveFailures = 0
 }
 
 // dumpOcProxyPoolDiag 临时诊断: 打印池内计票/粘合/拉黑状态。

@@ -98,46 +98,42 @@ func SaveOpencodeProxyRealFailure(channelID int, account string) error {
 	now := time.Now()
 	var row model.OpencodeProxyAccount
 	err := conn.Where("channel_id = ? AND account = ?", channelID, account).First(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		fresh := model.OpencodeProxyAccount{
-			ChannelID:          channelID,
-			Account:            account,
-			Source:             model.OpencodeAccountSourceTraffic,
-			RealFailureCount:   1,
-			FailureWindowStart: now,
-			FailureWindowCount: 1,
-		}
-		if cerr := conn.Create(&fresh).Error; cerr != nil {
-			return fmt.Errorf("保存代理账号失败记录失败: %w", cerr)
-		}
-		return nil
-	}
-	if err != nil {
+	notFound := errors.Is(err, gorm.ErrRecordNotFound)
+	if err != nil && !notFound {
 		return err
 	}
+	if notFound {
+		row = model.OpencodeProxyAccount{
+			ChannelID: channelID,
+			Account:   account,
+			Source:    model.OpencodeAccountSourceTraffic,
+		}
+	}
 	row.RealFailureCount++
-	if row.CooldownUntil.After(now) {
-		// 冷却中的失败只加总失败数, 窗口与冷却截止不动。
-	} else if stale := row.FailureWindowStart.IsZero() || now.Sub(row.FailureWindowStart) > ocProxyFailureWindow; stale {
-		row.FailureWindowStart = now
-		row.FailureWindowCount = 1
-	} else if row.FailureWindowCount+1 >= ocProxyFailureWindowLimit {
-		row.FailureWindowStart = time.Time{}
-		row.FailureWindowCount = 0
-	} else {
-		row.FailureWindowCount++
+	if !row.CooldownUntil.After(now) {
+		if stale := row.FailureWindowStart.IsZero() || now.Sub(row.FailureWindowStart) > ocProxyFailureWindow; stale {
+			row.FailureWindowStart = now
+			row.FailureWindowCount = 1
+		} else if row.FailureWindowCount+1 >= ocProxyFailureWindowLimit {
+			row.FailureWindowStart = time.Time{}
+			row.FailureWindowCount = 0
+		} else {
+			row.FailureWindowCount++
+		}
 	}
 	row.UpdatedAt = now
-	return conn.Model(&model.OpencodeProxyAccount{}).
-		Where("channel_id = ? AND account = ?", channelID, account).
-		Select("real_failure_count", "failure_window_start", "failure_window_count", "updated_at").
-		Updates(model.OpencodeProxyAccount{
-			RealFailureCount:   row.RealFailureCount,
-			FailureWindowStart: row.FailureWindowStart,
-			FailureWindowCount: row.FailureWindowCount,
-			UpdatedAt:          now,
-		}).Error
+	// 原子 upsert: 并发首写不再撞 UNIQUE 竞态。
+	return conn.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "channel_id"}, {Name: "account"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"real_failure_count":   row.RealFailureCount,
+			"failure_window_start": row.FailureWindowStart,
+			"failure_window_count": row.FailureWindowCount,
+			"updated_at":           row.UpdatedAt,
+		}),
+	}).Create(&row).Error
 }
+
 // SaveOpencodeProxyCooldown 记录账号冷却截止时间, 不存在则插入。
 // 不伪造最近成功时间: 未成功过的账号冷却行保持零值, 由冷却字段本身驱动可用性。
 func SaveOpencodeProxyCooldown(channelID int, account string, until time.Time) error {
