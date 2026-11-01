@@ -679,9 +679,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 						warpRejection = true
 					case http.StatusTooManyRequests:
 						warpRejection = true
-						if warpLease.MarkRateLimited() {
-							warpLease.RotateAll()
-						}
+						warpLease.MarkRateLimited()
 					default:
 						if isWarpProxyRejection(err) {
 							warpProxyRejection = true

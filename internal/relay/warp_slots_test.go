@@ -19,7 +19,7 @@ func warpTestPool(slots ...warpSlotInfo) *warpSlotPool {
 		snapshot:  warpSlotsSnapshot{Size: len(slots), Slots: slots},
 		reserved:  map[int]int{},
 		suspect:   map[int]time.Time{},
-		votes:     map[string]time.Time{},
+		pending:   map[int]warpSlotPending{},
 	}
 }
 
@@ -110,122 +110,56 @@ func TestWarpSlotPoolPickSessionDedup(t *testing.T) {
 	other.Release()
 }
 
-// 两个不同 /64 才触发全槽冷却, 重复前缀不计数。
-func TestWarpSlotRateLimitQuorum(t *testing.T) {
-	pool := warpTestPool()
-	lease := func(slot int, prefix string) *warpSlotLease {
-		return &warpSlotLease{pool: pool, slot: slot, prefix: prefix}
-	}
-	if lease(0, "a/64").MarkRateLimited() {
-		t.Fatal("单前缀不应触发全槽冷却")
-	}
-	if lease(1, "a/64").MarkRateLimited() {
-		t.Fatal("重复前缀不应计数")
-	}
-	if !lease(2, "b/64").MarkRateLimited() {
-		t.Fatal("两个不同前缀应触发全槽冷却")
-	}
-	if _, err := pool.pick(""); err == nil {
-		t.Fatal("全槽冷却期间应拒绝派发")
-	}
-}
-
-// warpTestLease 构造只带上报字段的租约。
-func warpTestLease(pool *warpSlotPool, egress string) *warpSlotLease {
-	return &warpSlotLease{
-		pool:    pool,
-		slot:    0,
-		account: "warp-0",
-		egress:  egress,
-		prefix:  "p/64",
-	}
-}
-
-// waitWarpReports 轮询等待条件成立, 最多等 timeout。
-func waitWarpReports(t *testing.T, timeout time.Duration, cond func() bool) bool {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return true
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	return cond()
-}
-
-// 成功上报需带出口参数, 十分钟内只报一次。
-func TestWarpSlotMarkSuccessReportsEgressOnce(t *testing.T) {
-	var calls atomic.Int32
-	egresses := make(chan string, 4)
+// 单次 429 只在最后一个在途请求结束后轮换该出口。
+func TestWarpSlotRateLimitedRotatesAfterRelease(t *testing.T) {
+	requests := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/nodes/success" {
-			return
-		}
-		calls.Add(1)
-		egresses <- r.URL.Query().Get("egress")
+		requests <- r.URL.Query().Get("egress") + "|" + r.URL.Query().Get("reason")
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
 	pool := warpTestPool()
 	pool.controlBase = server.URL
-	lease := warpTestLease(pool, "203.0.113.7")
-
-	lease.MarkSuccess()
-	if !waitWarpReports(t, time.Second, func() bool { return calls.Load() == 1 }) {
-		t.Fatal("未收到 /nodes/success 上报")
-	}
+	pool.reserved[0] = 1
+	lease := &warpSlotLease{pool: pool, slot: 0, egress: "a", generation: 1}
+	lease.MarkRateLimited()
 	select {
-	case got := <-egresses:
-		if got != "203.0.113.7" {
-			t.Fatalf("egress 参数 = %q", got)
+	case <-requests:
+		t.Fatal("在途请求结束前不应轮换")
+	case <-time.After(50 * time.Millisecond):
+	}
+	lease.Release()
+	select {
+	case got := <-requests:
+		if got != "a|429" {
+			t.Fatalf("轮换参数 = %q, 期望 a|429", got)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("缺少 egress 参数")
-	}
-
-	lease.MarkSuccess()
-	if waitWarpReports(t, 200*time.Millisecond, func() bool { return calls.Load() > 1 }) {
-		t.Fatalf("十分钟内只应上报一次, 实际 %d 次", calls.Load())
+		t.Fatal("最后一个请求结束后应轮换")
 	}
 }
 
-// 429 上报需带出口与原因, 不做去重。
-func TestWarpSlotMarkRateLimitedReportsFail(t *testing.T) {
-	type nodeReport struct{ egress, reason string }
-	reports := make(chan nodeReport, 4)
+// 最后一个请求成功时保留出口, 不触发轮换。
+func TestWarpSlotRateLimitedKeepsExitAfterSuccess(t *testing.T) {
+	requests := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/nodes/fail" {
-			return
-		}
-		q := r.URL.Query()
-		reports <- nodeReport{egress: q.Get("egress"), reason: q.Get("reason")}
+		requests <- r.URL.Query().Get("egress")
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
 	pool := warpTestPool()
 	pool.controlBase = server.URL
-	lease := warpTestLease(pool, "198.51.100.9")
-
+	pool.reserved[0] = 1
+	lease := &warpSlotLease{pool: pool, slot: 0, egress: "a", generation: 1}
 	lease.MarkRateLimited()
-	select {
-	case got := <-reports:
-		if got.egress != "198.51.100.9" || got.reason != "429" {
-			t.Fatalf("429 上报 = %+v", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("未收到 /nodes/fail 上报")
-	}
-}
-
-// 控制地址为空时不得发请求, 也不记录上报。
-func TestWarpSlotReportSkipsWithoutControlBase(t *testing.T) {
-	pool := warpTestPool()
-	lease := warpTestLease(pool, "203.0.113.7")
 	lease.MarkSuccess()
-	lease.MarkRateLimited()
-	if len(pool.reported) != 0 {
-		t.Fatalf("缺少控制地址时不应记录上报: %+v", pool.reported)
+	lease.Release()
+	select {
+	case <-requests:
+		t.Fatal("最后一次成功时不应轮换")
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 
@@ -248,7 +182,7 @@ func TestWarpSlotPoolRefreshCache(t *testing.T) {
 		client:   server.Client(),
 		reserved: map[int]int{},
 		suspect:  map[int]time.Time{},
-		votes:    map[string]time.Time{},
+		pending:  map[int]warpSlotPending{},
 	}
 	if err := pool.refresh(t.Context()); err != nil {
 		t.Fatalf("首次刷新: %v", err)
@@ -267,6 +201,48 @@ func TestWarpSlotPoolRefreshCache(t *testing.T) {
 	}
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("过期后应重新请求, 实际 %d", got)
+	}
+}
+
+// 槽位代次变化说明出口已换, 应解除旧出口的 429 暂停。
+func TestWarpSlotPoolRefreshClearsSuspectOnGeneration(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		generation := 1
+		if calls.Add(1) > 1 {
+			generation = 2
+		}
+		_ = json.NewEncoder(w).Encode(warpSlotsSnapshot{
+			Size: 1,
+			Slots: []warpSlotInfo{
+				{Slot: 0, Account: "warp-0", Egress: "a", Prefix: "p/64", State: "active", Generation: generation},
+			},
+		})
+	}))
+	defer server.Close()
+
+	pool := &warpSlotPool{
+		slotsURL: server.URL,
+		client:   server.Client(),
+		reserved: map[int]int{},
+		suspect:  map[int]time.Time{},
+		pending:  map[int]warpSlotPending{},
+	}
+	if err := pool.refresh(t.Context()); err != nil {
+		t.Fatalf("首次刷新: %v", err)
+	}
+	pool.mu.Lock()
+	pool.suspect[0] = time.Now().Add(time.Minute)
+	pool.fetchedAt = time.Now().Add(-2 * warpSlotsCacheTTL)
+	pool.mu.Unlock()
+	if err := pool.refresh(t.Context()); err != nil {
+		t.Fatalf("代次刷新: %v", err)
+	}
+	pool.mu.Lock()
+	_, suspect := pool.suspect[0]
+	pool.mu.Unlock()
+	if suspect {
+		t.Fatal("槽位代次变化后不应保留旧出口的暂停标记")
 	}
 }
 

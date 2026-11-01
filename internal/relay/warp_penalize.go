@@ -68,14 +68,6 @@ func warpPenalizeEgress(controlBase, egress, reason string) {
 	warpPostControlAsync(controlBase, "/penalize", query)
 }
 
-// warpRotateAll 异步触发 WARP 全池轮换, 失败静默。
-func warpRotateAll(controlBase string) {
-	if controlBase == "" {
-		return
-	}
-	warpPostControlAsync(controlBase, "/rotate", url.Values{"all": []string{"1"}})
-}
-
 // warpPenalizeLatest 异步淘汰最近一次拨号出口, 用于未槽位化的旧 WARP 渠道。
 func warpPenalizeLatest(channel model.Channel) {
 	base, err := warpControlBase(channel)

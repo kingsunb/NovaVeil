@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -18,13 +17,7 @@ const (
 	// warpSlotsCacheTTL 限定槽位快照的最大缓存时间。
 	warpSlotsCacheTTL = time.Second
 	// warpSlotRateLimitWindow 是单槽 429 的暂停派发时长。
-	warpSlotRateLimitWindow = 60 * time.Second
-	// warpSlotRateLimitVoteWindow 是 /64 429 计票窗口。
-	warpSlotRateLimitVoteWindow = 24 * time.Hour
-	// warpSlotRateLimitQuorum 是触发全槽冷却所需的不同 /64 数。
-	warpSlotRateLimitQuorum = 2
-	// warpSlotAllCoolingWindow 是两个不同 /64 都被 429 后的全槽冷却时长。
-	warpSlotAllCoolingWindow = 60 * time.Second
+	warpSlotRateLimitWindow = 10 * time.Second
 	// warpSlotProxySuspect 是代理自身 407/503 后的短暂停。
 	warpSlotProxySuspect = 2 * time.Second
 	// warpSlotNetworkSuspect 是出口网络失败后的短暂停。
@@ -33,10 +26,6 @@ const (
 	warpSlotsRetryCap = time.Minute
 	// warpSlotSessionTTL 是会话内槽位去重的记忆时长。
 	warpSlotSessionTTL = 24 * time.Hour
-	// warpNodeSuccessWindow 是出口成功上报的去重窗口。
-	warpNodeSuccessWindow = 10 * time.Minute
-	// warpNodeSuccessLimit 是成功上报记录的最大条目数。
-	warpNodeSuccessLimit = 256
 )
 
 // warpSlotInfo 是 WARP /slots 返回的单个槽位。
@@ -64,19 +53,16 @@ type warpSlotPool struct {
 	slotsURL    string
 	client      *http.Client
 
-	mu              sync.Mutex
-	fetchMu         sync.Mutex
-	fetchedAt       time.Time
-	snapshot        warpSlotsSnapshot
-	reserved        map[int]int
-	suspect         map[int]time.Time
-	votes           map[string]time.Time
-	allCoolingUntil time.Time
-	next            int
+	mu        sync.Mutex
+	fetchMu   sync.Mutex
+	fetchedAt time.Time
+	snapshot  warpSlotsSnapshot
+	reserved  map[int]int
+	suspect   map[int]time.Time
+	pending   map[int]warpSlotPending
+	next      int
 	// sessionUsed 记录会话已用过的槽位, 同会话不重复请求同一账号。
 	sessionUsed map[string]map[int]time.Time
-	// reported 记录出口上次成功上报时间, 用于去重。
-	reported map[string]time.Time
 }
 
 // warpSlotLease 是一次槽位占位, 必须在本轮结束时 Release。
@@ -85,9 +71,15 @@ type warpSlotLease struct {
 	slot       int
 	account    string
 	egress     string
-	prefix     string
 	generation int
 	once       sync.Once
+}
+
+// warpSlotPending 记录一次待执行的出口轮换.
+type warpSlotPending struct {
+	egress     string
+	generation int
+	succeeded  bool
 }
 
 // warpSlotsBusyError 表示 WARP 槽位暂不可用, 由 handler 转成 503+Retry-After。
@@ -137,9 +129,8 @@ func warpSlotPoolFor(base string) *warpSlotPool {
 		},
 		reserved:    map[int]int{},
 		suspect:     map[int]time.Time{},
-		votes:       map[string]time.Time{},
+		pending:     map[int]warpSlotPending{},
 		sessionUsed: map[string]map[int]time.Time{},
-		reported:    map[string]time.Time{},
 	}
 	actual, _ := warpSlotPools.LoadOrStore(base, pool)
 	return actual.(*warpSlotPool)
@@ -168,6 +159,16 @@ func (p *warpSlotPool) refresh(ctx context.Context) error {
 		return err
 	}
 	p.mu.Lock()
+	previous := make(map[int]warpSlotInfo, len(p.snapshot.Slots))
+	for _, slot := range p.snapshot.Slots {
+		previous[slot.Slot] = slot
+	}
+	for _, slot := range snapshot.Slots {
+		old, ok := previous[slot.Slot]
+		if ok && (old.Generation != slot.Generation || old.Egress != slot.Egress) {
+			delete(p.suspect, slot.Slot)
+		}
+	}
 	p.snapshot = snapshot
 	p.fetchedAt = time.Now()
 	p.mu.Unlock()
@@ -212,11 +213,7 @@ func (p *warpSlotPool) pick(session string) (*warpSlotLease, error) {
 	defer p.mu.Unlock()
 
 	now := time.Now()
-	p.pruneVotesLocked(now)
 	p.pruneSessionsLocked(now)
-	if now.Before(p.allCoolingUntil) {
-		return nil, &warpSlotsBusyError{RetryAfter: p.allCoolingUntil.Sub(now)}
-	}
 
 	for attempt := 0; attempt < 2; attempt++ {
 		if lease := p.pickAvailableLocked(now, session); lease != nil {
@@ -281,7 +278,6 @@ func (p *warpSlotPool) pickAvailableLocked(now time.Time, session string) *warpS
 		slot:       slot.Slot,
 		account:    slot.Account,
 		egress:     slot.Egress,
-		prefix:     slot.Prefix,
 		generation: slot.Generation,
 	}
 }
@@ -310,7 +306,6 @@ func (p *warpSlotPool) retryAfterLocked(now time.Time) time.Duration {
 			}
 		}
 	}
-	consider(p.allCoolingUntil)
 	for _, until := range p.suspect {
 		consider(until)
 	}
@@ -350,14 +345,6 @@ func (p *warpSlotPool) invalidate() {
 	p.mu.Unlock()
 }
 
-func (p *warpSlotPool) pruneVotesLocked(now time.Time) {
-	for prefix, at := range p.votes {
-		if now.Sub(at) >= warpSlotRateLimitVoteWindow {
-			delete(p.votes, prefix)
-		}
-	}
-}
-
 // Account 返回槽位对应的代理用户名。
 func (l *warpSlotLease) Account() string {
 	if l == nil {
@@ -381,95 +368,53 @@ func (l *warpSlotLease) Release() {
 	}
 	l.once.Do(func() {
 		l.pool.release(l.slot)
+		l.pool.finishPending(l.slot)
 	})
 }
 
-// MarkSuccess 清除该槽标记, 并上报出口成功。
+// MarkSuccess 清除该槽的短期标记，并保留最后一次成功结果。
 func (l *warpSlotLease) MarkSuccess() {
-	if l == nil || l.pool == nil {
-		return
-	}
-	l.pool.mu.Lock()
-	delete(l.pool.suspect, l.slot)
-	l.pool.mu.Unlock()
-	l.reportNodeSuccess()
-}
-
-// reportNodeSuccess 去重后异步上报出口成功。
-func (l *warpSlotLease) reportNodeSuccess() {
-	if l.egress == "" || l.pool == nil || l.pool.controlBase == "" {
-		return
-	}
-	if !l.pool.claimNodeReport(l.egress, time.Now()) {
-		return
-	}
-	query := url.Values{"egress": []string{l.egress}}
-	warpPostControlAsync(l.pool.controlBase, "/nodes/success", query)
-}
-
-// claimNodeReport 判断该出口能否上报成功。
-func (p *warpSlotPool) claimNodeReport(egress string, now time.Time) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.reported == nil {
-		p.reported = map[string]time.Time{}
-	}
-	if at, ok := p.reported[egress]; ok && now.Sub(at) < warpNodeSuccessWindow {
-		return false
-	}
-	if len(p.reported) >= warpNodeSuccessLimit {
-		p.pruneReportedLocked(now)
-	}
-	p.reported[egress] = now
-	return true
-}
-
-// pruneReportedLocked 清理过期记录, 需持锁。
-func (p *warpSlotPool) pruneReportedLocked(now time.Time) {
-	for egress, at := range p.reported {
-		if now.Sub(at) >= warpNodeSuccessWindow {
-			delete(p.reported, egress)
-		}
-	}
-}
-
-// MarkRateLimited 记录单槽 429; 两个不同 /64 在 24 小时窗口内达到后返回 true。
-func (l *warpSlotLease) MarkRateLimited() bool {
 	if l == nil {
-		return false
+		return
 	}
 	pool := l.pool
 	pool.mu.Lock()
-	now := time.Now()
-	pool.suspect[l.slot] = now.Add(warpSlotRateLimitWindow)
-	if l.prefix != "" {
-		pool.pruneVotesLocked(now)
-		if _, ok := pool.votes[l.prefix]; !ok {
-			pool.votes[l.prefix] = now
-		}
+	delete(pool.suspect, l.slot)
+	if pending, ok := pool.pending[l.slot]; ok && pending.generation == l.generation {
+		pending.succeeded = true
+		pool.pending[l.slot] = pending
 	}
-	cooling := false
-	if len(pool.votes) >= warpSlotRateLimitQuorum && !now.Before(pool.allCoolingUntil) {
-		pool.allCoolingUntil = now.Add(warpSlotAllCoolingWindow)
-		pool.votes = map[string]time.Time{}
-		cooling = true
-	}
-	// 先解锁再上报, 不占住选槽锁。
 	pool.mu.Unlock()
-	l.reportNodeFail()
-	return cooling
 }
 
-// reportNodeFail 异步上报出口 429 失败, 不做去重。
-func (l *warpSlotLease) reportNodeFail() {
-	if l.egress == "" || l.pool == nil || l.pool.controlBase == "" {
+// MarkRateLimited 记录单槽 429; 最后一个在途请求结束后再决定是否轮换。
+func (l *warpSlotLease) MarkRateLimited() {
+	if l == nil {
 		return
 	}
-	query := url.Values{
-		"egress": []string{l.egress},
-		"reason": []string{"429"},
+	pool := l.pool
+	pool.mu.Lock()
+	pool.suspect[l.slot] = time.Now().Add(warpSlotRateLimitWindow)
+	pool.pending[l.slot] = warpSlotPending{egress: l.egress, generation: l.generation}
+	pool.mu.Unlock()
+	pool.finishPending(l.slot)
+}
+
+// finishPending 在槽位空闲后执行最后一次结果决定.
+func (p *warpSlotPool) finishPending(slot int) {
+	p.mu.Lock()
+	pending, ok := p.pending[slot]
+	if !ok || p.reserved[slot] > 0 {
+		p.mu.Unlock()
+		return
 	}
-	warpPostControlAsync(l.pool.controlBase, "/nodes/fail", query)
+	delete(p.pending, slot)
+	p.mu.Unlock()
+	if pending.succeeded {
+		return
+	}
+	warpPenalizeEgress(p.controlBase, pending.egress, "429")
+	p.invalidate()
 }
 
 // MarkProxyUnavailable 处理代理自身 407/503: 短暂停并刷新快照, 不淘汰出口。
@@ -492,14 +437,5 @@ func (l *warpSlotLease) MarkNetworkFailure(reason string) {
 	l.pool.suspect[l.slot] = time.Now().Add(warpSlotNetworkSuspect)
 	l.pool.mu.Unlock()
 	warpPenalizeEgress(l.pool.controlBase, l.egress, reason)
-	l.pool.invalidate()
-}
-
-// RotateAll 触发全池轮换并刷新快照。
-func (l *warpSlotLease) RotateAll() {
-	if l == nil {
-		return
-	}
-	warpRotateAll(l.pool.controlBase)
 	l.pool.invalidate()
 }
