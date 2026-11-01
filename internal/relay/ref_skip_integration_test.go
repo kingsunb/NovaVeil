@@ -131,7 +131,15 @@ func TestRefSkipMissingTargetImmediateSwitch(t *testing.T) {
 	refItemID := itemIDByModelName(t, auto, vanished.Name)
 
 	// 分组创建校验要求引用目标存在, 故创建后注入"目标名解析不到"的假查询模拟悬空引用。
-	refStubGroups(t, nil)
+	// 仅钉死引用目标: 主循环顶层分组读取共用此注入点, 须走真实查询。
+	oldLookup := groupLookupFunc
+	groupLookupFunc = func(name string) (model.Group, error) {
+		if name == vanished.Name {
+			return model.Group{}, fmt.Errorf("group not found")
+		}
+		return op.GroupGetByName(name)
+	}
+	t.Cleanup(func() { groupLookupFunc = oldLookup })
 
 	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
 	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":false}`, auto.Name)
