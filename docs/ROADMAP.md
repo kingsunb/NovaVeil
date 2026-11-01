@@ -1,6 +1,6 @@
 # NovaVeil 当前状态与下一阶段规划
 
-> 更新：2026-09-22。基线：`b38e340`（已与 `origin/main` 快进对齐）。本轮核对源码和本地参考仓库，没有跑测试或 Compose。
+> 更新：2026-11-01（2026-11 文档同步轮校对状态句；原基线 `b38e340`，2026-09-22）。本轮核对源码和本地参考仓库，没有跑测试或 Compose。
 > 本文是跨模块优先级。OpenCode 三项的实施细节分别在专项计划里，这里不复制任务清单。
 > 2026-09-16 及更早的路线图条目已被本页取代。历史审计快照已从 docs/ 移除，仍开放的问题记录在各主模块文档的「已知边界」（[modules/](modules/)）。
 
@@ -11,7 +11,7 @@
 - **待改文档**：代码已经如此，文档或界面文案还没对齐。
 - **待实施**：专项计划里写明、本轮没有开工的产品项。
 
-`docs/FEATURES.md` 的 REQ-024 已按现行契约改写：`ok` 与 `violation` 都可进排序，`priority` 从 1 递增且数值越小越优先，10 分钟是执行超时。管理台「加入排序」按钮仍只对 `ok` 可点。
+`docs/FEATURES.md` 的 REQ-024 已按现行契约改写：`ok` 与 `violation` 都可进排序，`position` 从 0 递增（界面名次从 1 展示）且数值越小越优先，10 分钟是执行超时。管理台「加入排序」按钮仍只对 `ok` 可点。
 
 ## 2. 不要再排期
 
@@ -22,9 +22,9 @@
 - Cookie 在 `cookie_secure`、直接 TLS，或入站 `X-Forwarded-Proto: https` 时带 Secure。管理 API 令牌桶有开关，默认关闭。
 - 评估队列有 panic 恢复、条件更新、running 租约和单实例互斥。路由骨架、滚动复位、导航预加载、命令面板入口已在前端。
 - 渠道 `sort` 可以写成 0。完全透传不跳过分组路由、故障转移和 Key 轮询。
-- OpenCode 免费渠道与官方渠道已经是两条内置渠道。自定义渠道的 `opencode_compat` 被强制关掉。Chat、Responses、Anthropic 的转换在现有 relay，不需要第二套协议栈。
+- OpenCode 免费渠道（V1/V2 两条 lane）与官方渠道均为内置渠道。自定义渠道的 `opencode_compat` 被强制关掉。Chat、Responses、Anthropic 的转换在现有 relay，不需要第二套协议栈。
 
-参考 [gpt-load](https://github.com/tbphp/gpt-load) 和本地的 opencode2api 时：只借鉴行为，不复制源码，不引入第二套数据库、`auth.key` 或无库配置面。不移植订阅 OAuth、Responses WebSocket、CLI 指纹或双 Key 池。免费档的 Agent 形态请求改写（强制 stream + 注入核心工具、非流式折叠回 JSON）已按「只借鉴行为」落地，见 [OpenCode 免费档改写](../../.agents/notes/implemented/bug-fix/2026-09-29-opencode-free-tier-agent-shape-rewrite.md)。
+参考 [gpt-load](https://github.com/tbphp/gpt-load) 和本地的 opencode2api 时：只借鉴行为，不复制源码，不引入第二套数据库、`auth.key` 或无库配置面。不移植订阅 OAuth、Responses WebSocket、CLI 指纹或双 Key 池。免费档的 Agent 形态请求改写（强制 stream + 注入核心工具、非流式折叠回 JSON）已按「只借鉴行为」落地，见 [OpenCode 免费档改写](../.agents/notes/implemented/bug-fix/2026-09-29-opencode-free-tier-agent-shape-rewrite.md)。
 
 ## 3. 第一批：凭据、内存和部署
 
@@ -64,13 +64,13 @@
 
 ## 5. 第三批：OpenCode，用现有转换器
 
-协议和会话头已在工作区落地，未提交。能力快照仍不做。
+协议和会话头已提交落地。能力快照已实施（2026-10-16 首批，2026-10-20 补 max_reasoning_effort）。
 
 | 计划 | 状态 |
 |---|---|
-| [按模型、按档的原生协议](modules/relay.md) | 已落地。`upstream_protocol` 为空则按渠道类型。六个出厂免费模型是 `chat`。官方 Go 渠道出厂无模型。思考档位仍按渠道类型注入。 |
-| [合法 ses_ 与 prompt_cache_key](modules/relay.md) | 已落地。合法 `ses_` 原样上送。`prompt_cache_key` 只在 Chat/Responses 转换后回写。 |
-| [能力快照](OPENCODE_MODEL_CAPABILITY_PLAN.md) | 未做。不单独打目录，不计价。 |
+| [按模型、按档的原生协议](modules/relay.md) | 已落地。`upstream_protocol` 为空则按渠道类型。出厂免费种子模型中六个是 `chat`，muse-spark 两个是 `responses`。官方 Go 渠道出厂无模型。思考档位仍按渠道类型注入。 |
+| [合法 ses_ 与 prompt_cache_key](modules/relay.md) | 已落地。官方 minted 的 `ses_` 原样保留，其余按调用方 scope 与进程盐派生。`prompt_cache_key` 只在 Chat/Responses 转换后回写。 |
+| [能力快照](OPENCODE_MODEL_CAPABILITY_PLAN.md) | 已实施。不单独打目录，不计价；落地差异见该文档第 0 节。 |
 
 ## 6. 第四批：文档、界面和低优先级代码
 
@@ -83,12 +83,12 @@
 - [x] 移动抽屉有焦点圈定和恢复。脱敏空态复用 `EmptyState`。强制改密页和回退提示使用 `BrandMark`。总览把统计失败和「暂无用量」分开。
 - [x] 可选 `router.nginx.conf` 的本地 location 重复安全头。`style-src` 的 `unsafe-inline` 仍保留。
 - [ ] Cookie 是否只在可信代理之后才承认 `X-Forwarded-Proto`，要改代码。当前任意该头都会把 Cookie 设得更严，不会放宽客户端 IP。未配置 `trusted_proxies` 时，反代后的登录限速桶会塌成代理地址。
-- [x] 半开恢复候选的提交后失败已归还探测占用与紧急兜底额度，回归测试 `TestPostCommitClientGoneReleasesProbeHold`；探测 goroutine panic 兜底、测试竞态修复与 CI `-race` 同批落地。
+- [x] 半开恢复候选的提交后失败已归还探测占用与紧急兜底额度，回归测试 `TestPostCommitClientGoneReleasesProbeHold`；探测 goroutine panic 兜底与测试竞态修复已落地。
 
 **审计遗留·未来项**：
 
 - [ ] seal 轮换 / re-seal 工具。
-- [ ] `seal` 与 `db/migrate` 包单测。
+- [ ] `seal` 包单测（`db/migrate` 已有编号迁移单测）。
 - [ ] Chat SSE 解析器单测。
 - [ ] 请求体内存预算按实际 3 份拷贝修正口径。
 
@@ -96,6 +96,6 @@
 
 ## 7. 完成门槛
 
-- [x] 已落地项有对应 Agent Note。能力快照和 Cookie 只信可信代理仍未做，本页保持未勾。
+- [x] 已落地项有对应 Agent Note。Cookie 只信可信代理仍未做，本页保持未勾；能力快照已实施。
 - [x] 2026-09-22 本地 `go build ./...` 与 `go test -count=1 ./...` 通过。`pnpm verify-notes` 通过（48 篇）。修完抽屉焦点空值、代理请求类型和创建密钥断言后，`pnpm typecheck` 通过，`pnpm lint` 仅余 `upstream-protocol.tsx` 的 react-refresh 警告，`pnpm exec vitest run` 为 51 个文件、533 个测试通过。未跑浏览器验收，也未执行 Compose。
 - [ ] 部署、队列和流式改动有对应的失败路径测试，不只靠阅读。

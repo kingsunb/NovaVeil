@@ -42,8 +42,11 @@ type OpencodeProxyAccount struct {
 	ProbeSuccessCount int64     `json:"probe_success_count"`
 	SuccessDays       int       `json:"success_days"`
 	LastSuccessDay    string    `json:"last_success_day"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	// 24h 失败翻滚窗口, 计满触发冷却, 随失败落库供重启恢复。
+	FailureWindowStart time.Time `json:"failure_window_start"`
+	FailureWindowCount int       `json:"failure_window_count"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // TableName 固定表名, 避免 GORM 复数化差异。

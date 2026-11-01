@@ -1,8 +1,14 @@
 # OpenCode 同步时带上能力，不带计价
 
-> 状态：待实施。更新日期：2026-09-21。本文是实施计划，不是已落地行为。
-> 当前事实：`internal/task/sync.go` 只把 `/v1/models` 的模型名写成 `ChannelModel`；`ChannelModelLimit` 只有管理员配置的 `max_output` 和 `thinking_level`，由 `applyChannelModelLimits` 写进上游请求。
-> 与按模型协议方案（已落地，现记录于 [modules/relay.md](modules/relay.md)）共用同一次公开目录读取，但能力字段不决定协议，协议字段也不写入能力。协议方案先落地并拥有这次 HTTP 读取，本项落地时复用，不对同一目录打两次。
+> 状态：**已实施**（2026-10-16 首批落地能力元数据，2026-10-20 补 `max_reasoning_effort`；因果见 [Agent Note](../.agents/notes/implemented/feature/2026-10-16-opencode-catalog-model-metadata-display.md) 与 [max-reasoning-effort](../.agents/notes/implemented/feature/2026-10-20-max-reasoning-effort-from-catalog.md)）。当前事实以 [modules/relay.md](modules/relay.md) 为准；下文计划文本仅留作决策背景，字段名与细节以落地差异一节和代码为准。
+> 当前事实：`internal/task/sync.go` 在 `OpencodeCompat` 渠道同步时拉取公开目录 `https://models.opencode.ai/api.json`（`internal/helper/opencode_catalog.go`），把协议与能力写入 `ChannelModel` 的 `upstream_protocol` / `context_window` / `max_output` / `reasoning` / `tool_call` / `input_modalities` / `max_reasoning_effort`（`internal/model/channel.go`）；管理台渠道编辑器以徽章只读展示。
+> 与按模型协议方案（已落地，现记录于 [modules/relay.md](modules/relay.md)）共用同一次公开目录读取，但能力字段不决定协议，协议字段也不写入能力。
+
+## 0. 落地差异（对照本计划）
+
+- 字段集：实现为 `context_window`、`max_output`（计划中的 `max_output_hint` 定名为 `max_output`）、`reasoning`、`tool_call`、`input_modalities`，并额外落地 `max_reasoning_effort`；计划的 `max_input`、`structured_output`、`output_modalities` 未实现。
+- 保存通道：`syncChannelModels` 接受保存请求中的能力字段并原样写库（前端原样带回，正常使用无感）；计划第 4/6 节「后端以库里的值为准并忽略该处输入」未强制实现。
+- 仍然成立的承诺：`applyChannelModelLimits` 只读管理员配置的 `ModelLimits`，不读快照、不写请求体；不接 models.dev、不写价格；出厂种子模型不带能力字段；目录失败只跳过填充，不清快照、不删模型；手动（`Source=manual`）模型不带快照。
 
 ## 1. 问题
 

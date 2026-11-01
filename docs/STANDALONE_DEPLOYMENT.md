@@ -11,7 +11,7 @@
 
 | 依赖 | 版本要求 | 说明 |
 |------|---------|------|
-| Go | `go.mod` 声明版本（当前 1.26.7） | 见下方「Go 工具链」说明 |
+| Go | `go.mod` 声明版本（当前 1.27.3） | 见下方「Go 工具链」说明 |
 | Node.js | ≥ 22.19 | 前端构建 |
 | pnpm | ≥ 11.21 | 前端依赖与构建 |
 | Git | 任意 | `build.sh` 注入版本信息时需要 |
@@ -58,7 +58,7 @@ export GOTOOLCHAIN=auto
 或显式指定本地已安装的 Go（版本需 ≥ go.mod 声明版本）：
 
 ```bash
-export GOTOOLCHAIN=go1.26.10       # 指向已安装的具体版本
+export GOTOOLCHAIN=go1.27.3       # 指向已安装的具体版本
 ```
 
 ### 2.4 排查「版本不匹配」报错
@@ -216,7 +216,7 @@ bash scripts/run-local.sh
 
 ## 七、实测核对清单
 
-本次在本地独立环境（系统 Go 1.22.0 + 自动切换的 1.26.7 工具链、Node v22.23.2、
+本次在本地独立环境（系统 Go 1.22.0 + 自动切换的 1.27.3 工具链、Node v22.23.2、
 pnpm 11.23.0）实测通过的项目：
 
 - [x] `pnpm install --frozen-lockfile` —— 依赖与 lockfile 一致

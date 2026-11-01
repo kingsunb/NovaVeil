@@ -6,8 +6,8 @@
 
 ### 表与方言
 
-- AutoMigrate 建 16 张表：User、Channel、ChannelModel、ModelEval / ModelEvalStats / ModelEvalRank / ModelEvalQueueTask（评估 4 张）、Group、GroupItem、APIKey、Setting、LoginAttempt、ErrorLog、ClientStat、UsageBucket、MigrationRecord。
-- SQLite（glebarez 纯 Go）按 WAL 单写者收缩连接池并设 busy_timeout；MySQL / PostgreSQL 连接池 100；Postgres 在迁移完成后执行 `DEALLOCATE ALL` 清理陈旧预编译计划。
+- AutoMigrate 建 18 张表：User、Channel、ChannelModel、ModelEval / ModelEvalStats / ModelEvalRank / ModelEvalQueueTask（评估 4 张）、Group、GroupItem、APIKey、Setting、LoginAttempt、ErrorLog、ClientStat、UsageBucket、OpencodeProxyAccount、ContextProbeRecord、MigrationRecord。
+- SQLite（glebarez 纯 Go）按 WAL 单写者收缩连接池并设 busy_timeout；MySQL / PostgreSQL 连接池 100；Postgres 在迁移完成后执行 `DEALLOCATE ALL` 与 `DISCARD ALL` 清理陈旧预编译计划与会话状态。
 
 ### 迁移
 
@@ -28,7 +28,7 @@
 
 ### 进程内缓存
 
-- `op.InitCache` 加载渠道 / 分组 / 密钥快照，读路径全部走内存；`refreshMu` 防止写入已退休的旧代缓存。
+- `op.InitCache` 加载设置 / 渠道 / 分组 / 密钥 / 客户端统计快照，读路径全部走内存；缓存以不可变代际快照发布——写路径持互斥锁克隆出下一代快照后经 `atomic.Pointer` 原子换出，读路径无锁，不会读到跨代撕裂或已退休的旧代数据。
 
 ## 设计想法
 
@@ -40,7 +40,7 @@
 
 - 密钥文件缺失时生成新密钥并伴随启动 WARN 日志（首次部署属正常；已有 `nv1:` 密文数据时旧密文不可解，需从备份恢复密钥文件）——备份密钥文件是运维义务；轮换 / re-seal 工具仍缺，列为 ROADMAP 未来项。
 - 多实例共库同时启动的迁移互斥明确不做：单管理员、单实例是支持的部署形态，多实例不受支持（ROADMAP「明确不做」）。
-- `seal` 与 `db/migrate` 两个包目前没有单测文件，列为 ROADMAP 未来项。
+- `seal` 包目前没有单测文件（`db/migrate` 已有编号迁移单测），列为 ROADMAP 未来项。
 - Postgres 的 `DEALLOCATE ALL` 只作用于池中单条连接，其余连接的陈旧计划不保证被清理。
 
 ## 深入阅读

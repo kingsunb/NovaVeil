@@ -6,7 +6,7 @@ server 是唯一的 HTTP 入口：gin 路由、管理台 JWT Cookie 鉴权、`/v
 
 ### 路由注册
 
-`internal/server/router/` 是声明式路由注册表：handlers 经 `init()` 自注册，`RegisterAll` 统一挂载；注册未知 method 直接报错而不是静默落 GET。管理台 `/api/v1/*` 与转发 `/v1/*` 分两组，全部组显式挂中间件——结构上不存在裸路由。
+`internal/server/router/` 是声明式路由注册表：handlers 经 `init()` 自注册，`RegisterAll` 统一挂载；注册未知 method 直接报错而不是静默落 GET。管理台 `/api/v1/*` 与转发 `/v1/*` 分两组，组内全部路由显式挂中间件；唯一例外是 `/healthz` 无鉴权探活端点。
 
 ### 管理台鉴权（JWT Cookie）
 
@@ -28,7 +28,7 @@ server 是唯一的 HTTP 入口：gin 路由、管理台 JWT Cookie 鉴权、`/v
 
 ### SSE
 
-三个管理台流：`/log/overview/stream`（请求全链路）、`/group/runtime/stream`（分组路由运行时）、`/model-eval/queue/stream`（评估队列）；断连时 30 秒节流探活 `/user/status`，401 统一登出。
+三个管理台流：`/api/v1/log/overview/stream`（请求全链路）、`/api/v1/group/runtime/stream`（分组路由运行时）、`/api/v1/model-eval/queue/stream`（评估队列）；断连时 30 秒节流探活 `/user/status`，401 统一登出。
 
 ## 设计想法
 

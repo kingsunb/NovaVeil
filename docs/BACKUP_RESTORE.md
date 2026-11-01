@@ -19,7 +19,7 @@ plaintext on purpose, so a restore can call upstreams again. A key whose value i
 exactly `****` is rejected. A proxy, custom header, or header template whose value is
 exactly `****` is omitted and does not overwrite a live secret.
 
-Channel-page text export is a separate file. `POST /api/v1/channel/export` writes every channel in the cache, including builtin channels and channels with no key. Each block is `# name`, the plaintext base URL, then one plaintext key per line. A channel with no key is still present, with only the name and URL. Models, type, group, and enabled state are not in that file. Importing it creates custom channels; builtin identity is not preserved. See [REQ-003](FEATURES.md).
+Channel-page text export is a separate file. `POST /api/v1/channel/export` writes every channel in the cache, including builtin channels and channels with no key. Each block is `# name`, the plaintext base URL, then one plaintext key per line. A channel with no key is still present, with only the name and URL. Models, type, group, and enabled state are not in that file. Importing it creates regular `openai`-type channels (not `custom` fixed-reply channels); builtin identity is not preserved. See [REQ-003](FEATURES.md).
 
 Use the authenticated Web UI export/import controls when available. The equivalent
 HTTP endpoints are:

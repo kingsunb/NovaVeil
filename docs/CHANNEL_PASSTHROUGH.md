@@ -8,34 +8,32 @@
 
 判定与执行：
 
-- `supportsNativeFormat(channel, format)`：当 `channel.PassThroughBodyEnabled` 为 true 且渠道非 custom（固定回复）时，任意格式均返回 true，走 `sendPassthrough` 而非 `sendConverted`。
-- `buildPassthroughRequest`：当 `PassThroughBodyEnabled` 为 true 且非 `##` 完整 URL 时，用客户端原始请求路径 `raw.Path`（如 `/v1/messages`，剥去 `/v1` 前缀）替代 `upstreamPath(format)`，交给 `BuildRequestURL` 与 base 拼接。
+- `supportsNativeFormat(channel, channelModel, format)`：当 `channel.PassThroughBodyEnabled` 为 true 且渠道非 custom（固定回复）时，任意格式均返回 true，走 `sendPassthrough` 而非 `sendConverted`。
+- `buildPassthroughRequest`：当 `PassThroughBodyEnabled` 为 true 且非 `##` 完整 URL 时，用客户端原始请求路径 `raw.Path`（如 `/v1/messages`，剥去 `/v1` 前缀）替代 `upstreamPath(format)`，交给 `BuildRequestURL` 与 base 拼接；`raw.Path` 不以 `/v1` 开头时回退 `upstreamPath(format)`（`protocol.go`）。
 - Auth 按客户端协议（`format`）适配：Anthropic 格式用 `X-API-Key`，其余用 `Bearer`。完全透传下无需修改，auth 由 format 决定而非渠道类型。
 - 非流式响应：当 `PassThroughBodyEnabled` 为 true 时，`sendPassthrough` 跳过 `outbound.TransformResponse` / `validateResponse` / `validateRoundUsage` / `validateRoundAnswer`，直接返回原始响应体。outbound transformer 按渠道类型创建（如 OpenAI 渠道 → OpenAI outbound），但完全透传下响应格式由客户端协议决定（可能是 Anthropic），用渠道 outbound 解析会失败。
 - 流式响应：`sendPassthroughStream` 用 `format`（客户端格式）调用 `analyzeStreamEvent` 和 `inboundForFormat`，不依赖 outbound transformer，多协议透传下流式事件分析天然正确。
 - custom 渠道：`supportsNativeFormat` 和 `buildOutbound` 对 custom 始终返回 `passthrough=false`，透传对它无意义。
 
-## 支持透传的 handler
+## 支持透传的端点
 
-| Handler | 透传 | 说明 |
-|---------|------|------|
-| `compatible_handler.go` (OpenAI Chat) | ✅ | 对话 |
-| `claude_handler.go` (Anthropic) | ✅ | Claude Messages |
-| `image_handler.go` (图片) | ✅ | 图片生成/编辑 |
-| `responses_handler.go` (Responses) | ✅ | OpenAI Responses |
-| `rerank_handler.go` (Rerank) | ✅ | 重排序 |
-| `audio_handler.go` (语音) | ❌ | 无透传，始终经 adaptor |
-| `embedding_handler.go` (嵌入) | ❌ | 无透传，始终经 adaptor |
+所有 `/v1/*` 转发端点共用同一个入口 `relay.Forward(format)`（路由注册在 `internal/server/handlers/relay.go`）：OpenAI Chat、OpenAI Responses、Anthropic Messages、图片生成/编辑/变体、视频生成、语音合成/转写/翻译、嵌入，控制台对话走 `internal/server/handlers/chat.go`，同样进入 `Forward`。仓库没有 rerank 端点。
+
+是否透传由 `supportsNativeFormat` 判定，与端点无关：
+
+- OpenAI 渠道原生支持全部 OpenAI 系格式：对话、图片、视频、语音、嵌入等同协议直接透传。
+- 跨协议（如客户端发 Anthropic、渠道是 OpenAI）在完全透传开启时也原样透传；关闭时经转换。
+- 非对话格式的上游响应原样返回下游（`upstream.go`），不做响应体解析。
 
 ## 透传跳过 / 保留的内容
 
 **跳过**：请求体协议转换（`ConvertOpenAIRequest` 等）、字段过滤（`RemoveDisabledFields`）、参数覆盖（`ApplyParamOverride`）、推理强度转换（`ReasoningEffort`）、系统提示词注入、响应解析与校验。
 
-**保留**：渠道选择 + 故障转移、预扣费 / 后扣费、Model mapping（模型名替换）、Header 透传（独立机制）、多 Key 轮询（Key 选择在 `sendPassthrough` 之前完成）。
+**保留**：渠道选择 + 故障转移、Model mapping（模型名替换）、Header 透传（独立机制）、多 Key 轮询（Key 选择在 `sendPassthrough` 之前完成）、用量分桶记录（依赖响应 usage，见边界情况 1）。
 
 ## Header 透传（独立机制）
 
-自定义头透传通过渠道的 `CustomHeader` 实现：`internal/helper/fetch.go` 的 `applyCustomHeaders` 将自定义头写入上游请求（受保护的凭据头不覆盖真实渠道凭据）；自定义头值支持 `{client_header:xxx}` 占位符，`internal/relay/channel.go` 在构造请求时将该片段替换为客户端请求头 `xxx` 的实际值。
+自定义头透传通过渠道的 `CustomHeader` 实现，转发路径由 `internal/relay/channel.go` 的 `applyChannelConfig` 写入自定义头，写入时把值中的 `{client_header:xxx}` 占位符替换为客户端请求头 `xxx` 的实际值（受保护的凭据头不覆盖渠道凭据）。`internal/helper/fetch.go` 的 `applyCustomHeaders` 只用于探测与模型同步请求，不支持占位符。
 
 ## applyChannelConfig 在透传下的行为
 
@@ -74,7 +72,7 @@
 
 ## 边界情况
 
-1. **不计费**：完全透传下 `usage = nil`，不产生用量记录和扣费。需计费则要按客户端格式额外实现响应体解析。
+1. **非流式不计费**：非流式完全透传不解析响应体，`usage = nil`，不产生用量分桶记录。流式完全透传仍按客户端协议聚合事件流提取 usage（`AggregateStreamChunks`），usage 非空时正常写入用量分桶。
 2. **不校验**：跳过 `validateResponse` / `validateRoundUsage` / `validateRoundAnswer`，上游返回的 200 下发错误、空输出、异常 finish_reason 均不会被拦截重试。
 3. **ParamOverride 仍生效**：`applyChannelConfig` 仍注入 `ParamOverride`，完全不动请求体需在 `applyChannelConfig` 中也检查 `PassThroughBodyEnabled`。
 4. **自定义头仍追加**：`CustomHeader` 仍会被追加到上游请求。

@@ -3,7 +3,7 @@
 ## 从这里开始
 
 - **主模块实现**：见下方「主模块实现」一节，按模块读「怎么做的」与「设计想法」。
-- **当前项目规划**：[ROADMAP.md](ROADMAP.md)。OpenCode 协议和会话头已落地；能力快照仍未做。
+- **当前项目规划**：[ROADMAP.md](ROADMAP.md)。OpenCode 协议和会话头已落地；能力快照已实施（2026-10-16 首批，2026-10-20 补 max_reasoning_effort）。
 - **功能记录**：[FEATURES.md](FEATURES.md)，查看需求与修复背景；其中历史条目不替代当前工作区状态或发布记录。
 - **部署运维**：参见下表中的部署、备份与安全指南。
 - **专项实施**：前端生产改进以 [FOLLOW_UP.md](frontend-redesign/FOLLOW_UP.md) 为入口；脱敏当前进度以 [脱敏开发总览](脱敏开发/README.md) 为入口。
@@ -16,12 +16,12 @@
 | [SECURE_DEPLOYMENT.md](SECURE_DEPLOYMENT.md) | 安全部署指南（TLS、防火墙、硬化） |
 | [BACKUP_RESTORE.md](BACKUP_RESTORE.md) | 备份与恢复操作手册 |
 | [CHANNEL_PASSTHROUGH.md](CHANNEL_PASSTHROUGH.md) | 渠道 PassThrough 透传机制设计文档 |
-| [OPENCODE_MODEL_CAPABILITY_PLAN.md](OPENCODE_MODEL_CAPABILITY_PLAN.md) | OpenCode 同步能力快照，不带计价（仍未实施） |
+| [OPENCODE_MODEL_CAPABILITY_PLAN.md](OPENCODE_MODEL_CAPABILITY_PLAN.md) | OpenCode 同步能力快照，不带计价（已实施，附落地差异） |
 | [DEVELOPMENT_routing.md](DEVELOPMENT_routing.md) | 请求路由与故障转移开发文档 |
 | [DEVELOPMENT_errors.md](DEVELOPMENT_errors.md) | 下游错误响应契约：格式、状态码与提示文案 |
 | [STABILITY_UX_BASELINE.md](STABILITY_UX_BASELINE.md) | 稳定性与 UX 验收基线 |
 | [FEATURES.md](FEATURES.md) | 功能需求清单（REQ/BUG 记录与设计意图） |
-| [FREELLMAPI_PROVIDERS.md](FREELLMAPI_PROVIDERS.md) | FreeLLMAPI 免费 LLM 供应商清单（48 个供应商，含适配器与配额信息） |
+| [FREELLMAPI_PROVIDERS.md](FREELLMAPI_PROVIDERS.md) | FreeLLMAPI 免费 LLM 供应商清单（快照收录 48 个供应商，上游已增至 82；含适配器与配额信息） |
 
 ## 主模块实现
 

@@ -63,8 +63,7 @@ The runtime base is pinned to the Alpine 3.21.7 multi-platform OCI index digest
 Every platform build therefore resolves through the reviewed immutable index rather
 than a mutable tag. The OpenCode free-tier sidecar uses the Bun 1.4.4 runtime copied
 from the digest-pinned `oven/bun:1.4.4-alpine` image and installed at
-`/usr/local/bin/bun`; Compose needs no host Bun installation. Release binaries use
-Go 1.26.10 or newer patch releases so the image vulnerability gate does not ship
+`/usr/local/bin/bun`; Compose needs no host Bun installation. Release binaries use Go 1.27.3 so the image vulnerability gate does not ship
 known fixed standard-library CVEs.
 
 ## Runtime restrictions
@@ -168,8 +167,9 @@ Release archives and images include `THIRD_PARTY_LICENSES.csv` (Go) and
 `THIRD_PARTY_LICENSES.frontend.json` (frontend production dependencies). The Go
 inventory has one fail-closed generation path based on `go list` module metadata;
 missing files, unknown/custom classifications, insecure URLs, or duplicate rows fail
-the build. Each exact per-platform Docker archive is vulnerability-scanned, converted
-to a CycloneDX SBOM, and runtime-smoke-tested before it can enter a publish artifact.
-The publish jobs load and push only those checksum-verified archives and never rebuild
-them. The frontend license JSON remains because the tested CycloneDX npm generator
+the build. The default publish pipeline (`docker-publish`) rebuilds and pushes the
+image directly after a tests/vet/typecheck gate. The manual `build` workflow produces
+the full multi-arch archive audit (per-platform vulnerability scan, CycloneDX SBOM,
+runtime smoke tests) as artifacts but does not publish them. The frontend license
+JSON remains because the tested CycloneDX npm generator
 could not correctly resolve this repository's pnpm virtual store.

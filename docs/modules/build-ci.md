@@ -7,7 +7,7 @@
 ### 构建（scripts/build.sh）
 
 - **顺序硬约束**：`rm -rf static/out` → `web-next pnpm install --frozen-lockfile && pnpm build`（vite outDir 指向 `../static/out`）→ `go build`。`static/static.go` 用 `//go:embed all:out` 在编译期抓产物——**不先构建前端，连 `go test` 都过不了**（`static/out/.gitkeep` 保证干净克隆可编译）。
-- Go 构建参数：`-trimpath -ldflags "-X conf.Version/... -s -w" -tags=jsoniter`，`CGO_ENABLED=0`；启动即校验 Go ≥ 1.26，旧工具链的误导错误提前拦截。
+- Go 构建参数：`-trimpath -ldflags "-X conf.Version/... -s -w" -tags=jsoniter`，`CGO_ENABLED=0`；go.mod 的 go 指令（1.27.3）让旧工具链在构建期即报错拦截。
 - 参数矩阵：`--local`（本机架构，跳过许可证与 zip）、`--targets all`（7 个非 cgo 平台）、`--include-android`（需 NDK r28c，仅正式发布）。
 - 发布归档 = 改名二进制 + README + LICENSE + 两份许可证清单（go list -deps 与 pnpm licenses 归一化，fail-closed 校验）+ SHA256SUMS；linux 产物另存 `build/docker/<platform>/` 供 Dockerfile 按 TARGETPLATFORM COPY。
 - 版本注入靠 ldflags，手动 `go build` 的产物显示 dev。
@@ -25,17 +25,17 @@
 | test | push / PR | 先 `pnpm build` 再 `go test`（go:embed 依赖） |
 | web-next-ci | web-next 变更 | typecheck + lint + vitest（覆盖率阈值）+ size-limit + Playwright E2E/a11y |
 | docker-publish | push main | test-gate → 构建多架构 → 推 GHCR `:latest` / `:sha-<short>` |
-| verify-notes | push / PR | Agent Note 门禁三连（树 + 格式 + 归档封印），tsx 固定版本 |
+| verify-notes | push main / PR | Agent Note 门禁三连（树 + 格式 + 归档封印），tsx 固定版本 |
 | security-scan | 周一 cron / 手动 | go vet + gosec（high，排除 G115）+ govulncheck + pnpm audit |
 | build | 仅手动 | 80+ 分钟全审计：Trivy secret 扫 → 多平台构建 → 漏洞门禁 + SBOM + 镜像校验 + smoke → artifact |
 | template-check | issue / PR | 模板合规自动关闭 |
 
 - lefthook：pre-commit 跑前端 typecheck+lint，pre-push 跑 agent-notes 校验；test/build 一律留给 CI。
-- 所有 action pin commit SHA；`persist-credentials: false`。
+- 所有 action pin commit SHA；除 `web-next-ci` 外均 `persist-credentials: false`。
 
 ### 工具链
 
-Go 1.26.10 / Node 22.19 / pnpm 11.21 在 CI 硬编码；本地开发用 `GOTOOLCHAIN=auto` 按 `go.mod` 的 1.26.7 最低版本下载工具链，与系统 Go 隔离（详见 [STANDALONE_DEPLOYMENT.md](../STANDALONE_DEPLOYMENT.md) §2）。
+Go 1.27.3 / Node 22.19 / pnpm 11.21 在 CI 硬编码；本地开发用 `GOTOOLCHAIN=auto` 按 `go.mod` 的 1.27.3 最低版本下载工具链，与系统 Go 隔离（详见 [STANDALONE_DEPLOYMENT.md](../STANDALONE_DEPLOYMENT.md) §2）。
 
 ## 设计想法
 
@@ -45,7 +45,7 @@ Go 1.26.10 / Node 22.19 / pnpm 11.21 在 CI 硬编码；本地开发用 `GOTOOLC
 
 ## 已知边界
 
-- CI 的 `go test` 以 `-race` 运行（超时 20m）：新增竞态须修复而不是移除该开关。
+- CI 的 `go test` 未开 `-race`（`-count=1 -timeout=10m`）：涉及并发的改动须本地 `go test -race` 自查，不要依赖 CI 兜底。
 - `docker-publish` 推 `:latest` / `:sha-<short>` 可变 tag 且 `provenance:false`（无构建出处证明）；生产必须 pin digest。
 - 协议转换核心依赖 `looplj/axonhub/llm` 未打 tag 的 pseudo-version（go.sum 锁哈希，防篡改不防上游策略变化）；`tmaxmax/go-sse` 经 replace 指向 looplj fork（上游缺 Stream API），供应链集中度偏高。
 - `web-router` 的 nginx 基础镜像已按 digest 固定；升级时须与 `web-next/Dockerfile` 的 runtime 阶段同步并核对 digest。

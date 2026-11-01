@@ -3,7 +3,7 @@
 > 目标：改善 `web-next` 页面切换时的空窗、布局跳变、滚动位置异常和高频重渲染问题。
 > 范围：仅规划前端体验与运行时性能改造，不改变业务接口和视觉品牌方向。
 > 现状依据：2026-09-16 对 `web-next/src` 的源码复核（原规划形成于 2026-09-15）。
-> 验证边界：本次未安装依赖、构建、运行测试或启动服务；P0 三项目前已落地、待验收，其余据此区分“代码已有”“仍待实施”，均不代表性能或交互验收通过。
+> 验证边界：本次未安装依赖、构建、运行测试或启动服务；P0 四项目前已落地、待验收，其余据此区分“代码已有”“仍待实施”，均不代表性能或交互验收通过。
 
 ---
 
@@ -52,7 +52,7 @@
 
 ### 2.1 源码状态补充（2026-09-16）
 
-- **P0 性能三项目前已落地，待验收**：`App.tsx` 的 `LazyPage` 已按路由传入 `TableSkeleton`/`CardGridSkeleton`/`LogsSkeleton`/`SettingsSkeleton`，未登录分支改用 `LoginSkeleton`；`AppShell.tsx` 已绑定 pathname 与 main 滚动 ref 并在切换时复位；Sidebar（`preloadPage`）与 CommandPalette 已接入页面 loader 预加载，并配 `App.route-transition.test.tsx` 回归。
+- **P0 性能四项目前已落地，待验收**：`App.tsx` 的 `LazyPage` 已按路由传入 `TableSkeleton`/`CardGridSkeleton`/`LogsSkeleton`/`SettingsSkeleton`，未登录分支改用 `LoginSkeleton`；`AppShell.tsx` 已绑定 pathname 与 main 滚动 ref 并在切换时复位；Sidebar（`preloadPage`）与 CommandPalette 已接入页面 loader 预加载——loader 已统一收敛到 `lib/page-loaders.ts` 的 `createPageLoader`（缓存 Promise、失败清 pending），`route-loaders.ts` 仅作 re-export；并配 `App.route-transition.test.tsx` 回归。
 - **灰度匿名 bucket 已用 `sessionStorage` 固定**：`flags.ts` 的 `getAnonymousBucket()` 读取/写入 `sessionStorage`（仅接受规范整数，存储不可用时由模块内存兜底），同一浏览器会话内保持一致；粘性用户仍按 `userBucket(userId)` 哈希。依赖变化和重挂载仍需验证。
 - **Groups 已有部分计算优化与缓存保护**：列表过滤/排序、渠道映射已使用 `useMemo`，自定义排序有乐观更新和失败回滚，编辑保存返回实体后直接回填 `['groups']`。仍未见搜索 debounce 或卡片 memo 隔离；性能改造需保留自定义顺序、成员名次与路由 priority 的不同语义。
 - **Query 并非没有缓存策略**：`main.tsx` 已配置 30 秒 `staleTime`、4xx 不重试与禁用窗口聚焦刷新。渠道、自定义模型、分组保存已取消在途查询并回填实体；下一步是核验返回页面、后台失败和跨 query key 的展示策略，不是重做已存在的保存回填。
@@ -75,14 +75,14 @@
 方案：
 
 1. 保留现有 `ErrorBoundary` 和按页面动态 import 的代码分割策略。
-2. 复用 `skeleton.tsx` 中已有的分类骨架——`TableSkeleton`（列表页）、`CardGridSkeleton`（Groups）、`SettingsSkeleton`、`LogsSkeleton` 均已存在，当前只是 `LazyPage` 统一渲染了 Dashboard 形状的 `PageSkeleton`。本项主要是**接线**而非新建：让 `LazyPage` 接受骨架类型参数，各路由传入与目标页面匹配的骨架。
+2. 复用 `skeleton.tsx` 中已有的分类骨架——`TableSkeleton`（列表页）、`CardGridSkeleton`（Groups）、`SettingsSkeleton`、`LogsSkeleton` 均已存在。**本项已接线完成**：`LazyPage` 现接受骨架类型参数（`fallback`），各路由传入与目标页面匹配的骨架。
 3. 修正 skeleton 与目标页面的对应关系：
    - Dashboard：`PageSkeleton`（现状正确）。
    - Channels / CustomModels / Keys / ModelEval / Mask 等列表页：`TableSkeleton`。
    - Groups：`CardGridSkeleton`。
    - Settings：`SettingsSkeleton`。
    - Logs：`LogsSkeleton`。
-   - Login：当前未登录分支（`App.tsx` 未认证 `Suspense`）也用 `PageSkeleton`，与登录表单形状差异最大，改为轻量的居中卡片骨架。
+   - Login：未登录分支已改用 `LoginSkeleton`（`skeleton.tsx` 中的轻量居中卡片骨架），不再复用 `PageSkeleton`。
 4. 骨架只承担等待期间的占位，不新增大范围动画；继续遵守现有 reduced-motion 规则。
 5. 对已加载数据的页面，后续优先让 Query 保留旧数据并在后台 refetch，避免页面先清空再加载。
 

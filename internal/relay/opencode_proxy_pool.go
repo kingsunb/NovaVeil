@@ -33,6 +33,10 @@ const (
 	ocProxy429VoteWindow = 24 * time.Hour
 	// ocProxy429Quorum 是触发冷却所需的不同会话数。
 	ocProxy429Quorum = 2
+	// ocProxyFailureWindow 是真实失败翻滚窗口。
+	ocProxyFailureWindow = 24 * time.Hour
+	// ocProxyFailureWindowLimit 是窗口内触发冷却的失败次数。
+	ocProxyFailureWindowLimit = 6
 )
 
 // ocProxyAccount 是一个代理账号的进程内状态。
@@ -42,6 +46,11 @@ type ocProxyAccount struct {
 	cooldownUntil time.Time
 	active        int
 	verified      bool
+	// 连续真实失败数, 仅内存, 成功或冷却即清零。
+	consecutiveFailures int
+	// 24h 失败窗口, 落库供重启恢复。
+	failureWindowStart time.Time
+	failureWindowCount int
 }
 
 // ocProxyPool 是单渠道的账号池, 首次使用时从库加载。
@@ -86,12 +95,18 @@ func loadOpencodeProxyPool(pool *ocProxyPool, channelID int) {
 	for _, row := range rows {
 		// 台账里存在未探测的生成账号(探测前即落账), 不能整行视为已验证:
 		// 只有真实成功过(含冷却行的历史成功)才可信, 未探测项降级为普通候选。
-		pool.accounts[row.Account] = &ocProxyAccount{
+		state := &ocProxyAccount{
 			account:       row.Account,
 			lastSuccessAt: row.LastSuccessAt,
 			cooldownUntil: row.CooldownUntil,
 			verified:      !row.LastSuccessAt.IsZero(),
 		}
+		// 冷却行的窗口由冷却写入清零; 未冷却行按库内快照恢复, 到期后接着累计。
+		if !row.CooldownUntil.After(time.Now()) {
+			state.failureWindowStart = row.FailureWindowStart
+			state.failureWindowCount = row.FailureWindowCount
+		}
+		pool.accounts[row.Account] = state
 	}
 }
 
@@ -117,7 +132,7 @@ func pickOpencodeProxyAccount(ctx context.Context, channelID int, session string
 	return account
 }
 
-// pickLocked 按可用性与最近成功优先选号, 并排除本会话已用过的账号; 调用方需持锁。
+// pickLocked 按可用性与连续失败降级选号, 并排除本会话已用过的账号; 调用方需持锁。
 func (p *ocProxyPool) pickLocked(now time.Time, session string) *ocProxyAccount {
 	p.pruneLocked(now)
 	used := p.sessionUsed[session]
@@ -131,7 +146,7 @@ func (p *ocProxyPool) pickLocked(now time.Time, session string) *ocProxyAccount 
 				continue
 			}
 		}
-		if picked == nil || candidate.verified && (!picked.verified || candidate.lastSuccessAt.After(picked.lastSuccessAt)) {
+		if picked == nil || ocProxyCandidateBetter(candidate, picked) {
 			picked = candidate
 		}
 	}
@@ -150,6 +165,18 @@ func (p *ocProxyPool) pickLocked(now time.Time, session string) *ocProxyAccount 
 		p.sessionUsed[session][picked.account] = now
 	}
 	return picked
+}
+
+// ocProxyCandidateBetter 报告 a 是否优先于 b; 调用方需持锁。
+// 连续失败少者优先(哪怕未验证), 同级已验证优先, 再按最近成功时间新者优先。
+func ocProxyCandidateBetter(a, b *ocProxyAccount) bool {
+	if a.consecutiveFailures != b.consecutiveFailures {
+		return a.consecutiveFailures < b.consecutiveFailures
+	}
+	if a.verified != b.verified {
+		return a.verified
+	}
+	return a.verified && a.lastSuccessAt.After(b.lastSuccessAt)
 }
 
 // pruneLocked 清理过期的会话记忆与 429 计票; 调用方需持锁。
@@ -256,6 +283,7 @@ func markOpencodeProxySuccess(channelID int, account string, probe bool) {
 	state.verified = true
 	state.lastSuccessAt = now
 	state.cooldownUntil = time.Time{}
+	state.consecutiveFailures = 0
 	prune := pool.needsPrune()
 	pool.mu.Unlock()
 	save := op.SaveOpencodeProxySuccess
@@ -276,14 +304,47 @@ func markOpencodeProxySuccess(channelID int, account string, probe bool) {
 	})
 }
 
-// markOpencodeProxyRealFailure 累计一次下游真实转发失败并异步落库;
-// 只计数, 不影响池内可用性与冷却。
+// markOpencodeProxyRealFailure 锁内记账一次下游真实转发失败, 锁外异步落库。
+// 已在冷却中的账号只累计台账失败数, 不推进连续失败与窗口, 也不改冷却截止。
+// 未冷却时 24h 窗口计满即冷却到下一个 UTC 零点, 并清零连续失败与窗口。
 func markOpencodeProxyRealFailure(channelID int, account string) {
+	now := time.Now()
+	pool := ocProxyPoolFor(channelID)
+	pool.mu.Lock()
+	loadOpencodeProxyPool(pool, channelID)
+	state, ok := pool.accounts[account]
+	if !ok {
+		state = &ocProxyAccount{account: account}
+		pool.accounts[account] = state
+		pool.trimLocked(account)
+	}
+	cooling := now.Before(state.cooldownUntil)
+	if !cooling {
+		state.consecutiveFailures++
+		if state.failureWindowStart.IsZero() || now.Sub(state.failureWindowStart) > ocProxyFailureWindow {
+			state.failureWindowStart = now
+			state.failureWindowCount = 1
+		} else {
+			state.failureWindowCount++
+		}
+	}
+	var cooldown time.Duration
+	if !cooling && state.failureWindowCount >= ocProxyFailureWindowLimit {
+		cooldown = opencodeRejectCooldown("", now)
+		state.cooldownUntil = now.Add(cooldown)
+		state.consecutiveFailures = 0
+		state.failureWindowStart = time.Time{}
+		state.failureWindowCount = 0
+	}
+	pool.mu.Unlock()
 	goSafe("opencode-proxy-failure", func() {
 		if err := op.SaveOpencodeProxyRealFailure(channelID, account); err != nil {
 			log.Warnf("opencode 代理账号失败记录落库失败: %v", err)
 		}
 	})
+	if cooldown > 0 {
+		markOpencodeProxyCooldown(channelID, account, cooldown)
+	}
 }
 
 // 403 属于凭据/权限拒绝, 单次即冷却账号并异步落库。
@@ -354,6 +415,9 @@ func markOpencodeProxyCooldown(channelID int, account string, cooldown time.Dura
 	}
 	until := time.Now().Add(cooldown)
 	state.cooldownUntil = until
+	state.consecutiveFailures = 0
+	state.failureWindowStart = time.Time{}
+	state.failureWindowCount = 0
 	prune := pool.needsPrune()
 	pool.mu.Unlock()
 	goSafe("opencode-proxy-cooldown", func() {

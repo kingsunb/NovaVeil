@@ -6,9 +6,9 @@
 
 - **队列状态机**：`ModelEvalQueueTask` 以 queued / running 推进；running 有 15 分钟租约，过期由调度器回收。
 - **崩溃恢复**：单实例 SQLite 启动立即把遗留 running 退回 queued；worker panic recover 后 MarkDone 失败置 abandoned，留给 Stop 阶段 requeue；停机只退回本进程未完成任务。
-- **单实例互斥**：评估队列入队用 MySQL `GET_LOCK` / PostgreSQL advisory lock 互斥，防止多副本重复派发。
+- **入队互斥**：评估队列入队用 MySQL `GET_LOCK` / PostgreSQL advisory lock 跨实例串行化，保证并发入队不产生重复 `position`；派发去重由条件更新保证（仅抢到 queued→running 的行才执行）。
 - **双通道刷新**：SSE 推送 + 5 秒轮询互备，写缓存前取消对应在途查询。
-- **排序语义**：`ok` 与 `violation` 都可进排序，`priority` 从 1 递增且数值越小越优先，单个任务执行超时 10 分钟；面板按密钥测试可选模型、评估侧按分档注入 `max_tokens` 防大额计费。
+- **排序语义**：`ok` 与 `violation` 都可进排序，`position` 从 0 递增（界面名次从 1 展示）且数值越小越优先，单个任务执行超时 10 分钟；评估路径固定注入 10 万输出上限、面板单模型/逐密钥/分组诊断固定注入 4096，防大额计费。
 
 ## 设计想法
 

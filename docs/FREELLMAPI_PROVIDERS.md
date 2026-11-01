@@ -3,14 +3,16 @@
 > 来源项目：[tashfeenahmed/freellmapi](https://github.com/tashfeenahmed/freellmapi)
 >
 > 本文档整理自 `server/src/providers/index.ts` 中的 `register()` 注册调用与 `shared/types.ts` 的 `Platform` 类型定义，记录该项目聚合的全部免费 LLM 供应商信息，供 NovaVeil 渠道配置与供应商对接参考。
+>
+> **快照性质**：本文是特定时点的整理快照，不是上游的实时镜像。上游持续演进——2026-11-01 比对上游 main，`register()` 注册已从快照时的 48 个增至 82 个（新增约 34 个适配器与搜索/决策类供应商），本文未逐一收录；最新数量与清单以 `server/src/providers/index.ts` 为准。
 
 ## 概述
 
 FreeLLMAPI 将数十个免费 LLM 供应商的免费额度聚合到一个 OpenAI 兼容的 `/v1` API 后面。路由器自动挑选最佳可用模型，被限流时自动切换到下一个供应商，并追踪每个 key 的用量以保持在免费额度内。
 
 - README 宣传数字：**34 个免费供应商**（已过时）
-- 代码实际注册：**48 个真实供应商** + 1 个 `custom` 占位符
-- 已移除供应商：`sambanova`（V23 移除，免费层永久取消）、`chutes`（评估后放弃）、Moonshot/MiniMax 直连（V4 移除）
+- 本文快照时点代码注册：**48 个真实供应商** + 1 个 `custom` 占位符（上游现已增至 82 个注册，见文首快照说明）
+- 已移除供应商：`sambanova`（V23 移除，免费层永久取消）、`chutes`（评估后放弃）、Moonshot/MiniMax 直连（V4 移除）、`github`（2026-07-30 上游退役）
 
 ---
 
@@ -26,7 +28,7 @@ FreeLLMAPI 将数十个免费 LLM 供应商的免费额度聚合到一个 OpenAI
 | 6 | `cohere` | Cohere | — | `CohereProvider` | 兼容端点 |
 | 7 | `cloudflare` | Cloudflare Workers AI | — | `CloudflareProvider` | key = `account_id:token` |
 | 8 | `zhipu` | Z.ai (智谱) | — | `ZhipuProvider` | 双控制台自动探测（open.bigmodel.cn / api.z.ai），60s 超时 |
-| 9 | `github` | GitHub Models | `models.github.ai/inference` | `OpenAICompat` | 使用 `<publisher>/<model>` ID |
+| 9 | `github` | GitHub Models | `models.github.ai/inference` | `OpenAICompat` | 已于上游退役（2026-07-30，见已移除表） |
 | 10 | `huggingface` | HuggingFace Router | `router.huggingface.co/v1` | `OpenAICompat` | $0.10/月 路由额度，无需信用卡 |
 | 11 | `ollama` | Ollama Cloud | `ollama.com/v1` | `OpenAICompat` | 120s 超时，部分模型需订阅 |
 | 12 | `sail` | Sail Research | — | `SailProvider` | 后台轮询模式，$5/月免费额度（需绑定支付方式） |
@@ -125,6 +127,7 @@ FreeLLMAPI 将数十个免费 LLM 供应商的免费额度聚合到一个 OpenAI
 
 | 供应商 | 移除版本 | 原因 |
 |--------|----------|------|
+| GitHub Models | 上游退役（2026-07-30，#549） | `models.github.ai` 服务退役，注册清单已无该项 |
 | SambaNova | V23 (2026-06) | 免费层永久取消，改为一次性 $5 试用额度（3 个月过期） |
 | Chutes | V11 评估 | 所有模型返回 402，"免费"层需非零余额，与无信用卡标准冲突 |
 | Moonshot 直连 | V4 | 仅付费 |
@@ -151,7 +154,7 @@ FreeLLMAPI 将数十个免费 LLM 供应商的免费额度聚合到一个 OpenAI
 
 ## 免 key 供应商
 
-以下 3 个供应商支持匿名（无 API key）访问，注册时标记 `keyless: true`，路由器自动配置：
+本文快照时点以下 3 个供应商支持匿名（无 API key）访问，注册时标记 `keyless: true`，路由器自动配置。上游后续已扩展 keyless 注册面（如 `agnes`、决策类供应商等），以代码中 `keyless: true` 标记为准：
 
 | 平台 ID | 名称 | 限制 |
 |---------|------|------|
