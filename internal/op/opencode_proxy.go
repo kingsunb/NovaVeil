@@ -137,7 +137,7 @@ func SaveOpencodeProxyRealFailure(channelID int, account string) error {
 				FailureWindowStart: row.FailureWindowStart,
 				FailureWindowCount: row.FailureWindowCount,
 				UpdatedAt:          now,
-			})
+			}).Error
 	})
 }
 // SaveOpencodeProxyCooldown 记录账号冷却截止时间, 不存在则插入。
