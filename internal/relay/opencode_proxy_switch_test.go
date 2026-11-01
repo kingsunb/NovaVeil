@@ -260,6 +260,15 @@ func prioritizeOpencodeProxyAccount(t *testing.T, channelID int, account string)
 	state.lastSuccessAt = time.Now()
 }
 
+// dumpOcProxyPoolDiag 临时诊断: 打印池内计票/粘合/拉黑状态。
+func dumpOcProxyPoolDiag(t *testing.T, channelID int, tag string) {
+	t.Helper()
+	pool := ocProxyPoolFor(channelID)
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	t.Logf("[diag %s] rateLimited=%v sessionBound=%v sessionBanned=%v", tag, pool.rateLimited, pool.sessionBound, pool.sessionBanned)
+}
+
 func TestOpencodeProxy403RetriesAnotherAccount(t *testing.T) {
 	setupFailoverTest(t)
 	probe := newOpencodeProxyProbe(t, func(account string) (int, []byte) {
@@ -405,12 +414,14 @@ func TestOpencodeProxy429QuorumCoolsAccount(t *testing.T) {
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("第 %d 个会话换号后应成功, 实际 %d: %s", i+1, recorder.Code, recorder.Body.String())
 		}
+		dumpOcProxyPoolDiag(t, channel.ID, fmt.Sprintf("quorum-round-%d", i+1))
 		pool := opencodeProxyPoolSnapshot(t, channel.ID)
 		if i < 1 && !pool["bad-account"].cooldownUntil.IsZero() {
 			t.Fatalf("第 %d 个会话后不应冷却账号, 实际 %v", i+1, pool["bad-account"].cooldownUntil)
 		}
 	}
 
+	dumpOcProxyPoolDiag(t, channel.ID, "quorum-final")
 	pool := opencodeProxyPoolSnapshot(t, channel.ID)
 	assertOpencodeProxyCooldownDuration(t, pool["bad-account"].cooldownUntil, opencodeRejectCooldown("", time.Now()))
 	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", opencodeRejectCooldown("", time.Now()))
