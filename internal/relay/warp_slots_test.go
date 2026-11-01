@@ -130,6 +130,105 @@ func TestWarpSlotRateLimitQuorum(t *testing.T) {
 	}
 }
 
+// warpTestLease 构造只带上报字段的租约。
+func warpTestLease(pool *warpSlotPool, egress string) *warpSlotLease {
+	return &warpSlotLease{
+		pool:    pool,
+		slot:    0,
+		account: "warp-0",
+		egress:  egress,
+		prefix:  "p/64",
+	}
+}
+
+// waitWarpReports 轮询等待条件成立, 最多等 timeout。
+func waitWarpReports(t *testing.T, timeout time.Duration, cond func() bool) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return cond()
+}
+
+// 成功上报需带出口参数, 十分钟内只报一次。
+func TestWarpSlotMarkSuccessReportsEgressOnce(t *testing.T) {
+	var calls atomic.Int32
+	egresses := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/nodes/success" {
+			return
+		}
+		calls.Add(1)
+		egresses <- r.URL.Query().Get("egress")
+	}))
+	defer server.Close()
+
+	pool := warpTestPool()
+	pool.controlBase = server.URL
+	lease := warpTestLease(pool, "203.0.113.7")
+
+	lease.MarkSuccess()
+	if !waitWarpReports(t, time.Second, func() bool { return calls.Load() == 1 }) {
+		t.Fatal("未收到 /nodes/success 上报")
+	}
+	select {
+	case got := <-egresses:
+		if got != "203.0.113.7" {
+			t.Fatalf("egress 参数 = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("缺少 egress 参数")
+	}
+
+	lease.MarkSuccess()
+	if waitWarpReports(t, 200*time.Millisecond, func() bool { return calls.Load() > 1 }) {
+		t.Fatalf("十分钟内只应上报一次, 实际 %d 次", calls.Load())
+	}
+}
+
+// 429 上报需带出口与原因, 不做去重。
+func TestWarpSlotMarkRateLimitedReportsFail(t *testing.T) {
+	type nodeReport struct{ egress, reason string }
+	reports := make(chan nodeReport, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/nodes/fail" {
+			return
+		}
+		q := r.URL.Query()
+		reports <- nodeReport{egress: q.Get("egress"), reason: q.Get("reason")}
+	}))
+	defer server.Close()
+
+	pool := warpTestPool()
+	pool.controlBase = server.URL
+	lease := warpTestLease(pool, "198.51.100.9")
+
+	lease.MarkRateLimited()
+	select {
+	case got := <-reports:
+		if got.egress != "198.51.100.9" || got.reason != "429" {
+			t.Fatalf("429 上报 = %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("未收到 /nodes/fail 上报")
+	}
+}
+
+// 控制地址为空时不得发请求, 也不记录上报。
+func TestWarpSlotReportSkipsWithoutControlBase(t *testing.T) {
+	pool := warpTestPool()
+	lease := warpTestLease(pool, "203.0.113.7")
+	lease.MarkSuccess()
+	lease.MarkRateLimited()
+	if len(pool.reported) != 0 {
+		t.Fatalf("缺少控制地址时不应记录上报: %+v", pool.reported)
+	}
+}
+
 // /slots 缓存一秒钟, 过期后重新拉取。
 func TestWarpSlotPoolRefreshCache(t *testing.T) {
 	var calls atomic.Int32

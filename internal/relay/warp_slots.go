@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -32,6 +33,10 @@ const (
 	warpSlotsRetryCap = time.Minute
 	// warpSlotSessionTTL 是会话内槽位去重的记忆时长。
 	warpSlotSessionTTL = 24 * time.Hour
+	// warpNodeSuccessWindow 是出口成功上报的去重窗口。
+	warpNodeSuccessWindow = 10 * time.Minute
+	// warpNodeSuccessLimit 是成功上报记录的最大条目数。
+	warpNodeSuccessLimit = 256
 )
 
 // warpSlotInfo 是 WARP /slots 返回的单个槽位。
@@ -70,6 +75,8 @@ type warpSlotPool struct {
 	next            int
 	// sessionUsed 记录会话已用过的槽位, 同会话不重复请求同一账号。
 	sessionUsed map[string]map[int]time.Time
+	// reported 记录出口上次成功上报时间, 用于去重。
+	reported map[string]time.Time
 }
 
 // warpSlotLease 是一次槽位占位, 必须在本轮结束时 Release。
@@ -132,6 +139,7 @@ func warpSlotPoolFor(base string) *warpSlotPool {
 		suspect:     map[int]time.Time{},
 		votes:       map[string]time.Time{},
 		sessionUsed: map[string]map[int]time.Time{},
+		reported:    map[string]time.Time{},
 	}
 	actual, _ := warpSlotPools.LoadOrStore(base, pool)
 	return actual.(*warpSlotPool)
@@ -376,14 +384,53 @@ func (l *warpSlotLease) Release() {
 	})
 }
 
-// MarkSuccess 清除该槽的短期标记。
+// MarkSuccess 清除该槽标记, 并上报出口成功。
 func (l *warpSlotLease) MarkSuccess() {
-	if l == nil {
+	if l == nil || l.pool == nil {
 		return
 	}
 	l.pool.mu.Lock()
 	delete(l.pool.suspect, l.slot)
 	l.pool.mu.Unlock()
+	l.reportNodeSuccess()
+}
+
+// reportNodeSuccess 去重后异步上报出口成功。
+func (l *warpSlotLease) reportNodeSuccess() {
+	if l.egress == "" || l.pool == nil || l.pool.controlBase == "" {
+		return
+	}
+	if !l.pool.claimNodeReport(l.egress, time.Now()) {
+		return
+	}
+	query := url.Values{"egress": []string{l.egress}}
+	warpPostControlAsync(l.pool.controlBase, "/nodes/success", query)
+}
+
+// claimNodeReport 判断该出口能否上报成功。
+func (p *warpSlotPool) claimNodeReport(egress string, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.reported == nil {
+		p.reported = map[string]time.Time{}
+	}
+	if at, ok := p.reported[egress]; ok && now.Sub(at) < warpNodeSuccessWindow {
+		return false
+	}
+	if len(p.reported) >= warpNodeSuccessLimit {
+		p.pruneReportedLocked(now)
+	}
+	p.reported[egress] = now
+	return true
+}
+
+// pruneReportedLocked 清理过期记录, 需持锁。
+func (p *warpSlotPool) pruneReportedLocked(now time.Time) {
+	for egress, at := range p.reported {
+		if now.Sub(at) >= warpNodeSuccessWindow {
+			delete(p.reported, egress)
+		}
+	}
 }
 
 // MarkRateLimited 记录单槽 429; 两个不同 /64 在 24 小时窗口内达到后返回 true。
@@ -393,7 +440,6 @@ func (l *warpSlotLease) MarkRateLimited() bool {
 	}
 	pool := l.pool
 	pool.mu.Lock()
-	defer pool.mu.Unlock()
 	now := time.Now()
 	pool.suspect[l.slot] = now.Add(warpSlotRateLimitWindow)
 	if l.prefix != "" {
@@ -402,15 +448,28 @@ func (l *warpSlotLease) MarkRateLimited() bool {
 			pool.votes[l.prefix] = now
 		}
 	}
-	if len(pool.votes) < warpSlotRateLimitQuorum {
-		return false
+	cooling := false
+	if len(pool.votes) >= warpSlotRateLimitQuorum && !now.Before(pool.allCoolingUntil) {
+		pool.allCoolingUntil = now.Add(warpSlotAllCoolingWindow)
+		pool.votes = map[string]time.Time{}
+		cooling = true
 	}
-	if now.Before(pool.allCoolingUntil) {
-		return false
+	// 先解锁再上报, 不占住选槽锁。
+	pool.mu.Unlock()
+	l.reportNodeFail()
+	return cooling
+}
+
+// reportNodeFail 异步上报出口 429 失败, 不做去重。
+func (l *warpSlotLease) reportNodeFail() {
+	if l.egress == "" || l.pool == nil || l.pool.controlBase == "" {
+		return
 	}
-	pool.allCoolingUntil = now.Add(warpSlotAllCoolingWindow)
-	pool.votes = map[string]time.Time{}
-	return true
+	query := url.Values{
+		"egress": []string{l.egress},
+		"reason": []string{"429"},
+	}
+	warpPostControlAsync(l.pool.controlBase, "/nodes/fail", query)
 }
 
 // MarkProxyUnavailable 处理代理自身 407/503: 短暂停并刷新快照, 不淘汰出口。
