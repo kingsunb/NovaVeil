@@ -96,7 +96,6 @@ func SaveOpencodeProxyRealFailure(channelID int, account string) error {
 		return nil
 	}
 	now := time.Now()
-	window := ocProxyFailureWindow.Seconds()
 	row := model.OpencodeProxyAccount{
 		ChannelID:          channelID,
 		Account:            account,

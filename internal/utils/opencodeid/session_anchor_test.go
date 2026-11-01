@@ -83,6 +83,7 @@ func TestSessionIDFromSignalSaltedPerProcess(t *testing.T) {
 // 换账号必换、账号为空等价 DeriveSessionID, 且派生号形态合法。
 func TestDeriveSessionIDForAccount(t *testing.T) {
 	headers := http.Header{}
+	headers.Set("x-opencode-session", "conv-a")
 	body := []byte(`{}`)
 	base := DeriveSessionID(headers, body, "scope", false)
 	a1 := DeriveSessionIDForAccount(headers, body, "scope", false, "acct-a")
