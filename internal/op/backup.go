@@ -987,7 +987,7 @@ func detectGroupCycles(
 	return cycles
 }
 
-// batchSize 控制每次 INSERT 的最大行数, 防止超过数据库绑定参数上限(SQLite/PostgreSQL 为 65535)。
+// 窄表批量上限; 参数数按 行×列 计, SQLite 上限 32766。
 const batchSize = 2000
 
 func createDoNothing[T any](tx *gorm.DB, rows []T) (int64, error) {

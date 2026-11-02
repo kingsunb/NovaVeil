@@ -132,7 +132,7 @@ function ChannelSection({ channel }: { channel: Channel }) {
   function parseInputs(): { count: number; concurrency: number } | null {
     const parsedCount = Math.floor(Number(count));
     if (!Number.isFinite(parsedCount) || parsedCount < 1 || parsedCount > MAX_ACCOUNTS) {
-      toast.error(zhCN.proxyAccounts.countInvalid);
+      toast.error(zhCN.proxyAccounts.countInvalid(MAX_ACCOUNTS));
       return null;
     }
     const parsedConcurrency = Math.floor(Number(concurrency));
@@ -141,7 +141,7 @@ function ChannelSection({ channel }: { channel: Channel }) {
       parsedConcurrency < 1 ||
       parsedConcurrency > MAX_CONCURRENCY
     ) {
-      toast.error(zhCN.proxyAccounts.concurrencyInvalid);
+      toast.error(zhCN.proxyAccounts.concurrencyInvalid(MAX_CONCURRENCY));
       return null;
     }
     return { count: parsedCount, concurrency: parsedConcurrency };
@@ -201,7 +201,7 @@ function ChannelSection({ channel }: { channel: Channel }) {
       parsedConcurrency < 1 ||
       parsedConcurrency > MAX_CONCURRENCY
     ) {
-      toast.error(zhCN.proxyAccounts.concurrencyInvalid);
+      toast.error(zhCN.proxyAccounts.concurrencyInvalid(MAX_CONCURRENCY));
       return;
     }
     setBulk({ done: 0, total: 0 });
@@ -288,10 +288,13 @@ function ChannelSection({ channel }: { channel: Channel }) {
               ))}
             </select>
           </Field>
-          <Field label={zhCN.proxyAccounts.count}>
+          <Field label={zhCN.proxyAccounts.count} hint={zhCN.proxyAccounts.countHint(MAX_ACCOUNTS)}>
             <Input value={count} onChange={(event) => setCount(event.target.value)} inputMode="numeric" />
           </Field>
-          <Field label={zhCN.proxyAccounts.concurrency} hint={zhCN.proxyAccounts.concurrencyHint}>
+          <Field
+            label={zhCN.proxyAccounts.concurrency}
+            hint={zhCN.proxyAccounts.concurrencyHint(MAX_CONCURRENCY)}
+          >
             <Input
               value={concurrency}
               onChange={(event) => setConcurrency(event.target.value)}

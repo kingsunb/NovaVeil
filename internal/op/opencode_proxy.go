@@ -162,6 +162,9 @@ func SaveOpencodeProxyCooldown(channelID int, account string, until time.Time) e
 	return nil
 }
 
+// opencodeAccountBatchSize 是宽表批量上限: 18 列, 参数须压在 SQLite 32766 内。
+const opencodeAccountBatchSize = 500
+
 // UpsertOpencodeGeneratedAccounts 把体检页生成/粘贴的账号落账为未探测状态;
 // 已存在的账号不覆盖任何字段。生成即落账, 支撑台账长期展示与筛选。
 func UpsertOpencodeGeneratedAccounts(channelID int, accounts []string) error {
@@ -182,7 +185,7 @@ func UpsertOpencodeGeneratedAccounts(channelID int, accounts []string) error {
 	result := conn.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "channel_id"}, {Name: "account"}},
 		DoNothing: true,
-	}).CreateInBatches(&rows, batchSize)
+	}).CreateInBatches(&rows, opencodeAccountBatchSize)
 	if result.Error != nil {
 		return fmt.Errorf("落账体检账号失败: %w", result.Error)
 	}
