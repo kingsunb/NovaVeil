@@ -269,3 +269,26 @@ func TestSessionStickyRejectsOverlongKeyAndTotalCap(t *testing.T) {
 		t.Fatal("已有会话续期不应受跨组上限影响")
 	}
 }
+
+func TestSessionStickyInvalidatedByWarpBlock(t *testing.T) {
+	resetStickyState()
+	oldLookup := channelLookupFunc
+	proxy := "socks5h://warp@NovaVeil_WARP_socks5:1080"
+	channelLookupFunc = func(id int) (model.Channel, error) {
+		return model.Channel{ID: id, Enabled: true, ChannelProxy: &proxy}, nil
+	}
+	t.Cleanup(func() { channelLookupFunc = oldLookup })
+
+	const channelID = 112
+	blockWarpChannelUntilUTC(channelID)
+	defer clearWarpBlockForTest(channelID)
+
+	group := stickyTestGroup(300, stickyTestItem(12))
+	bindSessionSticky(group, "s1", 12)
+	if item := pickSessionSticky(group, "s1"); item.ID != 0 {
+		t.Fatalf("渠道停用后仍返回成员 %d", item.ID)
+	}
+	if _, ok := stickyEntryOf(t, 1, "s1"); ok {
+		t.Fatal("渠道停用后粘合未清除")
+	}
+}

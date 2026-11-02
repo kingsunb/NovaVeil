@@ -56,7 +56,7 @@ var groupLookupFunc = op.GroupGetByName
 // probeChannelFunc 抽出合成探测实现以便单元测试注入假实现。
 var probeChannelFunc = probeChannel
 
-// channelDisabledForRouting 返回成员指向的渠道当前是否被管理端禁用。
+// channelDisabledForRouting 返回成员指向的渠道是否被禁用或临时停用。
 // 引用成员(无渠道关联)或渠道刚删除时无从判定, 保持既有语义交由派发层处理, 这里按未禁用返回。
 func channelDisabledForRouting(item model.GroupItem) bool {
 	if item.ChannelModel == nil {
@@ -66,7 +66,10 @@ func channelDisabledForRouting(item model.GroupItem) bool {
 	if err != nil {
 		return false
 	}
-	return !channel.Enabled
+	if !channel.Enabled {
+		return true
+	}
+	return isWarpProxy(channel) && warpChannelBlocked(channel.ID)
 }
 
 // routableLeafCount 统计从指定分组可达、且真的会触及渠道并发准入(可能命中 errChannelConcurrencyFull)

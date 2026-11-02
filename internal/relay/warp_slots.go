@@ -68,6 +68,7 @@ type warpSlotPool struct {
 // warpSlotLease 是一次槽位占位, 必须在本轮结束时 Release。
 type warpSlotLease struct {
 	pool       *warpSlotPool
+	channelID  int
 	slot       int
 	account    string
 	egress     string
@@ -77,6 +78,7 @@ type warpSlotLease struct {
 
 // warpSlotPending 记录一次待执行的出口轮换.
 type warpSlotPending struct {
+	channelID  int
 	egress     string
 	generation int
 	succeeded  bool
@@ -112,6 +114,7 @@ func pickWarpSlot(ctx context.Context, channel model.Channel, session string) (*
 	if err != nil {
 		return nil, err
 	}
+	lease.channelID = channel.ID
 	context.AfterFunc(ctx, lease.Release)
 	return lease, nil
 }
@@ -395,7 +398,7 @@ func (l *warpSlotLease) MarkRateLimited() {
 	pool := l.pool
 	pool.mu.Lock()
 	pool.suspect[l.slot] = time.Now().Add(warpSlotRateLimitWindow)
-	pool.pending[l.slot] = warpSlotPending{egress: l.egress, generation: l.generation}
+	pool.pending[l.slot] = warpSlotPending{channelID: l.channelID, egress: l.egress, generation: l.generation}
 	pool.mu.Unlock()
 	pool.finishPending(l.slot)
 }
@@ -413,7 +416,7 @@ func (p *warpSlotPool) finishPending(slot int) {
 	if pending.succeeded {
 		return
 	}
-	warpPenalizeEgress(p.controlBase, pending.egress, "429")
+	warpPenalizeEgress(p.controlBase, pending.egress, "429", pending.channelID)
 	p.invalidate()
 }
 
@@ -436,6 +439,6 @@ func (l *warpSlotLease) MarkNetworkFailure(reason string) {
 	l.pool.mu.Lock()
 	l.pool.suspect[l.slot] = time.Now().Add(warpSlotNetworkSuspect)
 	l.pool.mu.Unlock()
-	warpPenalizeEgress(l.pool.controlBase, l.egress, reason)
+	warpPenalizeEgress(l.pool.controlBase, l.egress, reason, l.channelID)
 	l.pool.invalidate()
 }

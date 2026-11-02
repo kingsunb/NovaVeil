@@ -1,7 +1,9 @@
 package relay
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -56,8 +58,15 @@ func warpSlotsEndpoint(channel model.Channel) (string, error) {
 	return base + "/slots", nil
 }
 
+// warpPenaltyResponse 是 WARP /penalize 的响应。
+type warpPenaltyResponse struct {
+	Penalized   int  `json:"penalized"`
+	Strikes     int  `json:"strikes"`
+	NoNewEgress bool `json:"no_new_egress"`
+}
+
 // warpPenalizeEgress 异步通知 WARP 淘汰指定出口, 失败静默。
-func warpPenalizeEgress(controlBase, egress, reason string) {
+func warpPenalizeEgress(controlBase, egress, reason string, channelID int) {
 	if controlBase == "" || egress == "" {
 		return
 	}
@@ -65,7 +74,7 @@ func warpPenalizeEgress(controlBase, egress, reason string) {
 	if reason != "" {
 		query.Set("reason", reason)
 	}
-	warpPostControlAsync(controlBase, "/penalize", query)
+	warpPostControlAsync(controlBase, "/penalize", query, channelID)
 }
 
 // warpPenalizeLatest 异步淘汰最近一次拨号出口, 用于未槽位化的旧 WARP 渠道。
@@ -74,11 +83,12 @@ func warpPenalizeLatest(channel model.Channel) {
 	if err != nil {
 		return
 	}
-	warpPostControlAsync(base, "/penalize", nil)
+	query := url.Values{"reason": []string{"429"}}
+	warpPostControlAsync(base, "/penalize", query, channel.ID)
 }
 
-// warpPostControlAsync 非阻塞调用控制 API, 发送即返回。
-func warpPostControlAsync(controlBase, path string, query url.Values) {
+// warpPostControlAsync 非阻塞调用控制 API; 无新出口时停用渠道。
+func warpPostControlAsync(controlBase, path string, query url.Values, channelID int) {
 	endpoint := controlBase + path
 	if len(query) > 0 {
 		endpoint += "?" + query.Encode()
@@ -96,7 +106,17 @@ func warpPostControlAsync(controlBase, path string, query url.Values) {
 		if err != nil {
 			return
 		}
-		resp.Body.Close()
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return
+		}
+		var result warpPenaltyResponse
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
+			return
+		}
+		if result.NoNewEgress {
+			blockWarpChannelUntilUTC(channelID)
+		}
 	})
 }
 

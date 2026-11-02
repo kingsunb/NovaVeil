@@ -98,6 +98,10 @@ func pickSessionStickyLocked(group model.Group, sessionKey string, exclude int, 
 			}
 		}
 	}
+	// 渠道禁用或临时停用时粘合失效。
+	if valid && channelDisabledForRouting(item) {
+		valid = false
+	}
 	if !valid {
 		delete(sessions, sessionKey)
 		if len(sessions) == 0 {
