@@ -291,3 +291,250 @@ func restoreToolAliasesInEvent(data []byte, aliases map[string]string) []byte {
 	}
 	return out
 }
+
+// ocOfficialToolCandidates 是官方工具名到客户端等价名的候选, 按优先级排列。
+var ocOfficialToolCandidates = map[string][]string{
+	"bash":      []string{"Bash", "bash", "pwsh"},
+	"shell":     []string{"Bash", "bash", "pwsh", "shell"},
+	"edit":      []string{"Edit", "edit"},
+	"read":      []string{"Read", "read"},
+	"write":     []string{"Write", "write"},
+	"glob":      []string{"Glob", "glob"},
+	"grep":      []string{"Grep", "grep"},
+	"question":  []string{"AskUserQuestion", "ask_user_question"},
+	"task":      []string{"Agent", "Task", "task", "subagent"},
+	"subagent":  []string{"Agent", "Task", "subagent"},
+	"todowrite": []string{"TodoWrite", "todo_write", "todo"},
+	"webfetch":  []string{"WebFetch", "web_fetch", "fetch_content"},
+	"websearch": []string{"WebSearch", "web_search"},
+	"skill":     []string{"Skill", "skill"},
+}
+
+// ocOfficialToolTarget 保存客户端声明名及其参数白名单。
+type ocOfficialToolTarget struct {
+	clientName string
+	schema     gjson.Result
+	properties map[string]struct{}
+	required   map[string]struct{}
+	hasSchema  bool
+}
+
+// buildOfficialToolTargets 从已转成 Chat 的客户端工具声明建官方名映射。
+// 只登记客户端确实声明的等价名; 未声明的官方名保持透传。
+func buildOfficialToolTargets(body []byte) map[string]ocOfficialToolTarget {
+	tools := gjson.GetBytes(body, "tools")
+	if !tools.IsArray() {
+		return nil
+	}
+	client := make(map[string]ocOfficialToolTarget)
+	for _, tool := range tools.Array() {
+		if tool.Get("type").String() != "function" {
+			continue
+		}
+		name := tool.Get("function.name").String()
+		if name == "" || ocToolIsWireName(name) {
+			continue
+		}
+		schema := tool.Get("function.parameters")
+		target := ocOfficialToolTarget{clientName: name, schema: schema}
+		if schema.IsObject() {
+			target.hasSchema = true
+			target.properties = make(map[string]struct{})
+			schema.Get("properties").ForEach(func(key, _ gjson.Result) bool {
+				target.properties[key.String()] = struct{}{}
+				return true
+			})
+			target.required = make(map[string]struct{})
+			for _, required := range schema.Get("required").Array() {
+				target.required[required.String()] = struct{}{}
+			}
+		}
+		client[name] = target
+	}
+	if len(client) == 0 {
+		return nil
+	}
+	targets := make(map[string]ocOfficialToolTarget)
+	for official, candidates := range ocOfficialToolCandidates {
+		for _, candidate := range candidates {
+			if target, ok := client[candidate]; ok {
+				targets[official] = target
+				break
+			}
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	return targets
+}
+
+const ocWebFetchDefaultPrompt = "Return the page content."
+
+// ocOfficialArgumentAliases 是官方参数键到客户端常见键的候选。
+var ocOfficialArgumentAliases = map[string][]string{
+	"filePath":   []string{"file_path", "path"},
+	"path":       []string{"file_path", "filePath"},
+	"oldString":  []string{"old_string"},
+	"newString":  []string{"new_string"},
+	"replaceAll": []string{"replace_all"},
+	"include":    []string{"glob"},
+	"background": []string{"run_in_background"},
+	"agent":      []string{"subagent_type"},
+	"name":       []string{"skill"},
+	"id":         []string{"skill"},
+	"command":    []string{"script", "cmd"},
+	"workdir":    []string{"cwd"},
+}
+
+// adaptOfficialToolArguments 按客户端 schema 改参数键并递归丢弃未声明键。
+func adaptOfficialToolArguments(official, args string, target ocOfficialToolTarget) string {
+	if !target.hasSchema {
+		return args
+	}
+	if strings.TrimSpace(args) == "" {
+		args = "{}"
+	}
+	parsed := gjson.Parse(args)
+	if !parsed.IsObject() {
+		return args
+	}
+	out := make(map[string]json.RawMessage)
+	parsed.ForEach(func(key, value gjson.Result) bool {
+		mapped := ocMapOfficialArgument(key.String(), target.properties)
+		if mapped == "" {
+			return true
+		}
+		property := target.schema.Get("properties." + ocSJSONPath(mapped))
+		pruned, ok := ocPruneOfficialValue(value, property)
+		if !ok {
+			return true
+		}
+		out[mapped] = pruned
+		return true
+	})
+	if official == "webfetch" {
+		if _, required := target.required["prompt"]; required {
+			if _, exists := out["prompt"]; !exists {
+				prompt, err := json.Marshal(ocWebFetchDefaultPrompt)
+				if err == nil {
+					out["prompt"] = json.RawMessage(prompt)
+				}
+			}
+		}
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		return args
+	}
+	return string(data)
+}
+
+func ocPruneOfficialValue(value, schema gjson.Result) (json.RawMessage, bool) {
+	if value.Raw == "" {
+		return nil, false
+	}
+	if !schema.Exists() {
+		return json.RawMessage(value.Raw), true
+	}
+	kind := schema.Get("type").String()
+	if kind == "" {
+		if schema.Get("properties").Exists() {
+			kind = "object"
+		} else if schema.Get("items").Exists() {
+			kind = "array"
+		}
+	}
+	switch kind {
+	case "object":
+		properties := schema.Get("properties")
+		if !value.IsObject() || !properties.IsObject() {
+			return json.RawMessage(value.Raw), true
+		}
+		out := make(map[string]json.RawMessage)
+		value.ForEach(func(key, nested gjson.Result) bool {
+			property := properties.Get(ocSJSONPath(key.String()))
+			if !property.Exists() {
+				return true
+			}
+			pruned, ok := ocPruneOfficialValue(nested, property)
+			if ok {
+				out[key.String()] = pruned
+			}
+			return true
+		})
+		data, err := json.Marshal(out)
+		if err != nil {
+			return json.RawMessage(value.Raw), true
+		}
+		return data, true
+	case "array":
+		items := schema.Get("items")
+		if !value.IsArray() || !items.Exists() {
+			return json.RawMessage(value.Raw), true
+		}
+		out := make([]json.RawMessage, 0, len(value.Array()))
+		for _, item := range value.Array() {
+			pruned, ok := ocPruneOfficialValue(item, items)
+			if ok {
+				out = append(out, pruned)
+			}
+		}
+		data, err := json.Marshal(out)
+		if err != nil {
+			return json.RawMessage(value.Raw), true
+		}
+		return data, true
+	default:
+		return json.RawMessage(value.Raw), true
+	}
+}
+
+func ocMapOfficialArgument(key string, properties map[string]struct{}) string {
+	if _, ok := properties[key]; ok {
+		return key
+	}
+	for _, alias := range ocOfficialArgumentAliases[key] {
+		if _, ok := properties[alias]; ok {
+			return alias
+		}
+	}
+	return ""
+}
+
+func ocSJSONPath(key string) string {
+	key = strings.ReplaceAll(key, `\`, `\\`)
+	return strings.ReplaceAll(key, ".", `\.`)
+}
+
+// restoreOfficialToolCallsInBody 把 Chat 非流式官方工具名与参数改为客户端形态。
+func restoreOfficialToolCallsInBody(body []byte, targets map[string]ocOfficialToolTarget) []byte {
+	if len(targets) == 0 || len(body) == 0 {
+		return body
+	}
+	out := body
+	for i, choice := range gjson.GetBytes(out, "choices").Array() {
+		for j, call := range choice.Get("message.tool_calls").Array() {
+			function := call.Get("function")
+			official := function.Get("name").String()
+			target, ok := targets[official]
+			if !ok || target.clientName == "" {
+				continue
+			}
+			base := fmt.Sprintf("choices.%d.message.tool_calls.%d.function", i, j)
+			if args := function.Get("arguments").String(); args != "" && target.hasSchema {
+				next, err := sjson.SetBytes(out, base+".arguments", adaptOfficialToolArguments(official, args, target))
+				if err != nil {
+					continue
+				}
+				out = next
+			}
+			next, err := sjson.SetBytes(out, base+".name", target.clientName)
+			if err != nil {
+				continue
+			}
+			out = next
+		}
+	}
+	return out
+}

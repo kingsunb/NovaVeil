@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -98,6 +99,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	// 的默认 text/event-stream; 其余渠道留空, 行为与改动前完全一致。
 	opencodeAccept := ""
 	var toolAliases map[string]string
+	var officialTools map[string]ocOfficialToolTarget
 	var identityAliases *opencodeAliasState
 	if isOpencodeFreeModel(channel, bodyModelName(request.Body)) {
 		applyOpencodeFreeLaneHeaders(channel, request, bodyModelName(request.Body))
@@ -108,6 +110,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 				releaseConcurrency()
 				return nil, err
 			}
+			officialTools = buildOfficialToolTargets(request.Body)
 			request.Body, _, toolAliases = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(channel), formatToProtocol(format))
 			collapsed = !streaming && gjson.GetBytes(request.Body, "stream").Bool()
 		}
@@ -121,7 +124,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		// 槽位由返回值持有, 调用方在事件流耗尽或转发终止时调用 Close 释放;
 		// 失败路径已在 sendPassthroughStream 内部 close events 后返回, 此处无需再释放。
 		resp.release = releaseConcurrency
-		applyToolAliasRestore(resp, toolAliases)
+		applyToolAliasRestoreWithOfficial(resp, toolAliases, officialTools)
 		return finishOpencodeResponse(resp, format, identityAliases)
 	}
 	if collapsed {
@@ -131,6 +134,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 			return nil, err
 		}
 		resp.release = releaseConcurrency
+		applyToolAliasRestoreWithOfficial(resp, toolAliases, officialTools)
 		body, usage, err := collapseOpencodeFreeStream(ctx, format, resp)
 		resp.Close()
 		if err != nil {
@@ -140,6 +144,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 			return nil, err
 		}
 		body = restoreToolAliasesInBody(body, toolAliases)
+		body = restoreOfficialToolCallsInBody(body, officialTools)
 		return finishOpencodeResponse(&upstreamResponse{body: body, usage: usage, release: releaseConcurrency}, format, identityAliases)
 	}
 
@@ -158,6 +163,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	// 协议决定(可能是 Anthropic), 用 OpenAI outbound 解析会失败, 因此也跳过。
 	if !isChatFormat(format) || channel.PassThroughBodyEnabled {
 		response.Body = restoreToolAliasesInBody(response.Body, toolAliases)
+		response.Body = restoreOfficialToolCallsInBody(response.Body, officialTools)
 		return finishOpencodeResponse(&upstreamResponse{body: response.Body, header: response.Headers.Clone(), release: releaseConcurrency}, format, identityAliases)
 	}
 	// 同协议下响应可原样回给客户端, 仍需解析一次以取得用量并识别以 200 下发的失败终态;
@@ -184,6 +190,7 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	}
 	// response.Body 是本请求的独立读取缓冲, 直接移交所有权, 不再整包克隆一份。
 	response.Body = restoreToolAliasesInBody(response.Body, toolAliases)
+	response.Body = restoreOfficialToolCallsInBody(response.Body, officialTools)
 	return finishOpencodeResponse(&upstreamResponse{body: response.Body, header: response.Headers.Clone(), usage: parsed.Usage, release: releaseConcurrency}, format, identityAliases)
 }
 
@@ -212,6 +219,32 @@ func applyToolAliasRestore(resp *upstreamResponse, aliases map[string]string) {
 	}
 }
 
+// applyToolAliasRestoreWithOfficial 同时还原别名与官方工具名。
+func applyToolAliasRestoreWithOfficial(resp *upstreamResponse, aliases map[string]string, official map[string]ocOfficialToolTarget) {
+	if resp == nil {
+		return
+	}
+	if len(official) == 0 {
+		applyToolAliasRestore(resp, aliases)
+		return
+	}
+	stream := &officialToolStream{inner: resp.events, aliases: aliases, official: official}
+	if len(resp.window) > 0 {
+		window := make([]*httpclient.StreamEvent, 0, len(resp.window))
+		for _, ev := range resp.window {
+			if ev == nil {
+				continue
+			}
+			window = append(window, stream.consume(ev)...)
+		}
+		resp.window = window
+	}
+	if resp.last {
+		resp.window = append(resp.window, stream.flushPending()...)
+	}
+	resp.events = stream
+}
+
 // toolAliasStream 包装事件流, 逐事件还原出站工具别名。
 type toolAliasStream struct {
 	inner   streams.Stream[*httpclient.StreamEvent]
@@ -228,6 +261,308 @@ func (s *toolAliasStream) Current() *httpclient.StreamEvent {
 }
 func (s *toolAliasStream) Close() error { return s.inner.Close() }
 func (s *toolAliasStream) Err() error   { return s.inner.Err() }
+
+// officialToolStream 缓存 Chat 工具调用分片, 在终止前统一改写并下发。
+type officialToolStream struct {
+	inner    streams.Stream[*httpclient.StreamEvent]
+	aliases  map[string]string
+	official map[string]ocOfficialToolTarget
+	pending  map[string]*officialToolPending
+	order    []string
+	queue    []*httpclient.StreamEvent
+	current  *httpclient.StreamEvent
+	template *httpclient.StreamEvent
+	ended    bool
+	aborted  bool
+}
+
+type officialToolPending struct {
+	choiceIndex int64
+	toolIndex   int64
+	id          string
+	name        string
+	arguments   strings.Builder
+}
+
+func (s *officialToolStream) Next() bool {
+	for len(s.queue) == 0 && !s.ended {
+		if s.inner != nil && s.inner.Next() {
+			s.queue = append(s.queue, s.consume(s.inner.Current())...)
+			continue
+		}
+		s.ended = true
+		if s.inner != nil && s.inner.Err() != nil {
+			s.aborted = true
+		}
+		if !s.aborted {
+			s.queue = append(s.queue, s.flushPending()...)
+		}
+	}
+	if len(s.queue) == 0 {
+		s.current = nil
+		return false
+	}
+	s.current = s.queue[0]
+	s.queue = s.queue[1:]
+	return true
+}
+
+func (s *officialToolStream) Current() *httpclient.StreamEvent { return s.current }
+
+func (s *officialToolStream) Close() error {
+	if s.inner == nil {
+		return nil
+	}
+	return s.inner.Close()
+}
+
+func (s *officialToolStream) Err() error {
+	if s.inner == nil {
+		return nil
+	}
+	return s.inner.Err()
+}
+
+func (s *officialToolStream) pendingCall(choiceIndex, toolIndex int64) *officialToolPending {
+	key := fmt.Sprintf("%d/%d", choiceIndex, toolIndex)
+	if s.pending == nil {
+		s.pending = make(map[string]*officialToolPending)
+	}
+	if pending := s.pending[key]; pending != nil {
+		return pending
+	}
+	pending := &officialToolPending{choiceIndex: choiceIndex, toolIndex: toolIndex}
+	s.pending[key] = pending
+	s.order = append(s.order, key)
+	return pending
+}
+
+func (s *officialToolStream) consume(ev *httpclient.StreamEvent) []*httpclient.StreamEvent {
+	if ev == nil || len(ev.Data) == 0 {
+		return []*httpclient.StreamEvent{ev}
+	}
+	trimmed := strings.TrimSpace(string(ev.Data))
+	if trimmed == "[DONE]" {
+		out := s.flushPending()
+		return append(out, ev)
+	}
+	if failure := gjson.GetBytes(ev.Data, "error"); failure.Exists() && failure.Type != gjson.Null {
+		s.aborted = true
+		s.pending = nil
+		s.order = nil
+		return []*httpclient.StreamEvent{ev}
+	}
+	choices := gjson.GetBytes(ev.Data, "choices").Array()
+	if len(choices) == 0 {
+		return []*httpclient.StreamEvent{ev}
+	}
+	finish := false
+	sawTool := false
+	sawContent := false
+	for ci, choice := range choices {
+		choiceIndex := choice.Get("index").Int()
+		if !choice.Get("index").Exists() {
+			choiceIndex = int64(ci)
+		}
+		if choice.Get("delta.role").String() != "" {
+			sawContent = true
+		}
+		if choice.Get("delta.content").String() != "" {
+			sawContent = true
+		}
+		if choice.Get("delta.reasoning_content").String() != "" {
+			sawContent = true
+		}
+		if choice.Get("delta.reasoning").String() != "" {
+			sawContent = true
+		}
+		for ti, call := range choice.Get("delta.tool_calls").Array() {
+			sawTool = true
+			toolIndex := call.Get("index").Int()
+			if !call.Get("index").Exists() {
+				toolIndex = int64(ti)
+			}
+			pending := s.pendingCall(choiceIndex, toolIndex)
+			if s.template == nil {
+				s.template = cloneStreamEvent(ev)
+			}
+			if id := call.Get("id").String(); id != "" {
+				pending.id = id
+			}
+			if name := call.Get("function.name").String(); name != "" {
+				pending.name = mergeOfficialToolName(pending.name, name)
+			}
+			if args := call.Get("function.arguments").String(); args != "" {
+				mergeOfficialToolArguments(&pending.arguments, args)
+			}
+		}
+		if fr := choice.Get("finish_reason"); fr.Exists() && fr.Type != gjson.Null && fr.String() != "" {
+			finish = true
+		}
+	}
+	if finish {
+		out := s.flushPending()
+		return append(out, stripToolCallsFromEvent(ev))
+	}
+	if sawTool {
+		if sawContent {
+			return []*httpclient.StreamEvent{stripToolCallsFromEvent(ev)}
+		}
+		return nil
+	}
+	return []*httpclient.StreamEvent{ev}
+}
+
+func (s *officialToolStream) flushPending() []*httpclient.StreamEvent {
+	if len(s.order) == 0 {
+		return nil
+	}
+	out := make([]*httpclient.StreamEvent, 0, len(s.order))
+	for _, key := range s.order {
+		pending := s.pending[key]
+		if pending == nil {
+			continue
+		}
+		name := pending.name
+		target, official := s.official[name]
+		if alias, ok := s.aliases[name]; ok {
+			name = alias
+			official = false
+		}
+		args := pending.arguments.String()
+		if official {
+			if target.clientName != "" {
+				name = target.clientName
+			}
+			if args != "" {
+				args = adaptOfficialToolArguments(pending.name, args, target)
+			}
+		}
+		if ev := s.syntheticToolCall(pending, name, args); ev != nil {
+			out = append(out, ev)
+		}
+	}
+	s.pending = nil
+	s.order = nil
+	return out
+}
+
+func (s *officialToolStream) syntheticToolCall(pending *officialToolPending, name, args string) *httpclient.StreamEvent {
+	call := map[string]any{
+		"index": pending.toolIndex,
+		"type":  "function",
+		"function": map[string]any{
+			"name":      name,
+			"arguments": args,
+		},
+	}
+	if pending.id != "" {
+		call["id"] = pending.id
+	}
+	choice := map[string]any{
+		"index":         pending.choiceIndex,
+		"delta":         map[string]any{"tool_calls": []any{call}},
+		"finish_reason": nil,
+	}
+	chunk := map[string]any{
+		"object":  "chat.completion.chunk",
+		"choices": []any{choice},
+	}
+	if s.template != nil {
+		if id := gjson.GetBytes(s.template.Data, "id").String(); id != "" {
+			chunk["id"] = id
+		}
+		if model := gjson.GetBytes(s.template.Data, "model").String(); model != "" {
+			chunk["model"] = model
+		}
+		if created := gjson.GetBytes(s.template.Data, "created"); created.Exists() {
+			chunk["created"] = created.Int()
+		}
+		if object := gjson.GetBytes(s.template.Data, "object").String(); object != "" {
+			chunk["object"] = object
+		}
+	}
+	data, err := json.Marshal(chunk)
+	if err != nil {
+		return nil
+	}
+	event := &httpclient.StreamEvent{Data: data}
+	if s.template != nil {
+		*event = *s.template
+		event.Data = data
+	}
+	return event
+}
+
+func cloneStreamEvent(ev *httpclient.StreamEvent) *httpclient.StreamEvent {
+	if ev == nil {
+		return nil
+	}
+	clone := *ev
+	clone.Data = append([]byte(nil), ev.Data...)
+	return &clone
+}
+
+func mergeOfficialToolName(previous, next string) string {
+	if previous == "" {
+		return next
+	}
+	if next == "" {
+		return previous
+	}
+	if strings.HasPrefix(next, previous) {
+		return next
+	}
+	if strings.HasPrefix(previous, next) {
+		return previous
+	}
+	return previous + next
+}
+
+func mergeOfficialToolArguments(builder *strings.Builder, next string) {
+	if next == "" {
+		return
+	}
+	if builder.Len() == 0 {
+		builder.WriteString(next)
+		return
+	}
+	previous := builder.String()
+	if strings.HasPrefix(next, previous) {
+		builder.Reset()
+		builder.WriteString(next)
+		return
+	}
+	if strings.HasPrefix(previous, next) {
+		return
+	}
+	builder.WriteString(next)
+}
+
+func stripToolCallsFromEvent(ev *httpclient.StreamEvent) *httpclient.StreamEvent {
+	if ev == nil || len(ev.Data) == 0 {
+		return ev
+	}
+	data := ev.Data
+	changed := false
+	for i, choice := range gjson.GetBytes(data, "choices").Array() {
+		if !choice.Get("delta.tool_calls").Exists() {
+			continue
+		}
+		next, err := sjson.DeleteBytes(data, fmt.Sprintf("choices.%d.delta.tool_calls", i))
+		if err != nil {
+			continue
+		}
+		data = next
+		changed = true
+	}
+	if !changed {
+		return ev
+	}
+	clone := cloneStreamEvent(ev)
+	clone.Data = data
+	return clone
+}
 
 // stickyEOFStream 保证首次 EOF 后不再触达底层流。
 // go-sse 解码器 EOF 后置空内部 scanner, 重复 Next 会空指针。
@@ -323,6 +658,7 @@ type conversionMiddleware struct {
 	convertedRequestBody     []byte        // 转换后的上游请求体快照; 仅 traceEnabled=true 时填充, 供追踪诊断对比。
 	toolAliases              map[string]string
 	toolSchemas              map[string][]string
+	officialTools            map[string]ocOfficialToolTarget
 }
 
 func opencodeToolSchemaSnapshot(body []byte, format llm.APIFormat) map[string][]string {
@@ -397,6 +733,7 @@ func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *
 		request.Headers.Del("X-Goog-Api-Key")
 	}
 	m.toolAliases = nil
+	m.officialTools = nil
 	if m.format == llm.APIFormatOpenAIChatCompletion {
 		toolChoice := gjson.GetBytes(request.Body, "tool_choice")
 		request.Body = normalizeChatRoles(request.Body)
@@ -421,6 +758,7 @@ func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *
 	if isOpencodeFreeModel(m.channel, bodyModelName(request.Body)) {
 		applyOpencodeFreeLaneHeaders(m.channel, request, bodyModelName(request.Body))
 		if isChatFormat(m.format) {
+			m.officialTools = buildOfficialToolTargets(request.Body)
 			request.Body, _, m.toolAliases = shapeOpencodeFreeBody(request.Body, isOpencodeV1Lane(m.channel), formatToProtocol(m.format))
 		}
 	}
@@ -628,16 +966,20 @@ func (m *conversionMiddleware) OnOutboundRawError(_ context.Context, err error) 
 func (m *conversionMiddleware) OnOutboundRawResponse(_ context.Context, response *httpclient.Response) (*httpclient.Response, error) {
 	m.rawBody = errBodySnippet(response.Body)
 	response.Body = restoreToolAliasesInBody(response.Body, m.toolAliases)
+	response.Body = restoreOfficialToolCallsInBody(response.Body, m.officialTools)
 	return response, nil
 }
 
 // OnOutboundRawStream 在转换前还原工具名。
 func (m *conversionMiddleware) OnOutboundRawStream(_ context.Context, events streams.Stream[*httpclient.StreamEvent]) (streams.Stream[*httpclient.StreamEvent], error) {
 	events = &stickyEOFStream{inner: events}
-	if len(m.toolAliases) == 0 {
-		return events, nil
+	if len(m.officialTools) == 0 {
+		if len(m.toolAliases) == 0 {
+			return events, nil
+		}
+		return &toolAliasStream{inner: events, aliases: m.toolAliases}, nil
 	}
-	return &toolAliasStream{inner: events, aliases: m.toolAliases}, nil
+	return &officialToolStream{inner: events, aliases: m.toolAliases, official: m.officialTools}, nil
 }
 
 // OnOutboundLlmResponse 取得非流式用量与终止原因, 并在回转客户端协议前校验上游终态与终止原因白名单。
