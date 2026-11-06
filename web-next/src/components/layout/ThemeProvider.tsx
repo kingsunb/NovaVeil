@@ -10,15 +10,19 @@ import {
 
 type Theme = "light" | "dark" | "system";
 type ResolvedTheme = "light" | "dark";
+type AccentTheme = "aurora" | "classic";
 
 interface ThemeContextValue {
   theme: Theme;
   resolved: ResolvedTheme;
   setTheme: (t: Theme) => void;
   toggle: () => void;
+  accent: AccentTheme;
+  setAccent: (a: AccentTheme) => void;
 }
 
 const STORAGE_KEY = "nv-theme";
+const ACCENT_STORAGE_KEY = "nv-accent";
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 function resolve(theme: Theme, systemDark: boolean): ResolvedTheme {
@@ -33,6 +37,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const t = localStorage.getItem(STORAGE_KEY);
     return (t as Theme) || "system";
   });
+  const [accent, setAccentState] = useState<AccentTheme>(() =>
+    localStorage.getItem(ACCENT_STORAGE_KEY) === "classic" ? "classic" : "aurora",
+  );
   // 系统主题变化必须进入 React state：之前只直接改 DOM dataset，context 里的
   // resolved 仍是旧值，Topbar 等消费 useTheme().resolved 的组件会永远停留在
   // 旧主题（审计 FE-05 / F-L4）。
@@ -48,6 +55,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     document.documentElement.dataset.theme = resolved;
   }, [resolved]);
+
+  useEffect(() => {
+    document.documentElement.dataset.accent = accent;
+  }, [accent]);
 
   useEffect(() => {
     const mq = matchMedia("(prefers-color-scheme: dark)");
@@ -69,9 +80,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setThemeState(next);
   }, [resolved]);
 
+  const setAccent = useCallback((a: AccentTheme) => {
+    localStorage.setItem(ACCENT_STORAGE_KEY, a);
+    setAccentState(a);
+  }, []);
+
   const value = useMemo<ThemeContextValue>(
-    () => ({ theme, resolved, setTheme, toggle }),
-    [theme, resolved, setTheme, toggle],
+    () => ({ theme, resolved, setTheme, toggle, accent, setAccent }),
+    [theme, resolved, setTheme, toggle, accent, setAccent],
   );
 
   return (

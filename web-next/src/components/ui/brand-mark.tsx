@@ -40,7 +40,7 @@ export function BrandMark({
       <div
         aria-hidden
         className={cn(
-          "flex shrink-0 items-center justify-center bg-card shadow-apple-sm ring-1 ring-border/70",
+          "brand-tile flex shrink-0 items-center justify-center ring-1 ring-white/60",
           s.box,
         )}
       >

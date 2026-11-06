@@ -109,7 +109,7 @@ export function Topbar({ onOpenCommand, onOpenNavigation }: TopbarProps) {
           title="退出登录"
           className="gap-2 rounded-full px-1.5 sm:px-2"
         >
-          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+          <span className="avatar-gradient flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ring-1 ring-white/60">
             {initial}
           </span>
           <span className="hidden text-xs font-medium sm:inline">{username ?? "admin"}</span>

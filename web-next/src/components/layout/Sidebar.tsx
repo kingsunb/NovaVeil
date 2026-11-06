@@ -136,7 +136,7 @@ function NavGroup({
               "flex min-h-10 items-center gap-2.5 rounded-control px-2 text-[13px] font-medium tracking-tight transition-all duration-150",
               collapsed && "justify-center px-0",
               isActive
-                ? "bg-primary/[0.10] text-primary-text"
+                ? "nav-gradient"
                 : "text-ink-muted hover:bg-ink/[0.04] hover:text-ink",
             )
           }

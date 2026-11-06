@@ -49,10 +49,19 @@ export default function LoginPage() {
 
   return (
     <div className="bg-gradient-subtle relative flex min-h-full items-center justify-center overflow-hidden bg-background px-4">
+      <div
+        aria-hidden
+        className="login-aurora-blob pointer-events-none absolute -left-24 top-[14%] h-72 w-72 rounded-full bg-[#ffffd0]/70 blur-3xl"
+      />
+      <div
+        aria-hidden
+        className="login-aurora-blob pointer-events-none absolute -right-20 bottom-[10%] h-80 w-80 rounded-full bg-[#b9dfff]/60 blur-3xl"
+      />
       <form
         onSubmit={onSubmit}
-        className="glass-panel glass-inset-highlight w-full max-w-[380px] rounded-card p-8 shadow-apple-lg"
+        className="glass-panel glass-inset-highlight relative w-full max-w-[380px] overflow-hidden rounded-card p-8 shadow-apple-lg"
       >
+        <span aria-hidden className="gradient-aurora absolute inset-x-0 top-0 h-1" />
         <div className="mb-8">
           <BrandMark
             size="lg"
@@ -102,7 +111,7 @@ export default function LoginPage() {
               checked={remember}
               onChange={(e) => setRemember(e.target.checked)}
               aria-label="信任此设备（24 小时内免登录）"
-              className="h-4 w-4 rounded-md border-border/60 accent-[#007AFF]"
+              className="h-4 w-4 rounded-md border-border/60 accent-[#6d5ae6]"
             />
             信任此设备（24 小时内免登录）
           </label>

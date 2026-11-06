@@ -4,13 +4,15 @@ import userEvent from "@testing-library/user-event";
 import { ThemeProvider, useTheme } from "./ThemeProvider";
 
 function Probe() {
-  const { theme, resolved, setTheme } = useTheme();
+  const { theme, resolved, setTheme, accent, setAccent } = useTheme();
   return (
     <div>
       <span data-testid="resolved">{resolved}</span>
       <span data-testid="theme">{theme}</span>
+      <span data-testid="accent">{accent}</span>
       <button onClick={() => setTheme("dark")}>choose-dark</button>
       <button onClick={() => setTheme("system")}>choose-system</button>
+      <button onClick={() => setAccent("classic")}>choose-classic</button>
     </div>
   );
 }
@@ -85,6 +87,27 @@ describe("<ThemeProvider /> 系统主题变化", () => {
     });
     expect(screen.getByTestId("resolved")).toHaveTextContent("dark");
     expect(screen.getByTestId("theme")).toHaveTextContent("dark");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("视觉主题默认极光，切换经典后同步 data-accent 并持久化", async () => {
+    const user = userEvent.setup();
+    installMatchMedia();
+
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId("accent")).toHaveTextContent("aurora");
+
+    await user.click(screen.getByRole("button", { name: "choose-classic" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("accent")).toHaveTextContent("classic"),
+    );
+    expect(document.documentElement.dataset.accent).toBe("classic");
+    expect(localStorage.getItem("nv-accent")).toBe("classic");
 
     vi.unstubAllGlobals();
   });

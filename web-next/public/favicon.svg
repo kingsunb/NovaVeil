@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="aurora" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFFFD0"/>
+      <stop offset="0.38" stop-color="#D2CDFF"/>
+      <stop offset="0.68" stop-color="#B9DFFF"/>
+      <stop offset="1" stop-color="#CFFFBD"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="30" height="30" rx="8" fill="url(#aurora)"/>
+  <g transform="translate(2 2) scale(0.28)" fill="#466551" stroke="#466551" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M50 12 L56.5 41.5 L85 48 L56.5 54.5 L50 84 L43.5 54.5 L15 48 L43.5 41.5 Z" stroke="none"/>
+    <path d="M16 68 Q33 82 50 82 Q67 82 84 68" fill="none" stroke-width="6"/>
+    <path d="M26 80 Q38 90 50 90 Q62 90 74 80" fill="none" stroke-width="4" opacity="0.55"/>
+  </g>
+</svg>

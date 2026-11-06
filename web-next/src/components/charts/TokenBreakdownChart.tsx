@@ -17,10 +17,10 @@ export function TokenBreakdownChart({
   cached: number;
 }) {
   const segments = [
-    { label: "输入", value: input, color: "#60A5FA" },
-    { label: "输出", value: output, color: "#34D399" },
-    { label: "推理", value: reasoning, color: "#F59E0B" },
-    { label: "缓存命中", value: cached, color: "#A78BFA" },
+    { label: "输入", value: input, color: "#6D5AE6" },
+    { label: "输出", value: output, color: "#2FAE86" },
+    { label: "推理", value: reasoning, color: "#E6A23C" },
+    { label: "缓存命中", value: cached, color: "#4EA8DE" },
   ];
 
   const total = segments.reduce((sum, s) => sum + s.value, 0);

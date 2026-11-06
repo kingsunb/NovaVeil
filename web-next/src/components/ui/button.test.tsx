@@ -26,7 +26,7 @@ describe("<Button />", () => {
     const { container, rerender } = render(
       <Button variant="primary">a</Button>,
     );
-    expect(container.firstChild).toHaveClass("bg-primary-text");
+    expect(container.firstChild).toHaveClass("gradient-cta");
     rerender(<Button variant="ghost">a</Button>);
     expect(container.firstChild).toHaveClass("hover:bg-ink/[0.04]");
     rerender(<Button variant="destructive">a</Button>);

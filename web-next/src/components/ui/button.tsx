@@ -4,9 +4,9 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 /**
- * 按钮 —— macOS 磨砂玻璃简白风
- *  - Apple 风格圆角 + 微动效（按下缩放）
- *  - primary: Apple 蓝 pill 形状
+ * 按钮 —— 暖光渐变磨砂风
+ *  - 胶囊圆角 + 微动效（按下缩放）
+ *  - primary: 四色渐变 pill + 深紫文字
  *  - secondary: 玻璃面 + 半透明
  *  - ghost: 透明底 + hover 微亮
  */
@@ -16,7 +16,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          "bg-primary-text text-primary-foreground shadow-apple-sm hover:shadow-apple-md hover:brightness-110 dark:bg-primary dark:hover:brightness-110",
+          "gradient-cta shadow-apple-sm hover:shadow-apple-md",
         secondary:
           "glass-panel glass-inset-highlight text-secondary-foreground hover:brightness-[1.02]",
         ghost:

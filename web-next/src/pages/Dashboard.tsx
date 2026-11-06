@@ -438,7 +438,7 @@ function KpiCard({
   loading,
 }: Kpi & { loading?: boolean }) {
   return (
-    <Card>
+    <Card className="kpi-card">
       <CardContent className="space-y-2 p-4">
         <div className="flex items-center justify-between text-xs text-ink-muted">
           <span>{label}</span>

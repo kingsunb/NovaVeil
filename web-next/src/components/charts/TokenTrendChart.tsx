@@ -116,7 +116,7 @@ export function TokenTrendChart({
             <path
               d={linePath("in")}
               fill="none"
-              stroke="#60A5FA"
+              stroke="#6D5AE6"
               strokeWidth={1.5}
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -124,7 +124,7 @@ export function TokenTrendChart({
             <path
               d={linePath("out")}
               fill="none"
-              stroke="#34D399"
+              stroke="#2FAE86"
               strokeWidth={1.5}
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -143,12 +143,12 @@ export function TokenTrendChart({
               stroke="currentColor"
               strokeOpacity={0.15}
             />
-            <circle cx={x(hover)} cy={y(points[hover].in)} r="3" fill="#60A5FA" />
+            <circle cx={x(hover)} cy={y(points[hover].in)} r="3" fill="#6D5AE6" />
             <circle
               cx={x(hover)}
               cy={y(points[hover].out)}
               r="3"
-              fill="#34D399"
+              fill="#2FAE86"
             />
           </g>
         )}
@@ -174,14 +174,14 @@ export function TokenTrendChart({
           <div className="text-ink-muted">{fmtFull(hoverPoint.t, range)}</div>
           <div className="mt-0.5 flex items-center gap-3">
             <span className="flex items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#60A5FA]" />
+              <span className="h-1.5 w-1.5 rounded-full bg-[#6D5AE6]" />
               <span className="text-ink">入</span>
               <span className="num text-ink">
                 {formatNumber(hoverPoint.in)}
               </span>
             </span>
             <span className="flex items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#34D399]" />
+              <span className="h-1.5 w-1.5 rounded-full bg-[#2FAE86]" />
               <span className="text-ink">出</span>
               <span className="num text-ink">
                 {formatNumber(hoverPoint.out)}

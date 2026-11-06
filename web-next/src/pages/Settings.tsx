@@ -147,13 +147,13 @@ export default function SettingsPage() {
 // ---------------- 外观 ----------------
 
 function AppearanceSection() {
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, accent, setAccent } = useTheme();
   return (
     <Card>
       <CardHeader>
         <div>
           <CardTitle>外观</CardTitle>
-          <CardDescription>切换浅色 / 深色 / 跟随系统</CardDescription>
+          <CardDescription>切换明暗模式与视觉主题</CardDescription>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -170,6 +170,22 @@ function AppearanceSection() {
               { value: "system", label: "跟随系统" },
             ]}
           />
+        </div>
+        <div>
+          <p className="mb-2 text-xs font-medium text-ink-muted">视觉主题</p>
+          <SegmentedControl
+            aria-label="视觉主题"
+            size="md"
+            value={accent}
+            onChange={setAccent}
+            options={[
+              { value: "aurora", label: "极光渐变" },
+              { value: "classic", label: "经典蓝" },
+            ]}
+          />
+          <p className="mt-2 text-xs text-ink-subtle">
+            极光背景会缓慢流动；系统开启“减少动态效果”时自动静止。
+          </p>
         </div>
       </CardContent>
     </Card>

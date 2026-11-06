@@ -68,77 +68,193 @@
   --radius-md: 8px;
   --radius-sm: 6px;
 
-  /* 阴影 —— Apple 三层级 + 浮层 */
-  --shadow-apple-sm: 0 1px 2px hsl(220 9% 30% / 0.05), 0 2px 8px hsl(220 9% 30% / 0.03);
-  --shadow-apple-md: 0 2px 4px hsl(220 9% 30% / 0.05), 0 4px 16px hsl(220 9% 30% / 0.07);
-  --shadow-apple-lg: 0 4px 8px hsl(220 9% 30% / 0.06), 0 12px 32px hsl(220 9% 30% / 0.1);
+  /* 阴影 —— 紫雾三层级 + 浮层 */
+  --shadow-apple-sm: 0 1px 2px hsl(255 25% 30% / 0.06), 0 2px 8px hsl(255 25% 30% / 0.04);
+  --shadow-apple-md: 0 2px 4px hsl(255 25% 30% / 0.06), 0 4px 16px hsl(255 25% 30% / 0.08);
+  --shadow-apple-lg: 0 4px 8px hsl(255 25% 30% / 0.07), 0 12px 32px hsl(255 25% 30% / 0.11);
   /* 命令面板 / 错误卡片 / 图表 tooltip 等悬浮层的抬升阴影 */
-  --shadow-overlay: 0 24px 48px hsl(220 9% 20% / 0.16), 0 8px 16px hsl(220 9% 20% / 0.08);
+  --shadow-overlay: 0 24px 48px hsl(255 25% 20% / 0.18), 0 8px 16px hsl(255 25% 20% / 0.09);
 }
 
 /* =========================================================================
-   设计令牌 —— macOS 冷白磨砂 + Apple 蓝（DESIGN.md §4.1）
-   - 亮色：#F2F4F7 冷白灰 + 克制玻璃面
-   - 暗色：石墨黑 + 低对比描边
-   - 信号色只用于状态与主操作，不做装饰铺底
+   设计令牌 —— 暖光渐变 + 紫雾玻璃（DESIGN.md §4.1）
+   - 亮色：#FFFFD0 / #D2CDFF / #B9DFFF / #CFFFBD 四色柔光画布
+   - 暗色：深紫黑 + 低饱和渐变余晖
+   - 信号色只用于状态与主操作，渐变只做氛围与主操作强调
    ========================================================================= */
 
 :root,
 :root[data-theme="light"] {
-	/* 背景 - 冷白灰画布 */
-	--background: 216 18% 96%;
-	--foreground: 220 9% 12%;
+  /* 背景 - 暖白紫雾画布 */
+  --background: 255 45% 97%;
+  --foreground: 252 25% 11%;
 
   /* 表面层 - 玻璃（用 alpha 组合）*/
   --surface: 0 0% 100%;
   --surface-glass: 0 0% 100%;
-  --surface-subtle: 220 14% 94%;
+  --surface-subtle: 255 30% 94%;
 
   /* 卡片/弹层 */
   --card: 0 0% 100%;
-  --card-foreground: 220 9% 8%;
+  --card-foreground: 252 25% 9%;
   --popover: 0 0% 100%;
-  --popover-foreground: 220 9% 8%;
+  --popover-foreground: 252 25% 9%;
 
-  /* 边框 - 更柔和 */
-  --border: 220 13% 89%;
-  --input: 220 13% 89%;
-  --ring: 211 100% 45%;
+  /* 边框 - 柔和薰衣草 */
+  --border: 255 20% 89%;
+  --input: 255 20% 89%;
+  --ring: 248 74% 63%;
 
-  /* 主色 - Apple 蓝 */
-  --primary: 211 100% 45%;            /* #0071E3 */
-  --primary-text: 211 100% 38%;
-  --primary-hover: 211 100% 50%;
+  /* 主色 - 深紫罗兰（对白字 4.9:1） */
+  --primary: 248 74% 63%;
+  --primary-text: 248 64% 56%;
+  --primary-hover: 248 80% 68%;
   --primary-foreground: 0 0% 100%;
 
   /* 次要 */
-  --secondary: 220 14% 95%;
-  --secondary-foreground: 220 9% 15%;
+  --secondary: 255 30% 95%;
+  --secondary-foreground: 252 25% 15%;
 
   /* 弱化 */
-  --muted: 220 14% 95%;
-  --muted-foreground: 220 7% 42%;     /* #68686D */
-  --accent: 220 14% 95%;
-  --accent-foreground: 220 9% 8%;
+  --muted: 255 30% 95%;
+  --muted-foreground: 252 8% 42%;
+  --accent: 255 30% 95%;
+  --accent-foreground: 252 25% 9%;
 
   /* 危险 */
   /* 350 80% 42%：--destructive 在 bg-destructive/[0.04] 洗底上需 ≥4.5:1（WCAG AA） */
   --destructive: 350 80% 42%;
   --destructive-foreground: 0 0% 100%;
 
-  /* 状态语义色 - Apple system colors */
-  --success: 145 63% 42%;
+  /* 状态语义色 */
+  --success: 152 55% 34%;
   /* 38 95% 35%：--warning 作 text-warning 时对 bg-warning/10 横幅需 ≥4.5:1 */
+  --warning: 38 95% 35%;
+  --info: 205 85% 40%;
+
+  /* 文本层级 - 紫灰阶 */
+  --ink: 252 25% 8%;
+  --ink-muted: 252 8% 42%;
+  /* 252 8% 40%：hint 等次要文案对 --surface 需 ≥4.5:1 */
+  --ink-subtle: 252 8% 40%;
+
+  /* 玻璃 alpha */
+  --glass-bg: 0 0% 100%;
+  --glass-alpha: 0.76;
+  --glass-border: 0 0% 100%;
+  --glass-border-alpha: 0.62;
+  --signal: 248 74% 63%;
+  --signal-strong: 248 80% 68%;
+  --grid-line: 255 20% 84%;
+
+  /* 品牌渐变 —— 四色取自用户提供色卡 */
+  --gradient-warm: linear-gradient(135deg, #ffffd0 0%, #f3efff 48%, #d2cdff 100%);
+  --gradient-cool: linear-gradient(135deg, #cfffbd 0%, #eafaf2 48%, #b9dfff 100%);
+  --gradient-aurora: linear-gradient(120deg, #ffffd0 0%, #d2cdff 38%, #b9dfff 68%, #cfffbd 100%);
+  --gradient-cta: linear-gradient(115deg, #ffffd0 0%, #d2cdff 44%, #b9dfff 74%, #cfffbd 100%);
+  --gradient-cta-hover: linear-gradient(115deg, #fffbc2 0%, #c6bfff 44%, #a9d7ff 74%, #bfffb0 100%);
+  --gradient-ink: 255 45% 16%;
+  --gradient-avatar: linear-gradient(135deg, #ffffd0 0%, #d2cdff 52%, #b9dfff 100%);
+  --avatar-ink: 255 45% 16%;
+}
+
+:root[data-theme="dark"] {
+  --background: 252 18% 7%;
+  --foreground: 250 20% 96%;
+
+  --surface: 252 15% 13%;
+  --surface-glass: 252 15% 13%;
+  --surface-subtle: 252 14% 17%;
+
+  --card: 252 15% 13%;
+  --card-foreground: 250 20% 96%;
+  --popover: 252 15% 13%;
+  --popover-foreground: 250 20% 96%;
+
+  --border: 252 12% 23%;
+  --input: 252 12% 23%;
+  --ring: 248 80% 72%;
+
+  --primary: 248 74% 65%;
+  --primary-text: 248 85% 78%;
+  --primary-hover: 248 85% 74%;
+  /* 浅紫底配深字，避免白字对比不足 */
+  --primary-foreground: 255 45% 12%;
+
+  --secondary: 252 14% 18%;
+  --secondary-foreground: 250 20% 96%;
+
+  --muted: 252 14% 18%;
+  --muted-foreground: 250 8% 68%;
+  --accent: 252 14% 18%;
+  --accent-foreground: 250 20% 96%;
+
+  --destructive: 350 100% 68%;
+  --destructive-foreground: 0 0% 100%;
+
+  --success: 150 60% 55%;
+  --warning: 38 100% 60%;
+  --info: 205 90% 65%;
+
+  --ink: 250 20% 96%;
+  --ink-muted: 250 8% 68%;
+  --ink-subtle: 250 8% 52%;
+
+  --glass-bg: 252 15% 12%;
+  --glass-alpha: 0.80;
+  --glass-border: 252 14% 26%;
+  --glass-border-alpha: 0.62;
+  --signal: 248 80% 72%;
+  --signal-strong: 248 85% 80%;
+  --grid-line: 252 12% 24%;
+}
+
+/* =========================================================================
+   经典主题 —— 还原冷白磨砂 + Apple 蓝
+   ========================================================================= */
+
+:root[data-accent="classic"],
+:root[data-accent="classic"][data-theme="light"] {
+  --background: 216 18% 96%;
+  --foreground: 220 9% 12%;
+
+  --surface: 0 0% 100%;
+  --surface-glass: 0 0% 100%;
+  --surface-subtle: 220 14% 94%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 220 9% 8%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 220 9% 8%;
+
+  --border: 220 13% 89%;
+  --input: 220 13% 89%;
+  --ring: 211 100% 45%;
+
+  --primary: 211 100% 45%;
+  --primary-text: 211 100% 38%;
+  --primary-hover: 211 100% 50%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 220 14% 95%;
+  --secondary-foreground: 220 9% 15%;
+
+  --muted: 220 14% 95%;
+  --muted-foreground: 220 7% 42%;
+  --accent: 220 14% 95%;
+  --accent-foreground: 220 9% 8%;
+
+  --destructive: 350 80% 42%;
+  --destructive-foreground: 0 0% 100%;
+
+  --success: 145 63% 42%;
   --warning: 38 95% 35%;
   --info: 211 100% 50%;
 
-  /* 文本层级 - Apple 灰阶 */
   --ink: 220 9% 8%;
   --ink-muted: 220 7% 42%;
-  /* 220 9% 40%：hint 等次要文案对 --surface 需 ≥4.5:1（55% 只有 3.5:1） */
   --ink-subtle: 220 9% 40%;
 
-  /* 玻璃 alpha */
   --glass-bg: 0 0% 100%;
   --glass-alpha: 0.72;
   --glass-border: 0 0% 100%;
@@ -146,10 +262,24 @@
   --signal: 211 100% 45%;
   --signal-strong: 211 100% 50%;
   --grid-line: 220 16% 82%;
+
+  --gradient-warm: linear-gradient(135deg, #e8f2ff 0%, #d7e9ff 100%);
+  --gradient-cool: linear-gradient(135deg, #e6f7ff 0%, #dbeafe 100%);
+  --gradient-aurora: linear-gradient(135deg, #0071e3 0%, #5856d6 100%);
+  --gradient-cta: linear-gradient(135deg, #0071e3 0%, #0071e3 100%);
+  --gradient-cta-hover: linear-gradient(135deg, #0a7cff 0%, #0a7cff 100%);
+  --gradient-ink: 0 0% 100%;
+  --gradient-avatar: linear-gradient(135deg, #0071e3 0%, #5856d6 100%);
+  --avatar-ink: 0 0% 100%;
+
+  --shadow-apple-sm: 0 1px 2px hsl(220 9% 30% / 0.05), 0 2px 8px hsl(220 9% 30% / 0.03);
+  --shadow-apple-md: 0 2px 4px hsl(220 9% 30% / 0.05), 0 4px 16px hsl(220 9% 30% / 0.05);
+  --shadow-apple-lg: 0 4px 8px hsl(220 9% 30% / 0.06), 0 12px 32px hsl(220 9% 30% / 0.08);
+  --shadow-overlay: 0 24px 48px hsl(220 9% 20% / 0.18), 0 8px 16px hsl(220 9% 20% / 0.08);
 }
 
-:root[data-theme="dark"] {
-  --background: 220 9% 6%;            /* #0E0E10 */
+:root[data-accent="classic"][data-theme="dark"] {
+  --background: 220 9% 6%;
   --foreground: 220 14% 96%;
 
   --surface: 220 9% 14%;
@@ -165,7 +295,7 @@
   --input: 220 9% 22%;
   --ring: 211 100% 60%;
 
-  --primary: 211 100% 45%;            /* #0071E3（暗色蓝，4.7:1 vs 白字） */
+  --primary: 211 100% 45%;
   --primary-text: 211 100% 68%;
   --primary-hover: 211 100% 60%;
   --primary-foreground: 0 0% 100%;
@@ -196,6 +326,20 @@
   --signal: 211 100% 60%;
   --signal-strong: 211 100% 68%;
   --grid-line: 220 9% 22%;
+
+  --gradient-warm: linear-gradient(135deg, #1c3a5e 0%, #243b63 100%);
+  --gradient-cool: linear-gradient(135deg, #163a4a 0%, #1e3a5f 100%);
+  --gradient-aurora: linear-gradient(135deg, #0a84ff 0%, #5e5ce6 100%);
+  --gradient-cta: linear-gradient(135deg, #0a84ff 0%, #0a84ff 100%);
+  --gradient-cta-hover: linear-gradient(135deg, #409cff 0%, #409cff 100%);
+  --gradient-ink: 0 0% 100%;
+  --gradient-avatar: linear-gradient(135deg, #0a84ff 0%, #5e5ce6 100%);
+  --avatar-ink: 0 0% 100%;
+
+  --shadow-apple-sm: 0 1px 2px hsl(0 0% 0% / 0.18), 0 2px 8px hsl(0 0% 0% / 0.12);
+  --shadow-apple-md: 0 2px 4px hsl(0 0% 0% / 0.18), 0 4px 16px hsl(0 0% 0% / 0.16);
+  --shadow-apple-lg: 0 4px 8px hsl(0 0% 0% / 0.20), 0 12px 32px hsl(0 0% 0% / 0.24);
+  --shadow-overlay: 0 24px 48px hsl(0 0% 0% / 0.42), 0 8px 16px hsl(0 0% 0% / 0.24);
 }
 
 @layer base {
@@ -311,13 +455,61 @@
   }
 
   .glass-sidebar {
-    background: hsl(var(--glass-bg) / 0.82);
+    position: relative;
+    background:
+      linear-gradient(180deg, hsl(var(--glass-bg) / 0.82), hsl(var(--glass-bg) / 0.72)),
+      linear-gradient(170deg, rgba(255, 255, 208, 0.38), rgba(210, 205, 255, 0.20) 42%, rgba(185, 223, 255, 0.18) 72%, rgba(207, 255, 189, 0.20));
     border-right: 1px solid hsl(var(--border) / 0.7);
   }
 
+  .glass-sidebar::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    right: -1px;
+    width: 1px;
+    background: linear-gradient(180deg, rgba(255, 255, 208, 0.85), rgba(210, 205, 255, 0.65) 48%, rgba(185, 223, 255, 0.55));
+    opacity: 0.75;
+    pointer-events: none;
+  }
+
+  :root[data-theme="dark"] .glass-sidebar {
+    background:
+      linear-gradient(180deg, hsl(var(--glass-bg) / 0.88), hsl(var(--glass-bg) / 0.80)),
+      linear-gradient(170deg, rgba(255, 255, 208, 0.06), rgba(210, 205, 255, 0.09) 45%, rgba(185, 223, 255, 0.07));
+  }
+
+  :root[data-theme="dark"] .glass-sidebar::after {
+    opacity: 0.28;
+  }
+
   .glass-topbar {
-    background: hsl(var(--glass-bg) / 0.78);
+    position: relative;
+    background:
+      linear-gradient(90deg, hsl(var(--glass-bg) / 0.80), hsl(var(--glass-bg) / 0.72)),
+      linear-gradient(90deg, rgba(255, 255, 208, 0.45), rgba(210, 205, 255, 0.28) 38%, rgba(185, 223, 255, 0.28) 72%, rgba(207, 255, 189, 0.25));
     border-bottom: 1px solid hsl(var(--border) / 0.65);
+  }
+
+  .glass-topbar::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    bottom: -1px;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(255, 255, 208, 0.9), rgba(210, 205, 255, 0.75) 38%, rgba(185, 223, 255, 0.75) 72%, rgba(207, 255, 189, 0.7));
+    opacity: 0.8;
+    pointer-events: none;
+  }
+
+  :root[data-theme="dark"] .glass-topbar {
+    background:
+      linear-gradient(90deg, hsl(var(--glass-bg) / 0.88), hsl(var(--glass-bg) / 0.80)),
+      linear-gradient(90deg, rgba(255, 255, 208, 0.06), rgba(210, 205, 255, 0.09) 40%, rgba(185, 223, 255, 0.07) 74%, rgba(207, 255, 189, 0.05));
+  }
+
+  :root[data-theme="dark"] .glass-topbar::after {
+    opacity: 0.3;
   }
 
   .glass-overlay {
@@ -336,19 +528,13 @@
   }
 
   .shadow-apple-sm {
-    box-shadow:
-      0 1px 2px hsl(220 9% 30% / 0.05),
-      0 2px 8px hsl(220 9% 30% / 0.03);
+    box-shadow: var(--shadow-apple-sm);
   }
   .shadow-apple-md {
-    box-shadow:
-      0 2px 4px hsl(220 9% 30% / 0.05),
-      0 4px 16px hsl(220 9% 30% / 0.07);
+    box-shadow: var(--shadow-apple-md);
   }
   .shadow-apple-lg {
-    box-shadow:
-      0 4px 8px hsl(220 9% 30% / 0.06),
-      0 12px 32px hsl(220 9% 30% / 0.1);
+    box-shadow: var(--shadow-apple-lg);
   }
 
   .interactive {
@@ -384,8 +570,157 @@
   .bg-gradient-subtle {
     background-color: hsl(var(--background));
     background-image:
-      radial-gradient(ellipse 80% 50% at 12% -10%, hsl(var(--primary) / 0.07), transparent 55%),
-      radial-gradient(ellipse 60% 40% at 100% 0%, hsl(var(--info) / 0.04), transparent 50%);
+      radial-gradient(ellipse 48% 37% at 6% -8%, rgba(255, 255, 208, 0.90), transparent 62%),
+      radial-gradient(ellipse 39% 35% at 96% 2%, rgba(210, 205, 255, 0.72), transparent 60%),
+      radial-gradient(ellipse 44% 39% at 90% 104%, rgba(185, 223, 255, 0.65), transparent 62%),
+      radial-gradient(ellipse 36% 32% at -4% 92%, rgba(207, 255, 189, 0.55), transparent 60%);
+    background-size: 150% 150%;
+    background-position: 0% 0%, 100% 0%, 100% 100%, 0% 100%;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+    animation: aurora-drift 36s ease-in-out infinite alternate;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bg-gradient-subtle {
+      animation: none;
+    }
+  }
+
+  :root[data-theme="dark"] .bg-gradient-subtle {
+    background-image:
+      radial-gradient(ellipse 47% 37% at 8% -8%, rgba(255, 255, 208, 0.10), transparent 60%),
+      radial-gradient(ellipse 37% 33% at 96% 0%, rgba(210, 205, 255, 0.16), transparent 58%),
+      radial-gradient(ellipse 41% 37% at 92% 102%, rgba(185, 223, 255, 0.12), transparent 60%),
+      radial-gradient(ellipse 35% 31% at 0% 94%, rgba(207, 255, 189, 0.08), transparent 58%);
+  }
+
+  .gradient-warm {
+    background-image: var(--gradient-warm);
+  }
+
+  .gradient-cool {
+    background-image: var(--gradient-cool);
+  }
+
+  .gradient-aurora {
+    background-image: var(--gradient-aurora);
+  }
+
+  .avatar-gradient {
+    background-image: var(--gradient-avatar);
+    color: hsl(var(--avatar-ink));
+  }
+
+  .brand-tile {
+    background-image: var(--gradient-aurora);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.75),
+      0 2px 10px rgba(137, 119, 255, 0.22);
+  }
+
+  .nav-gradient {
+    background-image: linear-gradient(100deg, rgba(255, 255, 208, 0.88), rgba(210, 205, 255, 0.62) 52%, rgba(185, 223, 255, 0.48));
+    color: hsl(248 64% 34%);
+    box-shadow: inset 0 0 0 1px rgba(210, 205, 255, 0.52);
+  }
+
+  :root[data-theme="dark"] .nav-gradient {
+    background-image: linear-gradient(100deg, rgba(255, 255, 208, 0.14), rgba(210, 205, 255, 0.18) 52%, rgba(185, 223, 255, 0.14));
+    color: hsl(248 85% 80%);
+    box-shadow: inset 0 0 0 1px rgba(210, 205, 255, 0.20);
+  }
+
+  .gradient-cta {
+    background-image: var(--gradient-cta);
+    color: hsl(var(--gradient-ink));
+    box-shadow:
+      0 1px 2px rgba(112, 95, 220, 0.18),
+      0 6px 18px rgba(137, 119, 255, 0.16);
+  }
+
+  .gradient-cta:hover {
+    background-image: var(--gradient-cta-hover);
+    filter: saturate(1.06);
+  }
+
+  .kpi-card {
+    background-image:
+      linear-gradient(150deg, rgba(255, 255, 208, 0.55) 0%, rgba(255, 255, 255, 0) 42%, rgba(210, 205, 255, 0.28) 100%);
+  }
+
+  :root[data-theme="dark"] .kpi-card {
+    background-image:
+      linear-gradient(150deg, rgba(255, 255, 208, 0.06) 0%, rgba(255, 255, 255, 0) 40%, rgba(210, 205, 255, 0.10) 100%);
+  }
+
+  :root[data-accent="classic"] .bg-gradient-subtle {
+    background-image:
+      radial-gradient(ellipse 80% 60% at 10% 0%, hsl(var(--primary) / 0.07), transparent 60%),
+      radial-gradient(ellipse 70% 60% at 100% 100%, hsl(var(--info) / 0.04), transparent 60%);
+    background-size: auto;
+    background-position: 0 0;
+    background-repeat: no-repeat;
+    background-attachment: scroll;
+    animation: none;
+  }
+
+  :root[data-accent="classic"] .glass-sidebar {
+    background: hsl(var(--glass-bg) / 0.82);
+  }
+
+  :root[data-accent="classic"] .glass-topbar {
+    background: hsl(var(--glass-bg) / 0.78);
+  }
+
+  :root[data-accent="classic"] .glass-sidebar::after,
+  :root[data-accent="classic"] .glass-topbar::after {
+    display: none;
+  }
+
+  :root[data-accent="classic"] .brand-tile {
+    background-image: none;
+    background-color: hsl(0 0% 100%);
+    box-shadow:
+      inset 0 1px 0 hsl(0 0% 100% / 0.45),
+      0 2px 10px hsl(220 9% 30% / 0.08);
+  }
+
+  :root[data-accent="classic"] .nav-gradient {
+    background-image: linear-gradient(100deg, hsl(var(--primary) / 0.12), hsl(var(--primary) / 0.06));
+    color: hsl(var(--primary-text));
+    box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.18);
+  }
+
+  :root[data-accent="classic"] .gradient-cta {
+    background-image: none;
+    background-color: hsl(var(--primary-text));
+    color: hsl(var(--primary-foreground));
+    box-shadow:
+      0 1px 2px hsl(220 9% 30% / 0.12),
+      0 4px 12px hsl(220 9% 30% / 0.10);
+  }
+
+  :root[data-accent="classic"] .gradient-cta:hover {
+    background-image: none;
+    background-color: hsl(var(--primary-hover));
+    filter: none;
+  }
+
+  :root[data-accent="classic"][data-theme="dark"] .gradient-cta {
+    background-color: hsl(var(--primary));
+  }
+
+  :root[data-accent="classic"][data-theme="dark"] .gradient-cta:hover {
+    background-color: hsl(var(--primary-hover));
+  }
+
+  :root[data-accent="classic"] .kpi-card {
+    background-image: none;
+  }
+
+  :root[data-accent="classic"] .login-aurora-blob {
+    display: none;
   }
 
   @supports (backdrop-filter: blur(1px)) {
@@ -407,6 +742,18 @@
       -webkit-backdrop-filter: none;
       background: hsl(var(--card));
     }
+  }
+}
+
+@keyframes aurora-drift {
+  0% {
+    background-position: 0% 0%, 100% 0%, 100% 100%, 0% 100%;
+  }
+  50% {
+    background-position: 10% 8%, 92% 6%, 90% 94%, 8% 92%;
+  }
+  100% {
+    background-position: 20% 14%, 84% 12%, 82% 88%, 18% 84%;
   }
 }
 
