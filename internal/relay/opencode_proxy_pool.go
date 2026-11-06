@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	// ocProxyPerAccountLimit 是单个代理账号的并发上限。
+	// ocProxyPerAccountLimit 是单个代理账号的并发请求上限。
 	ocProxyPerAccountLimit = 5
+	// ocProxyPerAccountSessions 是单账号同时承载的活跃会话上限。
+	ocProxyPerAccountSessions = 1
 	// ocProxySuccessTTL 内成功过的账号优先复用。
 	ocProxySuccessTTL = 7 * 24 * time.Hour
 	// 403/429 被拒账号冷却上限, 无 Retry-After 时的回落值。
@@ -45,7 +47,9 @@ type ocProxyAccount struct {
 	lastSuccessAt time.Time
 	cooldownUntil time.Time
 	active        int
-	verified      bool
+	// 活跃会话及请求数, 空会话不登记。
+	sessions map[string]int
+	verified bool
 	// 连续真实失败数, 仅内存, 成功或冷却即清零。
 	consecutiveFailures int
 	// 24h 失败窗口, 落库供重启恢复。
@@ -60,6 +64,7 @@ type ocProxyPool struct {
 	lastPruneAt time.Time
 	accounts    map[string]*ocProxyAccount
 	// sessionBound 记录会话粘合的账号: 同会话恒定同一出口, 跨轮稳定;
+	// 同账号同时只承载一个活跃会话, 不同活跃会话不复用同一账号。
 	// 同一会话标识跨出口复用会被上游关联标记, 故换号必须换会话标识。
 	sessionBound map[string]ocSessionBinding
 	// sessionBanned 记录会话内已被 429/403 拉黑的账号: 粘合选号时排除,
@@ -130,21 +135,27 @@ func proxyNeedsOpencodeAccount(channel model.Channel) bool {
 }
 
 // pickOpencodeProxyAccount 选出本轮使用的账号并占用一个并发槽位。
-// session 非空时同一会话粘合同一账号, 绑定账号不可用才换号。
+// session 非空时同一会话粘合同一账号, 不同活跃会话不共用账号。
 func pickOpencodeProxyAccount(ctx context.Context, channelID int, session string) string {
 	pool := ocProxyPoolFor(channelID)
 	pool.mu.Lock()
 	loadOpencodeProxyPool(pool, channelID)
 	picked := pool.pickLocked(time.Now(), session)
 	picked.active++
+	if session != "" {
+		if picked.sessions == nil {
+			picked.sessions = make(map[string]int)
+		}
+		picked.sessions[session]++
+	}
 	account := picked.account
 	pool.mu.Unlock()
-	context.AfterFunc(ctx, func() { releaseOpencodeProxyAccount(channelID, account) })
+	context.AfterFunc(ctx, func() { releaseOpencodeProxyAccount(channelID, account, session) })
 	return account
 }
 
-// pickLocked 按会话粘合选号: 同会话绑定同一账号, 绑定账号不可用才换号改绑;
-// 调用方需持锁。
+// pickLocked 按会话粘合选号: 同会话优先绑定同一账号, 同账号同时只承载一个活跃会话,
+// 绑定账号不可用或已被其他活跃会话占用才换号改绑; 调用方需持锁。
 func (p *ocProxyPool) pickLocked(now time.Time, session string) *ocProxyAccount {
 	p.pruneLocked(now)
 	bound := ""
@@ -153,7 +164,7 @@ func (p *ocProxyPool) pickLocked(now time.Time, session string) *ocProxyAccount 
 		if binding, ok := p.sessionBound[session]; ok {
 			bound = binding.account
 			if _, isBanned := banned[bound]; !isBanned {
-				if a, ok := p.accounts[bound]; ok && ocProxyUsable(a, now) {
+				if a, ok := p.accounts[bound]; ok && ocProxyUsable(a, now) && ocProxySessionAvailable(a, session) {
 					p.sessionBound[session] = ocSessionBinding{account: bound, at: now}
 					return a
 				}
@@ -163,7 +174,7 @@ func (p *ocProxyPool) pickLocked(now time.Time, session string) *ocProxyAccount 
 	// 换号: 排除失效的旧绑定与本会话拉黑的账号, 避免落回被拒出口。
 	var picked *ocProxyAccount
 	for _, candidate := range p.accounts {
-		if !ocProxyUsable(candidate, now) {
+		if !ocProxyUsable(candidate, now) || !ocProxySessionAvailable(candidate, session) {
 			continue
 		}
 		if _, isBanned := banned[candidate.account]; isBanned {
@@ -240,6 +251,20 @@ func ocProxyUsable(account *ocProxyAccount, now time.Time) bool {
 	return true
 }
 
+// ocProxySessionAvailable 报告账号能否容纳该会话; 空会话不登记、不独占。
+func ocProxySessionAvailable(account *ocProxyAccount, session string) bool {
+	if session == "" {
+		return true
+	}
+	if len(account.sessions) > ocProxyPerAccountSessions {
+		return false
+	}
+	if account.sessions[session] > 0 {
+		return true
+	}
+	return len(account.sessions) < ocProxyPerAccountSessions
+}
+
 // needsPrune 报告是否需要淘汰库内账号; 调用方需持锁。满额才查库, 且限频。
 func (p *ocProxyPool) needsPrune() bool {
 	if len(p.accounts) < ocProxyMaxAccounts || time.Since(p.lastPruneAt) <= ocPruneInterval {
@@ -290,14 +315,26 @@ func ocProxyEvictFirst(a, b *ocProxyAccount) bool {
 	return ocProxyRecency(a).Before(ocProxyRecency(b))
 }
 
-// releaseOpencodeProxyAccount 归还账号的并发槽位。
-func releaseOpencodeProxyAccount(channelID int, account string) {
+// releaseOpencodeProxyAccount 归还账号的并发槽位与活跃会话计数。
+func releaseOpencodeProxyAccount(channelID int, account, session string) {
 	pool := ocProxyPoolFor(channelID)
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
-	if state, ok := pool.accounts[account]; ok && state.active > 0 {
+	state, ok := pool.accounts[account]
+	if !ok {
+		return
+	}
+	if state.active > 0 {
 		state.active--
 	}
+	if session == "" {
+		return
+	}
+	if state.sessions[session] > 1 {
+		state.sessions[session]--
+		return
+	}
+	delete(state.sessions, session)
 }
 
 // markOpencodeProxySuccess 记录账号成功并异步落库; probe 为 true 记体检成功,

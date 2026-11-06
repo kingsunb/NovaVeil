@@ -1,4 +1,4 @@
-# Agent Note: 会话与代理账号粘合（出站身份按出口隔离）
+# Agent Note: 会话与代理账号粘合（出站身份按出口隔离，单账号单活跃会话）
 
 Status: implemented
 
@@ -8,32 +8,36 @@ Status: implemented
 
 ## 决定
 
-**会话与代理账号粘合**，两个改动点：
+**会话与代理账号粘合**，三个改动点：
 
-1. **账号池粘合**（`internal/relay/opencode_proxy_pool.go`）：`sessionUsed`（去重表）改为 `sessionBound`（粘合表）——同一会话粘合键恒定绑定同一账号，绑定账号可用即复用；绑定账号冷却/淘汰/失败降级不可用时才换号改绑（换号排除旧绑定，改绑后不回跳），429 计票用粘合键（不含账号），不用带账号的出站号，避免同一段对话换出口被当成两个会话凑满 quorum。粘合记录带 TTL（`ocProxySessionTTL`）与淘汰联动（账号被清理时删除其粘合）。
+1. **账号池粘合**（`internal/relay/opencode_proxy_pool.go`）：`sessionUsed`（去重表）改为 `sessionBound`（粘合表）——同一会话优先粘合同一账号，绑定账号可用且未被其他活跃会话占用即复用；绑定账号冷却/淘汰/失败降级不可用时，或账号已被其他活跃会话占用时，才换号改绑（换号排除旧绑定，改绑后不回跳），429 计票用粘合键（不含账号），不用带账号的出站号，避免同一段对话换出口被当成两个会话凑满 quorum。粘合记录带 TTL（`ocProxySessionTTL`）与淘汰联动（账号被清理时删除其粘合）。
 2. **出站会话按账号派生**（`internal/utils/opencodeid/identity.go` 的 `SessionIDForAccount` + `internal/relay/handler.go` 接线）：出站 `ses_` = 派生（客户端信号 + 账号）——同一（信号, 账号）**恒定**同一出站会话（prompt cache/亲和不受损），**账号变更必然换号**（信号混入账号后官方形态校验必然失效，强制派生新号）。粘合键（不含账号的派生值）与出站值分离：跨 failover 轮次粘合键稳定，出站值随账号走。信号在请求首轮提取一次并钉住（空信号的随机回退只抽一次），换号重试复用同一信号，不重新抽取。
+3. **单账号单活跃会话**（`internal/relay/opencode_proxy_pool.go`）：`ocProxyAccount` 维护 `sessions map[string]int`（活跃会话→在途请求数），`ocProxyPerAccountSessions = 1`。选号时账号只接受同会话或空闲账号，不同活跃会话必须换账号；`pickOpencodeProxyAccount` 选号后登记，请求结束 `releaseOpencodeProxyAccount` 递减；空会话（体检）不登记、不独占。单账号并发请求上限仍是 `ocProxyPerAccountLimit = 5`，不把请求槽改成 1。
 
-WARP 槽位渠道不走账号池，行为不变（按会话去重槽位）；探针路径自铸会话，不受影响。
+WARP 槽位渠道不走账号池，行为不变（按会话去重槽位）；探针路径使用空会话，不登记、不独占。
 
 ## 备选方案
 
 - **维持会话扇出**：设计初衷是分散单账号额度，但把关联标记的指纹亲手交给上游——429 惩罚实测按身份记账，扇出得不偿失。
 - **仅换号不改出站会话**：同一 `ses_` 立刻从新出口出现，关联信号更强，等于没修。
 - **粘合放在响应侧还原**：身份已经泄给上游才还原，晚了。
+- **把 `ocProxyPerAccountLimit` 从 5 改成 1**：实现最小，但限制的是请求而非会话；同一会话的并行请求会被误伤，且 5 个请求上限本来就是防单账号过载的独立约束。
+- **24 小时独占绑定**：账号一旦被会话绑定就长期占住，空闲也不能给其他会话用；用户要的是“并行一个会话”，不是“长期预留”，会放大账号消耗。
 
 ## 后果
 
-- **收益**：同一会话在同一个出口上呈现连续身份（与真实客户端单机行为一致）；429 两会话计票的「会话」语义恢复真实（计票会话 = 出口隔离的独立身份）；客户端不做任何改动。
-- **代价**：单会话的额度集中在单一账号上（不再扇出摊薄），账号额度耗尽靠换号改绑承接，换号即换身份（该会话在上游的记账/prompt cache 从零开始——这正是隔离的目的）；`sessionBound` 常驻内存（TTL 与淘汰联动清理）。
+- **收益**：同一会话在同一个出口上呈现连续身份（与真实客户端单机行为一致）；429 两会话计票的「会话」语义恢复真实（计票会话 = 出口隔离的独立身份）；客户端不做任何改动；不同活跃会话不再共用一个出口，避免并行会话被上游按同一 IP 关联，同会话的并行请求仍共用账号。
+- **代价**：单会话的额度集中在单一账号上（不再扇出摊薄），账号额度耗尽靠换号改绑承接，换号即换身份（该会话在上游的记账/prompt cache 从零开始——这正是隔离的目的）；账号按活跃会话独占，空闲后才释放；会话空闲期间若被其他会话占用，回来时会改绑并换 `ses_`，跨轮 prompt cache 会从零开始；`sessionBound` 常驻内存（TTL 与淘汰联动清理）。
 - **兼容**：面板手动体检显式模型不受影响；WARP 槽位路径不变；探针自铸会话不变。
 
 ## 验证
 
 ```sh
-go test ./internal/relay/ -run 'TestOcProxyPool' -v
+go test ./internal/relay/ -run 'TestOcProxyPool|TestReleaseOpencodeProxyAccountSession' -v
 go test ./internal/utils/opencodeid/ -v
 ```
 
-- `TestOcProxyPoolPickSessionSticky`：粘合命中复用、失效换号改绑、改绑不回跳、独立会话互不影响。
+- `TestOcProxyPoolPickSessionSticky`：粘合命中复用、失效换号改绑、改绑不回跳、独立活跃会话不共用账号。
+- `TestReleaseOpencodeProxyAccountSession`：并发槽与活跃会话计数成对归还，归零后可被其他会话复用。
 - `TestDeriveSessionIDForAccount`：同（信号, 账号）恒定、换账号必换、空账号等价原派生、形态合法。
-- 线上验证：同一会话连续多轮请求，抓包确认出站 `ses_` 恒定且 `x-opencode-request` 逐轮递进；触发账号冷却后确认会话换绑至新账号且出站 `ses_` 随之更新。
+- 线上验证：同一会话连续多轮请求，抓包确认出站 `ses_` 恒定且 `x-opencode-request` 逐轮递进；触发账号冷却后确认会话换绑至新账号且出站 `ses_` 随之更新；两个不同会话并行请求应落到不同 resin 账号，同一会话的并行请求应落到同一账号。

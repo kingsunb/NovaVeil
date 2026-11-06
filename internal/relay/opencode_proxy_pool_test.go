@@ -69,33 +69,63 @@ func TestOpencodeRejectCooldown(t *testing.T) {
 	}
 }
 
-// 同一会话粘合同一账号: 粘合账号可用即复用, 失效才换号并改绑;
-// 改绑后不回跳旧账号; 其他会话独立粘合。
+// 同一会话粘合同一账号: 账号同时只承载一个活跃会话, 不同活跃会话不共用;
+// 粘合账号失效才换号并改绑, 改绑后不回跳。
 func TestOcProxyPoolPickSessionSticky(t *testing.T) {
 	now := time.Now()
-	pool := &ocProxyPool{accounts: map[string]*ocProxyAccount{
-		"a": {account: "a", verified: true, lastSuccessAt: now},
-		"b": {account: "b", verified: true, lastSuccessAt: now.Add(-time.Hour)},
-	}}
+	pool := &ocProxyPool{
+		accounts: map[string]*ocProxyAccount{
+			"a": {account: "a", verified: true, lastSuccessAt: now},
+			"b": {account: "b", verified: true, lastSuccessAt: now.Add(-time.Hour)},
+			"c": {account: "c", verified: true, lastSuccessAt: now.Add(-2 * time.Hour)},
+		},
+		sessionBound: make(map[string]ocSessionBinding),
+	}
 
 	first := pool.pickLocked(now, "s1")
 	assert.Equal(t, "a", first.account, "首次应选最近成功账号")
+	pool.accounts["a"].sessions = map[string]int{"s1": 1}
 	second := pool.pickLocked(now, "s1")
 	assert.Equal(t, first.account, second.account, "同会话应粘合同一账号")
 
 	third := pool.pickLocked(now, "s2")
-	assert.Equal(t, "a", third.account, "其他会话独立粘合")
+	assert.Equal(t, "b", third.account, "不同活跃会话应使用不同账号")
+	pool.accounts["b"].sessions = map[string]int{"s2": 1}
 
-	// 粘合账号失效: 冷却 a 后 s1 应换到 b 并改绑。
+	// 粘合账号失效: 冷却 a 后 s1 应换到空闲的 c 并改绑。
 	pool.accounts["a"].cooldownUntil = now.Add(time.Hour)
 	fourth := pool.pickLocked(now, "s1")
-	assert.Equal(t, "b", fourth.account, "粘合账号失效应换号")
-	assert.Equal(t, "b", pool.sessionBound["s1"].account, "换号后应改绑新账号")
+	assert.Equal(t, "c", fourth.account, "粘合账号失效应换到空闲账号")
+	assert.Equal(t, "c", pool.sessionBound["s1"].account, "换号后应改绑新账号")
+	pool.accounts["c"].sessions = map[string]int{"s1": 1}
 
 	// 旧账号恢复可用也不回跳(粘合已改绑)。
 	pool.accounts["a"].cooldownUntil = time.Time{}
 	fifth := pool.pickLocked(now, "s1")
-	assert.Equal(t, "b", fifth.account, "改绑后不回跳旧账号")
+	assert.Equal(t, "c", fifth.account, "改绑后不回跳旧账号")
+}
+
+func TestOcProxySessionAvailable(t *testing.T) {
+	active := &ocProxyAccount{sessions: map[string]int{"s1": 1}}
+	assert.True(t, ocProxySessionAvailable(active, "s1"), "同会话可复用")
+	assert.False(t, ocProxySessionAvailable(active, "s2"), "不同活跃会话不得共用")
+	assert.True(t, ocProxySessionAvailable(active, ""), "探测空会话不参与独占")
+	assert.True(t, ocProxySessionAvailable(&ocProxyAccount{}, "s2"), "空闲账号可用")
+}
+
+func TestReleaseOpencodeProxyAccountSession(t *testing.T) {
+	const channelID = 980005
+	pool := ocProxyPoolFor(channelID)
+	pool.accounts["a"] = &ocProxyAccount{account: "a", active: 2, sessions: map[string]int{"s1": 2}}
+	t.Cleanup(func() { ocProxyPools.Delete(channelID) })
+
+	releaseOpencodeProxyAccount(channelID, "a", "s1")
+	assert.Equal(t, 1, pool.accounts["a"].active)
+	assert.Equal(t, 1, pool.accounts["a"].sessions["s1"])
+
+	releaseOpencodeProxyAccount(channelID, "a", "s1")
+	assert.Zero(t, pool.accounts["a"].active)
+	assert.Empty(t, pool.accounts["a"].sessions)
 }
 
 // 两个不同会话在 24 小时窗口内报 429 才冷却, 重复会话不计票, 过期票作废。
