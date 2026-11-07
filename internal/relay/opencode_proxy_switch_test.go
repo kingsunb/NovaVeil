@@ -245,6 +245,26 @@ func postOpencodeProxyRequestWithContent(t *testing.T, group model.Group, conten
 	return postRelayJSON(t, engine, path, body, "", ctx)
 }
 
+// waitForOpencodeProxyIdle 等待请求取消后释放代理账号的活跃槽位。
+func waitForOpencodeProxyIdle(t *testing.T, channelID int) {
+	t.Helper()
+	waitFor(t, 2*time.Second, func() bool {
+		value, ok := ocProxyPools.Load(channelID)
+		if !ok {
+			return true
+		}
+		pool := value.(*ocProxyPool)
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		for _, state := range pool.accounts {
+			if state.active > 0 || len(state.sessions) > 0 {
+				return false
+			}
+		}
+		return true
+	})
+}
+
 // prioritizeOpencodeProxyAccount 把账号最近成功时间置顶, 使下一轮选号优先命中它。
 func prioritizeOpencodeProxyAccount(t *testing.T, channelID int, account string) {
 	t.Helper()
@@ -411,7 +431,10 @@ func TestOpencodeProxy429QuorumCoolsAccount(t *testing.T) {
 		// 换号成功会刷新 good-account 的最近成功时间, 每轮先把 bad-account 置顶,
 		// 保证每个会话都先打 bad-account 再换号成功, 成员不会因持续失败被冷却。
 		prioritizeOpencodeProxyAccount(t, channel.ID, "bad-account")
-		recorder := postOpencodeProxyRequestWithContent(t, group, content, nil)
+		ctx, cancel := context.WithCancel(context.Background())
+		recorder := postOpencodeProxyRequestWithContent(t, group, content, ctx)
+		cancel()
+		waitForOpencodeProxyIdle(t, channel.ID)
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("第 %d 个会话换号后应成功, 实际 %d: %s", i+1, recorder.Code, recorder.Body.String())
 		}
@@ -770,7 +793,10 @@ func TestOpencodeProxy429UsesUpstreamRetryAfter(t *testing.T) {
 
 	for _, content := range []string{"hi-retry-after-1", "hi-retry-after-2"} {
 		prioritizeOpencodeProxyAccount(t, channel.ID, "bad-account")
-		recorder := postOpencodeProxyRequestWithContent(t, group, content, nil)
+		ctx, cancel := context.WithCancel(context.Background())
+		recorder := postOpencodeProxyRequestWithContent(t, group, content, ctx)
+		cancel()
+		waitForOpencodeProxyIdle(t, channel.ID)
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("会话 %s 换号后应成功, 实际 %d: %s", content, recorder.Code, recorder.Body.String())
 		}

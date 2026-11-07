@@ -864,14 +864,14 @@ func TestProbeOpencodeAccountsIsolatesKeyedPoolsAndLedger(t *testing.T) {
 		if ledger.KeyID != keyID || ledger.Total != 1 || len(ledger.Items) != 1 {
 			t.Fatalf("%s 台账应仅含本 Key 账号: %+v", keyID, ledger)
 		}
-		if item := ledger.Items[0]; item.Account != "acct_shared" || item.KeyID != keyID {
+		if item := ledger.Items[0]; item.Account != keyID || item.KeyID != keyID {
 			t.Fatalf("%s 台账条目 Key 隔离异常: %+v", keyID, item)
 		}
 		rows, err := op.LoadOpencodeProxyAccountsForKey(channel.ID, keyID)
-		if err != nil || len(rows) != 1 || rows[0].KeyID != keyID {
+		if err != nil || len(rows) != 1 || rows[0].Account != keyID || rows[0].KeyID != keyID {
 			t.Fatalf("%s 账号池落库异常: rows=%+v err=%v", keyID, rows, err)
 		}
-		if !keyedPoolVerified(ocProxyPoolForKey(channel.ID, keyID), "acct_shared") {
+		if !keyedPoolVerified(ocProxyPoolForKey(channel.ID, keyID), keyID) {
 			t.Fatalf("%s 体检成功应回填本 Key 账号池", keyID)
 		}
 	}
@@ -885,7 +885,7 @@ func TestProbeOpencodeAccountsIsolatesKeyedPoolsAndLedger(t *testing.T) {
 		rows, err := op.LoadOpencodeProxyAccountsForKey(channel.ID, keyA)
 		return err == nil && len(rows) == 1 && rows[0].ProbeSuccessCount == 1
 	})
-	deleted, err := DeleteOpencodeAccountsFromLedger(channel.ID, keyA, []string{"acct_shared"})
+	deleted, err := DeleteOpencodeAccountsFromLedger(channel.ID, keyA, []string{keyA})
 	if err != nil || deleted != 1 {
 		t.Fatalf("删除 key-a 账号失败: deleted=%d err=%v", deleted, err)
 	}

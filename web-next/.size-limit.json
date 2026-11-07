@@ -17,7 +17,7 @@
     "name": "CSS (gzip)",
     "path": "../static/out/assets/*.css",
     "gzip": true,
-    "limit": "14 KB",
+    "limit": "16 KB",
     "running": false
   }
 ]

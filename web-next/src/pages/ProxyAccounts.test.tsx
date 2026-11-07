@@ -709,7 +709,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
 
     expect(await screen.findByText("opencode0a1b2c3d")).toBeInTheDocument();
     expect(screen.getByLabelText("体检渠道")).toBeInTheDocument();
-    expect(screen.getByLabelText("渠道密钥")).toHaveValue("key-a");
+    expect(screen.getByLabelText(/渠道密钥/)).toHaveValue("key-a");
     expect(screen.queryByLabelText("生成数量")).not.toBeInTheDocument();
     await waitFor(() =>
       expect(
@@ -734,8 +734,8 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
       expect(screen.getByRole("button", { name: "开始体检" })).toBeEnabled(),
     );
 
-    await user.selectOptions(screen.getByLabelText("渠道密钥"), "key-b");
-    expect(screen.getByLabelText("渠道密钥")).toHaveValue("key-b");
+    await user.selectOptions(screen.getByLabelText(/渠道密钥/), "key-b");
+    expect(screen.getByLabelText(/渠道密钥/)).toHaveValue("key-b");
     expect(screen.queryByText("健康 1")).not.toBeInTheDocument();
     await waitFor(() =>
       expect(

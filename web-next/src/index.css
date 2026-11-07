@@ -148,8 +148,6 @@
   --grid-line: 255 20% 84%;
 
   /* 品牌渐变 —— 四色取自用户提供色卡 */
-  --gradient-warm: linear-gradient(135deg, #ffffd0 0%, #f3efff 48%, #d2cdff 100%);
-  --gradient-cool: linear-gradient(135deg, #cfffbd 0%, #eafaf2 48%, #b9dfff 100%);
   --gradient-aurora: linear-gradient(120deg, #ffffd0 0%, #d2cdff 38%, #b9dfff 68%, #cfffbd 100%);
   --gradient-cta: linear-gradient(115deg, #ffffd0 0%, #d2cdff 44%, #b9dfff 74%, #cfffbd 100%);
   --gradient-cta-hover: linear-gradient(115deg, #fffbc2 0%, #c6bfff 44%, #a9d7ff 74%, #bfffb0 100%);
@@ -263,8 +261,6 @@
   --signal-strong: 211 100% 50%;
   --grid-line: 220 16% 82%;
 
-  --gradient-warm: linear-gradient(135deg, #e8f2ff 0%, #d7e9ff 100%);
-  --gradient-cool: linear-gradient(135deg, #e6f7ff 0%, #dbeafe 100%);
   --gradient-aurora: linear-gradient(135deg, #0071e3 0%, #5856d6 100%);
   --gradient-cta: linear-gradient(135deg, #0071e3 0%, #0071e3 100%);
   --gradient-cta-hover: linear-gradient(135deg, #0a7cff 0%, #0a7cff 100%);
@@ -327,8 +323,6 @@
   --signal-strong: 211 100% 68%;
   --grid-line: 220 9% 22%;
 
-  --gradient-warm: linear-gradient(135deg, #1c3a5e 0%, #243b63 100%);
-  --gradient-cool: linear-gradient(135deg, #163a4a 0%, #1e3a5f 100%);
   --gradient-aurora: linear-gradient(135deg, #0a84ff 0%, #5e5ce6 100%);
   --gradient-cta: linear-gradient(135deg, #0a84ff 0%, #0a84ff 100%);
   --gradient-cta-hover: linear-gradient(135deg, #409cff 0%, #409cff 100%);
@@ -593,14 +587,6 @@
       radial-gradient(ellipse 37% 33% at 96% 0%, rgba(210, 205, 255, 0.16), transparent 58%),
       radial-gradient(ellipse 41% 37% at 92% 102%, rgba(185, 223, 255, 0.12), transparent 60%),
       radial-gradient(ellipse 35% 31% at 0% 94%, rgba(207, 255, 189, 0.08), transparent 58%);
-  }
-
-  .gradient-warm {
-    background-image: var(--gradient-warm);
-  }
-
-  .gradient-cool {
-    background-image: var(--gradient-cool);
   }
 
   .gradient-aurora {
