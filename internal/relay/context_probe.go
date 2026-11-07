@@ -197,7 +197,14 @@ func ocProbeSelectChannelKey(channel model.Channel, keyID string) (model.Channel
 
 // probeOnce 发送一次指定构造规模的探测请求并按状态码判定容量。
 func probeOnce(ctx context.Context, channel model.Channel, modelName string, tokens int) (*ContextProbeResult, error) {
-	result, err := probeOnceWithAccount(ctx, channel, modelName, "", "", func(format llm.APIFormat) (*httpclient.Request, error) {
+	// keyed 渠道探测固定首条 Key, 避免误用旧公共账号池。
+	keyID := ""
+	if channel.Keyed {
+		if candidates := channelKeyTestCandidates(channel); len(candidates) > 0 {
+			keyID = candidates[0].ID
+		}
+	}
+	result, err := probeOnceWithAccount(ctx, channel, modelName, keyID, "", func(format llm.APIFormat) (*httpclient.Request, error) {
 		return newTestRequest(format, modelName, buildContextProbeText(tokens), 1)
 	}, true)
 	if err != nil {

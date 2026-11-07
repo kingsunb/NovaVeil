@@ -102,6 +102,21 @@ func TestBuildOfficialToolTargetsAndAdaptArguments(t *testing.T) {
 	}
 }
 
+func TestAdaptOfficialToolArgumentsKeepsArgsWithoutProperties(t *testing.T) {
+	targets := buildOfficialToolTargets([]byte(`{"tools":[{"type":"function","function":{"name":"Bash","parameters":{"type":"object"}}}]}`))
+	target, ok := targets["bash"]
+	if !ok {
+		t.Fatalf("bash 目标缺失: %+v", targets)
+	}
+	if !target.hasSchema || len(target.properties) != 0 {
+		t.Fatalf("测试前置异常: hasSchema=%v properties=%d", target.hasSchema, len(target.properties))
+	}
+	const args = `{"command":"ls","timeout":5}`
+	if got := adaptOfficialToolArguments("bash", args, target); got != args {
+		t.Fatalf("无 properties 时参数被清空或改写: %s", got)
+	}
+}
+
 func TestRestoreOfficialToolCallsInBody(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"tool_calls":[{"id":"1","type":"function","function":{"name":"read","arguments":"{\"filePath\":\"C:\\\\x\",\"offset\":1,\"unknown\":true}"}}]}}]}`)
 	out := restoreOfficialToolCallsInBody(body, officialTestTargets(t))

@@ -829,6 +829,7 @@ export const api = {
     return raw as {
       job_id: string;
       channel_id: number;
+      key_id: string;
       model: string;
       state: string;
       total: number;
@@ -840,6 +841,7 @@ export const api = {
     return raw as {
       job_id: string;
       channel_id: number;
+      key_id: string;
       model: string;
       state: string;
       total: number;
@@ -867,9 +869,10 @@ export const api = {
     if (keyId) query.set("key_id", keyId);
     return (await http<unknown>(`/channel/proxy-accounts?${query}`)) as {
       channel_id: number;
+      key_id: string;
       items: Array<{
         account: string;
-        key_id?: string;
+        key_id: string;
         state: string;
         outcome: string;
         last_probe_status: number;

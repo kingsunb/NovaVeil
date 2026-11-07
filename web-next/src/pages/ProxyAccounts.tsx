@@ -3,7 +3,7 @@
  * 体检控制与账号台账。生成即落账长期保存，台账随体检与转发流量实时更新，支持三态
  * 筛选、逐账号删除与一键测试台账全部账号。可开启每 24 小时自动体检。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { UsersRound } from "lucide-react";
@@ -50,6 +50,7 @@ interface AccountProbeReport {
 interface AccountProbeJob {
   job_id: string;
   channel_id: number;
+  key_id: string;
   model: string;
   state: string;
   total: number;
@@ -587,26 +588,36 @@ function KeyedChannelSection({ channels }: { channels: Channel[] }) {
     channels.find((channel) => channel.id === selectedChannelId) ?? channels[0] ?? null;
   const [results, setResults] = useState<ChannelKeyTestResult[] | null>(null);
   const [testing, setTesting] = useState(false);
+  const testSeq = useRef(0);
   const channelKeys =
     selectedChannel && Array.isArray(selectedChannel.keys) ? selectedChannel.keys : [];
   const hasTestableKey =
     !!selectedChannel && (channelKeys.length > 0 || !!selectedChannel.key_masked);
 
   useEffect(() => {
+    testSeq.current += 1;
     setResults(null);
+    setTesting(false);
   }, [selectedChannel?.id]);
 
   async function testKeys() {
     if (!selectedChannel || testing) return;
+    const seq = ++testSeq.current;
     setTesting(true);
     setResults(null);
     try {
       const next = await api.testChannelKeys(selectedChannel.id, selectedChannel.models?.[0]?.name);
-      setResults(next);
+      if (seq === testSeq.current) {
+        setResults(next);
+      }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.keyedTestFailed);
+      if (seq === testSeq.current) {
+        toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.keyedTestFailed);
+      }
     } finally {
-      setTesting(false);
+      if (seq === testSeq.current) {
+        setTesting(false);
+      }
     }
   }
 

@@ -604,6 +604,68 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     expect(urls.some((url) => url.includes("/channel/proxy-accounts?"))).toBe(false);
   });
 
+  it("逐 Key 测试延迟响应期间切换渠道不串用旧结果", async () => {
+    const channelA = eligibleChannel({
+      id: 21,
+      name: "Keyed A",
+      keyed: true,
+      channel_proxy: "",
+      key_masked: "sk-****a",
+      keys: [{ id: "key-a", key_masked: "sk-****a" }],
+      models: [{ id: 210, channel_id: 21, name: "model-a", source: "auto" }],
+    });
+    const channelB = eligibleChannel({
+      id: 22,
+      name: "Keyed B",
+      keyed: true,
+      channel_proxy: "",
+      key_masked: "sk-****b",
+      keys: [{ id: "key-b", key_masked: "sk-****b" }],
+      models: [{ id: 220, channel_id: 22, name: "model-b", source: "auto" }],
+    });
+    let resolveFirst: ((response: Response) => void) | undefined;
+    let testCalls = 0;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/channel/test_keys")) {
+        testCalls += 1;
+        if (testCalls === 1) {
+          return new Promise<Response>((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        return jsonResponse([
+          { key_id: "key-b", label: "新渠道 Key", ok: true, content: "ok", elapsed_ms: 50 },
+        ]);
+      }
+      if (url.includes("/channel/list")) return jsonResponse([channelA, channelB]);
+      if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
+      return jsonResponse(null);
+    }));
+
+    render(
+      <Wrapper>
+        <ProxyAccountsPage />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByText("密钥渠道体检")).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "测试全部密钥" }));
+    await waitFor(() => expect(testCalls).toBe(1));
+
+    await user.selectOptions(screen.getByLabelText("密钥渠道"), "22");
+    await user.click(screen.getByRole("button", { name: "测试全部密钥" }));
+    expect(await screen.findByText("新渠道 Key")).toBeInTheDocument();
+
+    resolveFirst?.(
+      okResponse([{ key_id: "key-a", label: "旧渠道 Key", ok: true, content: "ok", elapsed_ms: 120 }]),
+    );
+    await waitFor(() => expect(screen.queryByText("旧渠道 Key")).not.toBeInTheDocument());
+    expect(screen.getByText("新渠道 Key")).toBeInTheDocument();
+    expect(testCalls).toBe(2);
+  });
+
   it("keyed 渠道配置 {account} 代理后按所选 Key 体检账号池", async () => {
     const ledgerUrls: string[] = [];
     const probeBodies: Array<Record<string, unknown>> = [];

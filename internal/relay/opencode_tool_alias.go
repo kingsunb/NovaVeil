@@ -389,7 +389,8 @@ var ocOfficialArgumentAliases = map[string][]string{
 
 // adaptOfficialToolArguments 按客户端 schema 改参数键并递归丢弃未声明键。
 func adaptOfficialToolArguments(official, args string, target ocOfficialToolTarget) string {
-	if !target.hasSchema {
+	// 无 properties 时无从判定白名单, 裁剪会清空全部入参。
+	if !target.hasSchema || len(target.properties) == 0 {
 		return args
 	}
 	if strings.TrimSpace(args) == "" {
