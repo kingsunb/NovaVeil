@@ -80,30 +80,64 @@ type ocSessionBinding struct {
 	at      time.Time
 }
 
-var ocProxyPools sync.Map
+// ocProxyPoolKey 是账号池的隔离维度: 同渠道下每个 Key 拥有独立池。
+type ocProxyPoolKey struct {
+	channelID int
+	keyID     string
+}
 
-// ocProxyPoolFor 返回渠道账号池, 首次调用时懒加载库内记录。
+var (
+	// ocProxyPools 保存旧单 Key 渠道的池, 兼容历史调用与测试。
+	ocProxyPools sync.Map
+	// ocProxyKeyPools 保存 keyed 渠道按 Key 隔离的池。
+	ocProxyKeyPools sync.Map
+)
+
+// ocProxyPoolFor 返回渠道旧单 Key 账号池。
 func ocProxyPoolFor(channelID int) *ocProxyPool {
 	if cached, ok := ocProxyPools.Load(channelID); ok {
 		return cached.(*ocProxyPool)
 	}
-	pool := &ocProxyPool{
+	pool := newOpencodeProxyPool()
+	actual, _ := ocProxyPools.LoadOrStore(channelID, pool)
+	return actual.(*ocProxyPool)
+}
+
+// ocProxyPoolForKey 返回渠道指定 Key 的账号池, 首次调用时懒加载库内记录。
+func ocProxyPoolForKey(channelID int, keyID string) *ocProxyPool {
+	if keyID == "" {
+		return ocProxyPoolFor(channelID)
+	}
+	cacheKey := ocProxyPoolKey{channelID: channelID, keyID: keyID}
+	if cached, ok := ocProxyKeyPools.Load(cacheKey); ok {
+		return cached.(*ocProxyPool)
+	}
+	pool := newOpencodeProxyPool()
+	actual, _ := ocProxyKeyPools.LoadOrStore(cacheKey, pool)
+	return actual.(*ocProxyPool)
+}
+
+func newOpencodeProxyPool() *ocProxyPool {
+	return &ocProxyPool{
 		accounts:      make(map[string]*ocProxyAccount),
 		sessionBound:  make(map[string]ocSessionBinding),
 		sessionBanned: make(map[string]map[string]time.Time),
 		rateLimited:   make(map[string]time.Time),
 	}
-	actual, _ := ocProxyPools.LoadOrStore(channelID, pool)
-	return actual.(*ocProxyPool)
 }
 
-// loadOpencodeProxyPool 从库加载已验证账号, 每渠道只执行一次。
+// loadOpencodeProxyPool 从库加载渠道旧单 Key 账号。
 func loadOpencodeProxyPool(pool *ocProxyPool, channelID int) {
+	loadOpencodeProxyPoolForKey(pool, channelID, "")
+}
+
+// loadOpencodeProxyPoolForKey 从库加载指定 Key 的已验证账号, 每池只执行一次。
+func loadOpencodeProxyPoolForKey(pool *ocProxyPool, channelID int, keyID string) {
 	if pool.loaded {
 		return
 	}
 	pool.loaded = true
-	rows, err := op.LoadOpencodeProxyAccounts(channelID)
+	rows, err := op.LoadOpencodeProxyAccountsForKey(channelID, keyID)
 	if err != nil {
 		log.Warnf("opencode 代理账号加载失败, 降级为内存池: %v", err)
 		return
@@ -134,13 +168,28 @@ func proxyNeedsOpencodeAccount(channel model.Channel) bool {
 	return model.HasAccountPlaceholder(*channel.ChannelProxy)
 }
 
-// pickOpencodeProxyAccount 选出本轮使用的账号并占用一个并发槽位。
-// session 非空时同一会话粘合同一账号, 不同活跃会话不共用账号。
+// pickOpencodeProxyAccount 选出旧单 Key 渠道本轮使用的账号。
 func pickOpencodeProxyAccount(ctx context.Context, channelID int, session string) string {
-	pool := ocProxyPoolFor(channelID)
+	return pickOpencodeProxyAccountForKey(ctx, channelID, "", session)
+}
+
+// pickOpencodeProxyAccountForKey 选出指定 Key 本轮使用的账号并占用一个并发槽位。
+// keyID 非空时只使用该 Key 的固定账号, 不生成新账号; 空 keyID 走旧多账号池逻辑。
+func pickOpencodeProxyAccountForKey(ctx context.Context, channelID int, keyID, session string) string {
+	pool := ocProxyPoolForKey(channelID, keyID)
 	pool.mu.Lock()
-	loadOpencodeProxyPool(pool, channelID)
-	picked := pool.pickLocked(time.Now(), session)
+	loadOpencodeProxyPoolForKey(pool, channelID, keyID)
+	var picked *ocProxyAccount
+	if keyID == "" {
+		picked = pool.pickLocked(time.Now(), session)
+	} else {
+		picked = pool.pickFixedLocked(time.Now(), session, keyID)
+	}
+	if picked == nil {
+		pool.mu.Unlock()
+		log.Warnf("opencode 渠道 %d 密钥 %s 无可用固定代理账号", channelID, keyID)
+		return ""
+	}
 	picked.active++
 	if session != "" {
 		if picked.sessions == nil {
@@ -150,7 +199,7 @@ func pickOpencodeProxyAccount(ctx context.Context, channelID int, session string
 	}
 	account := picked.account
 	pool.mu.Unlock()
-	context.AfterFunc(ctx, func() { releaseOpencodeProxyAccount(channelID, account, session) })
+	context.AfterFunc(ctx, func() { releaseOpencodeProxyAccountForKey(channelID, keyID, account, session) })
 	return account
 }
 
@@ -199,6 +248,29 @@ func (p *ocProxyPool) pickLocked(now time.Time, session string) *ocProxyAccount 
 		p.sessionBound[session] = ocSessionBinding{account: picked.account, at: now}
 	}
 	return picked
+}
+
+// pickFixedLocked 为 keyed 渠道选中唯一固定账号, 不生成额外账号; 调用方需持锁。
+func (p *ocProxyPool) pickFixedLocked(now time.Time, session, account string) *ocProxyAccount {
+	p.pruneLocked(now)
+	state, ok := p.accounts[account]
+	if !ok {
+		state = &ocProxyAccount{account: account}
+		p.accounts[account] = state
+	}
+	if !ocProxyUsable(state, now) || !ocProxySessionAvailable(state, session) {
+		return nil
+	}
+	if _, banned := p.sessionBanned[session][account]; banned {
+		return nil
+	}
+	if session != "" {
+		if p.sessionBound == nil {
+			p.sessionBound = make(map[string]ocSessionBinding)
+		}
+		p.sessionBound[session] = ocSessionBinding{account: account, at: now}
+	}
+	return state
 }
 
 // ocProxyCandidateBetter 报告 a 是否优先于 b; 调用方需持锁。
@@ -315,9 +387,14 @@ func ocProxyEvictFirst(a, b *ocProxyAccount) bool {
 	return ocProxyRecency(a).Before(ocProxyRecency(b))
 }
 
-// releaseOpencodeProxyAccount 归还账号的并发槽位与活跃会话计数。
+// releaseOpencodeProxyAccount 归还旧单 Key 渠道账号的并发槽位。
 func releaseOpencodeProxyAccount(channelID int, account, session string) {
-	pool := ocProxyPoolFor(channelID)
+	releaseOpencodeProxyAccountForKey(channelID, "", account, session)
+}
+
+// releaseOpencodeProxyAccountForKey 归还指定 Key 账号的并发槽位与活跃会话计数。
+func releaseOpencodeProxyAccountForKey(channelID int, keyID, account, session string) {
+	pool := ocProxyPoolForKey(channelID, keyID)
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 	state, ok := pool.accounts[account]
@@ -337,13 +414,18 @@ func releaseOpencodeProxyAccount(channelID int, account, session string) {
 	delete(state.sessions, session)
 }
 
-// markOpencodeProxySuccess 记录账号成功并异步落库; probe 为 true 记体检成功,
-// false 记下游真实转发成功, 两路共用最近成功时间与成功天数, 计数列分开累计。
+// markOpencodeProxySuccess 记录旧单 Key 渠道账号成功。
 func markOpencodeProxySuccess(channelID int, account string, probe bool) {
+	markOpencodeProxySuccessForKey(channelID, "", account, probe)
+}
+
+// markOpencodeProxySuccessForKey 记录指定 Key 账号成功并异步落库; probe 为 true
+// 记体检成功, false 记下游真实转发成功, 两路共用最近成功时间与成功天数。
+func markOpencodeProxySuccessForKey(channelID int, keyID, account string, probe bool) {
 	now := time.Now()
-	pool := ocProxyPoolFor(channelID)
+	pool := ocProxyPoolForKey(channelID, keyID)
 	pool.mu.Lock()
-	loadOpencodeProxyPool(pool, channelID)
+	loadOpencodeProxyPoolForKey(pool, channelID, keyID)
 	state, ok := pool.accounts[account]
 	if !ok {
 		state = &ocProxyAccount{account: account}
@@ -356,19 +438,19 @@ func markOpencodeProxySuccess(channelID int, account string, probe bool) {
 	state.consecutiveFailures = 0
 	prune := pool.needsPrune()
 	pool.mu.Unlock()
-	save := op.SaveOpencodeProxySuccess
+	save := op.SaveOpencodeProxySuccessForKey
 	if probe {
-		save = op.SaveOpencodeProxyProbeSuccess
+		save = op.SaveOpencodeProxyProbeSuccessForKey
 	}
 	goSafe("opencode-proxy-success", func() {
-		if err := save(channelID, account, now); err != nil {
+		if err := save(channelID, keyID, account, now); err != nil {
 			log.Warnf("opencode 代理账号成功记录落库失败: %v", err)
 			return
 		}
 		if !prune {
 			return
 		}
-		if err := op.PruneOpencodeProxyAccounts(channelID, ocProxyMaxAccounts); err != nil {
+		if err := op.PruneOpencodeProxyAccountsForKey(channelID, keyID, ocProxyMaxAccounts); err != nil {
 			log.Warnf("opencode 代理账号清理失败: %v", err)
 		}
 	})
@@ -378,10 +460,15 @@ func markOpencodeProxySuccess(channelID int, account string, probe bool) {
 // 已在冷却中的账号只累计台账失败数, 不推进连续失败与窗口, 也不改冷却截止。
 // 未冷却时 24h 窗口计满即冷却到下一个 UTC 零点, 并清零连续失败与窗口。
 func markOpencodeProxyRealFailure(channelID int, account string) {
+	markOpencodeProxyRealFailureForKey(channelID, "", account)
+}
+
+// markOpencodeProxyRealFailureForKey 锁内记账指定 Key 的一次下游真实转发失败。
+func markOpencodeProxyRealFailureForKey(channelID int, keyID, account string) {
 	now := time.Now()
-	pool := ocProxyPoolFor(channelID)
+	pool := ocProxyPoolForKey(channelID, keyID)
 	pool.mu.Lock()
-	loadOpencodeProxyPool(pool, channelID)
+	loadOpencodeProxyPoolForKey(pool, channelID, keyID)
 	state, ok := pool.accounts[account]
 	if !ok {
 		state = &ocProxyAccount{account: account}
@@ -408,21 +495,26 @@ func markOpencodeProxyRealFailure(channelID int, account string) {
 	}
 	pool.mu.Unlock()
 	goSafe("opencode-proxy-failure", func() {
-		if err := op.SaveOpencodeProxyRealFailure(channelID, account); err != nil {
+		if err := op.SaveOpencodeProxyRealFailureForKey(channelID, keyID, account); err != nil {
 			log.Warnf("opencode 代理账号失败记录落库失败: %v", err)
 		}
 	})
 	if cooldown > 0 {
-		markOpencodeProxyCooldown(channelID, account, cooldown)
+		markOpencodeProxyCooldownForKey(channelID, keyID, account, cooldown)
 	}
 }
 
-// banOpencodeProxyAccount 在会话维度拉黑账号并解除粘合: 429/403 后同会话
-// 不再使用该账号, 下次选号换新出口, 出站会话标识随新账号重派。
+// banOpencodeProxyAccount 在会话维度拉黑旧单 Key 渠道账号。
 func banOpencodeProxyAccount(channelID int, session, account string) {
-	pool := ocProxyPoolFor(channelID)
+	banOpencodeProxyAccountForKey(channelID, "", session, account)
+}
+
+// banOpencodeProxyAccountForKey 在会话维度拉黑指定 Key 的账号并解除粘合:
+// 429/403 后同会话不再使用该账号, 下次选号换新出口, 出站会话标识随新账号重派。
+func banOpencodeProxyAccountForKey(channelID int, keyID, session, account string) {
+	pool := ocProxyPoolForKey(channelID, keyID)
 	pool.mu.Lock()
-	loadOpencodeProxyPool(pool, channelID)
+	loadOpencodeProxyPoolForKey(pool, channelID, keyID)
 	if pool.sessionBanned == nil {
 		pool.sessionBanned = make(map[string]map[string]time.Time)
 	}
@@ -436,9 +528,14 @@ func banOpencodeProxyAccount(channelID int, session, account string) {
 	pool.mu.Unlock()
 }
 
-// 403 属于凭据/权限拒绝, 单次即冷却账号并异步落库。
+// 403 属于凭据/权限拒绝, 单次即冷却旧单 Key 渠道账号并异步落库。
 func markOpencodeProxyRejected(channelID int, account, retryAfter string) {
-	markOpencodeProxyCooldown(channelID, account, opencodeRejectCooldown(retryAfter, time.Now()))
+	markOpencodeProxyRejectedForKey(channelID, "", account, retryAfter)
+}
+
+// markOpencodeProxyRejectedForKey 冷却指定 Key 的账号。
+func markOpencodeProxyRejectedForKey(channelID int, keyID, account, retryAfter string) {
+	markOpencodeProxyCooldownForKey(channelID, keyID, account, opencodeRejectCooldown(retryAfter, time.Now()))
 }
 
 // recordRateLimitedLocked 记录一次会话 429, 返回是否达到冷却 quorum; 调用方需持锁。
@@ -458,18 +555,23 @@ func (p *ocProxyPool) recordRateLimitedLocked(session string, now time.Time) boo
 // markOpencodeProxyRateLimited 处理 429: 24 小时窗口内两个不同会话报出才冷却账号,
 // 单会话仅计票不冷却; 无会话标识时无法计票, 回退单次冷却避免反复使用被限流账号。
 func markOpencodeProxyRateLimited(channelID int, account, session, retryAfter string) {
+	markOpencodeProxyRateLimitedForKey(channelID, "", account, session, retryAfter)
+}
+
+// markOpencodeProxyRateLimitedForKey 处理指定 Key 的 429 计票与冷却。
+func markOpencodeProxyRateLimitedForKey(channelID int, keyID, account, session, retryAfter string) {
 	now := time.Now()
 	if session == "" {
-		markOpencodeProxyCooldown(channelID, account, opencodeRejectCooldown(retryAfter, now))
+		markOpencodeProxyCooldownForKey(channelID, keyID, account, opencodeRejectCooldown(retryAfter, now))
 		return
 	}
-	pool := ocProxyPoolFor(channelID)
+	pool := ocProxyPoolForKey(channelID, keyID)
 	pool.mu.Lock()
-	loadOpencodeProxyPool(pool, channelID)
+	loadOpencodeProxyPoolForKey(pool, channelID, keyID)
 	quorum := pool.recordRateLimitedLocked(session, now)
 	pool.mu.Unlock()
 	if quorum {
-		markOpencodeProxyCooldown(channelID, account, opencodeRejectCooldown(retryAfter, now))
+		markOpencodeProxyCooldownForKey(channelID, keyID, account, opencodeRejectCooldown(retryAfter, now))
 	}
 }
 
@@ -490,12 +592,17 @@ func opencodeRejectCooldown(retryAfter string, now time.Time) time.Duration {
 	return ocProxyRejectedCooldown
 }
 
-// 写入账号冷却并异步落库; 未成功过的账号同样入槽。
+// markOpencodeProxyCooldown 写入旧单 Key 渠道账号冷却。
 func markOpencodeProxyCooldown(channelID int, account string, cooldown time.Duration) {
-	pool := ocProxyPoolFor(channelID)
+	markOpencodeProxyCooldownForKey(channelID, "", account, cooldown)
+}
+
+// markOpencodeProxyCooldownForKey 写入指定 Key 的账号冷却并异步落库; 未成功过的账号同样入槽。
+func markOpencodeProxyCooldownForKey(channelID int, keyID, account string, cooldown time.Duration) {
+	pool := ocProxyPoolForKey(channelID, keyID)
 	pool.mu.Lock()
 	// 与成功回填同口径: 先确保首载完成, 避免后到的首载用库内旧行覆盖本冷却。
-	loadOpencodeProxyPool(pool, channelID)
+	loadOpencodeProxyPoolForKey(pool, channelID, keyID)
 	state, ok := pool.accounts[account]
 	if !ok {
 		state = &ocProxyAccount{account: account}
@@ -510,14 +617,14 @@ func markOpencodeProxyCooldown(channelID int, account string, cooldown time.Dura
 	prune := pool.needsPrune()
 	pool.mu.Unlock()
 	goSafe("opencode-proxy-cooldown", func() {
-		if err := op.SaveOpencodeProxyCooldown(channelID, account, until); err != nil {
+		if err := op.SaveOpencodeProxyCooldownForKey(channelID, keyID, account, until); err != nil {
 			log.Warnf("opencode 代理账号冷却落库失败: %v", err)
 			return
 		}
 		if !prune {
 			return
 		}
-		if err := op.PruneOpencodeProxyAccounts(channelID, ocProxyMaxAccounts); err != nil {
+		if err := op.PruneOpencodeProxyAccountsForKey(channelID, keyID, ocProxyMaxAccounts); err != nil {
 			log.Warnf("opencode 代理账号清理失败: %v", err)
 		}
 	})

@@ -51,7 +51,7 @@ func TestProbeOpencodeAccountsClassifiesAndSeedsPool(t *testing.T) {
 	})
 	channel := createOpencodeProxyTestChannel(t, probe.template)
 
-	report, err := ProbeOpencodeAccounts(context.Background(), channel.ID,
+	report, err := ProbeOpencodeAccounts(context.Background(), channel.ID, "",
 		[]string{"user_good", "user_good", "user_bad", "user_down"}, 0, 4, 0, "")
 	if err != nil {
 		t.Fatalf("批量体检失败: %v", err)
@@ -103,7 +103,7 @@ func TestProbeOpencodeAccountsGenerateAndValidate(t *testing.T) {
 	})
 	channel := createOpencodeProxyTestChannel(t, probe.template)
 
-	report, err := ProbeOpencodeAccounts(context.Background(), channel.ID, nil, 3, 3, 0, "")
+	report, err := ProbeOpencodeAccounts(context.Background(), channel.ID, "", nil, 3, 3, 0, "")
 	if err != nil {
 		t.Fatalf("生成模式体检失败: %v", err)
 	}
@@ -122,16 +122,61 @@ func TestProbeOpencodeAccountsGenerateAndValidate(t *testing.T) {
 		seen[result.Account] = true
 	}
 
-	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, []string{"bad account!"}, 0, 0, 0, ""); err == nil {
+	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, "", []string{"bad account!"}, 0, 0, 0, ""); err == nil {
 		t.Fatal("含空格账号应被拒绝")
 	}
-	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, make([]string, ocProbeMaxAccounts+1), 0, 0, 0, ""); err == nil {
+	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, "", make([]string, ocProbeMaxAccounts+1), 0, 0, 0, ""); err == nil {
 		t.Fatal("超过单次上限应被拒绝")
 	}
 
 	bare := createIntegrationChannel(t, "account-probe-no-proxy", model.ChannelProviderOpenAI, "http://opencode.test/v1", "plain-model")
-	if _, err := ProbeOpencodeAccounts(context.Background(), bare.ID, nil, 0, 0, 0, ""); err == nil {
+	if _, err := ProbeOpencodeAccounts(context.Background(), bare.ID, "", nil, 0, 0, 0, ""); err == nil {
 		t.Fatal("非 {account} 代理渠道应被拒绝")
+	}
+}
+
+// TestPrepareAccountProbeKeyedUsesKeyID 验证 keyed 渠道账号固定为 Key.ID, 且忽略生成参数。
+func TestPrepareAccountProbeKeyedUsesKeyID(t *testing.T) {
+	setupFailoverTest(t)
+	probe := newOpencodeProxyProbe(t, func(string) (int, []byte) {
+		return http.StatusOK, probeChatOKBody()
+	})
+	channel := createOpencodeProxyTestChannel(t, probe.template,
+		model.ChannelKey{Key: "sk-a"},
+		model.ChannelKey{Key: "sk-b"},
+	)
+	if len(channel.Keys) != 2 {
+		t.Fatalf("测试渠道密钥数量异常: %+v", channel.Keys)
+	}
+	keyA := channel.Keys[0].ID
+	keyB := channel.Keys[1].ID
+	if err := db.GetDB().Model(&model.Channel{}).Where("id = ?", channel.ID).
+		Updates(map[string]any{"keyed": true, "key": ""}).Error; err != nil {
+		t.Fatalf("标记 keyed 渠道失败: %v", err)
+	}
+	if err := op.InitCache(); err != nil {
+		t.Fatalf("刷新渠道缓存失败: %v", err)
+	}
+	plan, err := prepareAccountProbe(context.Background(), channel.ID, keyA, []string{"attacker"}, 5, "")
+	if err != nil {
+		t.Fatalf("准备 keyed 体检失败: %v", err)
+	}
+	if len(plan.accounts) != 1 || plan.accounts[0] != keyA {
+		t.Fatalf("keyed 账号应固定为 Key.ID: %+v", plan.accounts)
+	}
+	rowsA, err := op.LoadOpencodeProxyAccountsForKey(channel.ID, keyA)
+	if err != nil {
+		t.Fatalf("读取 key-a 台账失败: %v", err)
+	}
+	if len(rowsA) != 1 || rowsA[0].Account != keyA {
+		t.Fatalf("key-a 台账应只有固定账号: %+v", rowsA)
+	}
+	rowsB, err := op.LoadOpencodeProxyAccountsForKey(channel.ID, keyB)
+	if err != nil {
+		t.Fatalf("读取 key-b 台账失败: %v", err)
+	}
+	if len(rowsB) != 0 {
+		t.Fatalf("未体检的 key-b 不应落账: %+v", rowsB)
 	}
 }
 
@@ -170,7 +215,7 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 		t.Fatalf("写今日成功记录失败: %v", err)
 	}
 
-	ledger, err := ListOpencodeAccountStates(channel.ID, "all")
+	ledger, err := ListOpencodeAccountStates(channel.ID, "", "all")
 	if err != nil {
 		t.Fatalf("读台账失败: %v", err)
 	}
@@ -188,7 +233,7 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 		t.Fatalf("状态派生异常: %+v", states)
 	}
 
-	filtered, err := ListOpencodeAccountStates(channel.ID, "error")
+	filtered, err := ListOpencodeAccountStates(channel.ID, "", "error")
 	if err != nil {
 		t.Fatalf("筛选失败: %v", err)
 	}
@@ -196,7 +241,7 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 		t.Fatalf("error 筛选异常: %+v", filtered.Items)
 	}
 
-	untested, err := ListOpencodeAccountStates(channel.ID, "untested")
+	untested, err := ListOpencodeAccountStates(channel.ID, "", "untested")
 	if err != nil {
 		t.Fatalf("筛选失败: %v", err)
 	}
@@ -209,11 +254,11 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 		}
 	}
 
-	deleted, err := DeleteOpencodeAccountsFromLedger(channel.ID, []string{"acct_untested"})
+	deleted, err := DeleteOpencodeAccountsFromLedger(channel.ID, "", []string{"acct_untested"})
 	if err != nil || deleted != 1 {
 		t.Fatalf("删除应移除 1 行: deleted=%d err=%v", deleted, err)
 	}
-	if ledger2, _ := ListOpencodeAccountStates(channel.ID, "all"); ledger2.Total != 6 || ledger2.Untested != 2 {
+	if ledger2, _ := ListOpencodeAccountStates(channel.ID, "", "all"); ledger2.Total != 6 || ledger2.Untested != 2 {
 		t.Fatalf("删除后台账应剩 6 行且今日未测试 2 条: %+v", ledger2)
 	}
 
@@ -483,7 +528,7 @@ func TestProbeOpencodeAccountsSendsClientFormAndUniqueSessions(t *testing.T) {
 	}
 	t.Cleanup(func() { opencodeProbeCatalog = originalCatalog })
 
-	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID,
+	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, "",
 		[]string{"user_a", "user_b", "user_c"}, 0, 3, 0, modelName); err != nil {
 		t.Fatalf("批量体检失败: %v", err)
 	}
@@ -530,7 +575,7 @@ func TestProbeOpencodeAccountsSendsClientFormAndUniqueSessions(t *testing.T) {
 	}
 
 	// 复测同账号应铸新项目号: 免费档按项目身份记账, 固定号会累积误判。
-	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, []string{"user_a"}, 0, 1, 0, modelName); err != nil {
+	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, "", []string{"user_a"}, 0, 1, 0, modelName); err != nil {
 		t.Fatalf("第二轮体检失败: %v", err)
 	}
 	requests = probe.proxiedRequests()
@@ -576,7 +621,7 @@ func TestProbeOpencodeAccountsRecordsProbeSuccessCounter(t *testing.T) {
 	})
 	channel := createOpencodeProxyTestChannel(t, probe.template)
 
-	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID,
+	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, "",
 		[]string{"user_good", "user_bad"}, 0, 2, 0, ""); err != nil {
 		t.Fatalf("批量体检失败: %v", err)
 	}
@@ -638,7 +683,7 @@ func TestOpencodeLedgerHistoricFilterAndSplitCounters(t *testing.T) {
 		t.Fatalf("写高频好号失败: %v", err)
 	}
 
-	ledger, err := ListOpencodeAccountStates(channel.ID, "historic")
+	ledger, err := ListOpencodeAccountStates(channel.ID, "", "historic")
 	if err != nil {
 		t.Fatalf("读台账失败: %v", err)
 	}
@@ -656,7 +701,7 @@ func TestOpencodeLedgerHistoricFilterAndSplitCounters(t *testing.T) {
 		t.Fatalf("拆分计数异常: %+v", item)
 	}
 
-	all, err := ListOpencodeAccountStates(channel.ID, "all")
+	all, err := ListOpencodeAccountStates(channel.ID, "", "all")
 	if err != nil {
 		t.Fatalf("读台账失败: %v", err)
 	}
@@ -691,7 +736,7 @@ func TestOpencodeLedgerHistoricFilterAndSplitCounters(t *testing.T) {
 			t.Fatalf("成功计数异常: %+v", row)
 		}
 	}
-	after, err := ListOpencodeAccountStates(channel.ID, "all")
+	after, err := ListOpencodeAccountStates(channel.ID, "", "all")
 	if err != nil {
 		t.Fatalf("读台账失败: %v", err)
 	}
@@ -746,5 +791,108 @@ func TestOpencodeAutoProbeDueAccounts(t *testing.T) {
 	}
 	if got := ocAutoProbeDueAccounts(many, now, 24*time.Hour); len(got) != ocAutoProbeMaxPerChannel {
 		t.Fatalf("应按上限截断: %d", len(got))
+	}
+}
+
+// markOpencodeProxyTestChannelKeyed 把测试渠道标记为 keyed 并刷新缓存。
+func markOpencodeProxyTestChannelKeyed(t *testing.T, channelID int) {
+	t.Helper()
+	if err := db.GetDB().Model(&model.Channel{}).Where("id = ?", channelID).Update("keyed", true).Error; err != nil {
+		t.Fatalf("标记 keyed 渠道失败: %v", err)
+	}
+	if err := op.InitCache(); err != nil {
+		t.Fatalf("刷新渠道缓存失败: %v", err)
+	}
+}
+
+// keyedPoolVerified 返回指定 Key 池内账号是否已完成体检回填。
+func keyedPoolVerified(pool *ocProxyPool, account string) bool {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	state, ok := pool.accounts[account]
+	return ok && state.verified
+}
+
+// TestProbeOpencodeAccountsIsolatesKeyedPoolsAndLedger 验证 keyed 渠道按 Key 隔离账号池与台账。
+func TestProbeOpencodeAccountsIsolatesKeyedPoolsAndLedger(t *testing.T) {
+	ocProbePinQuestion(t)
+	setupFailoverTest(t)
+	probe := newOpencodeProxyProbe(t, func(string) (int, []byte) {
+		return http.StatusOK, probeChatOKBody()
+	})
+	channel := createOpencodeProxyTestChannel(t, probe.template,
+		model.ChannelKey{ID: "key-a", Key: "secret-a"},
+		model.ChannelKey{ID: "key-b", Key: "secret-b"},
+	)
+	markOpencodeProxyTestChannelKeyed(t, channel.ID)
+	channel, err := op.ChannelGet(channel.ID)
+	if err != nil {
+		t.Fatalf("读取 keyed 渠道失败: %v", err)
+	}
+	keyIDs := make(map[string]string, len(channel.Keys))
+	for _, key := range channel.Keys {
+		keyIDs[key.Key] = key.ID
+	}
+	keyA, keyB := keyIDs["secret-a"], keyIDs["secret-b"]
+	if keyA == "" || keyB == "" {
+		t.Fatalf("读取测试 Key ID 失败: %+v", channel.Keys)
+	}
+	t.Cleanup(func() {
+		ocProxyKeyPools.Delete(ocProxyPoolKey{channelID: channel.ID, keyID: keyA})
+		ocProxyKeyPools.Delete(ocProxyPoolKey{channelID: channel.ID, keyID: keyB})
+	})
+
+	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, "", []string{"acct_shared"}, 0, 1, 0, ""); err == nil {
+		t.Fatal("keyed 渠道缺少 Key 应被拒绝")
+	}
+	if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, "missing", []string{"acct_shared"}, 0, 1, 0, ""); err == nil {
+		t.Fatal("不存在的 Key 应被拒绝")
+	}
+
+	keyList := []string{keyA, keyB}
+	for _, keyID := range keyList {
+		if _, err := ProbeOpencodeAccounts(context.Background(), channel.ID, keyID, []string{"acct_shared"}, 0, 1, 0, ""); err != nil {
+			t.Fatalf("%s 体检失败: %v", keyID, err)
+		}
+	}
+
+	for _, keyID := range keyList {
+		ledger, err := ListOpencodeAccountStates(channel.ID, keyID, "all")
+		if err != nil {
+			t.Fatalf("%s 读台账失败: %v", keyID, err)
+		}
+		if ledger.KeyID != keyID || ledger.Total != 1 || len(ledger.Items) != 1 {
+			t.Fatalf("%s 台账应仅含本 Key 账号: %+v", keyID, ledger)
+		}
+		if item := ledger.Items[0]; item.Account != "acct_shared" || item.KeyID != keyID {
+			t.Fatalf("%s 台账条目 Key 隔离异常: %+v", keyID, item)
+		}
+		rows, err := op.LoadOpencodeProxyAccountsForKey(channel.ID, keyID)
+		if err != nil || len(rows) != 1 || rows[0].KeyID != keyID {
+			t.Fatalf("%s 账号池落库异常: rows=%+v err=%v", keyID, rows, err)
+		}
+		if !keyedPoolVerified(ocProxyPoolForKey(channel.ID, keyID), "acct_shared") {
+			t.Fatalf("%s 体检成功应回填本 Key 账号池", keyID)
+		}
+	}
+	if legacy := opencodeProxyPoolSnapshot(t, channel.ID); legacy != nil {
+		if _, ok := legacy["acct_shared"]; ok {
+			t.Fatal("keyed 体检不应写入旧单 Key 账号池")
+		}
+	}
+
+	waitFor(t, 2*time.Second, func() bool {
+		rows, err := op.LoadOpencodeProxyAccountsForKey(channel.ID, keyA)
+		return err == nil && len(rows) == 1 && rows[0].ProbeSuccessCount == 1
+	})
+	deleted, err := DeleteOpencodeAccountsFromLedger(channel.ID, keyA, []string{"acct_shared"})
+	if err != nil || deleted != 1 {
+		t.Fatalf("删除 key-a 账号失败: deleted=%d err=%v", deleted, err)
+	}
+	if ledgerA, err := ListOpencodeAccountStates(channel.ID, keyA, "all"); err != nil || ledgerA.Total != 0 {
+		t.Fatalf("key-a 删除后台账应为空: %+v err=%v", ledgerA, err)
+	}
+	if ledgerB, err := ListOpencodeAccountStates(channel.ID, keyB, "all"); err != nil || ledgerB.Total != 1 {
+		t.Fatalf("key-b 账号不应被删除: %+v err=%v", ledgerB, err)
 	}
 }

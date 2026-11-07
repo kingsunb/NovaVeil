@@ -476,6 +476,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 全部 Key 都在冷却中, 或代理模板按当前别名解析失败时, 按一轮真实失败记账,
 			// 不发起上游请求; 渠道未配置多 Key 时回退旧 Key 字段走同一路径。
 			keyIndex, selectedKey, keyOK := selectChannelKey(channel)
+			proxyAccountKeyID := ""
+			if channel.Keyed && keyOK {
+				proxyAccountKeyID = selectedKey.ID
+			}
 			effective := channel
 			var dispatchErr error // 尚未发起上游调用即已确定的本轮失败原因。
 			if !keyOK {
@@ -503,8 +507,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			proxyAccount := ""
 			var warpLease *warpSlotLease
 			if dispatchErr == nil && !isWarpProxy(channel) && proxyNeedsOpencodeAccount(channel) {
-				candidate := pickOpencodeProxyAccount(ctx, channel.ID, ocSessionBindingKey)
-				if resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate); resolveErr == nil {
+				candidate := pickOpencodeProxyAccountForKey(ctx, channel.ID, proxyAccountKeyID, ocSessionBindingKey)
+				if candidate == "" {
+					dispatchErr = fmt.Errorf("免费渠道无可用代理账号")
+				} else if resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate); resolveErr == nil {
 					addr := resolved.String()
 					effective.ChannelProxy = &addr
 					proxyAccount = candidate
@@ -694,7 +700,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 			} else if proxyAccount != "" {
 				if err == nil {
-					markOpencodeProxySuccess(channel.ID, proxyAccount, false)
+					markOpencodeProxySuccessForKey(channel.ID, proxyAccountKeyID, proxyAccount, false)
 				} else {
 					if code, ok := UpstreamStatusCode(err); ok {
 						proxyAccountRejection = code == http.StatusForbidden || code == http.StatusTooManyRequests
@@ -702,16 +708,16 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 							if code == http.StatusTooManyRequests {
 								// 计票用粘合键, 不用带账号的出站号: 同一段对话换出口
 								// 不能被当成两个不同会话凑满 quorum。
-								markOpencodeProxyRateLimited(channel.ID, proxyAccount, ocSessionBindingKey, UpstreamRetryAfter(err))
+								markOpencodeProxyRateLimitedForKey(channel.ID, proxyAccountKeyID, proxyAccount, ocSessionBindingKey, UpstreamRetryAfter(err))
 								// 429 拉黑该账号并解除粘合: 重试换新出口, 出站会话随之重派。
-								banOpencodeProxyAccount(channel.ID, ocSessionBindingKey, proxyAccount)
+								banOpencodeProxyAccountForKey(channel.ID, proxyAccountKeyID, ocSessionBindingKey, proxyAccount)
 							} else {
-								markOpencodeProxyRejected(channel.ID, proxyAccount, UpstreamRetryAfter(err))
+								markOpencodeProxyRejectedForKey(channel.ID, proxyAccountKeyID, proxyAccount, UpstreamRetryAfter(err))
 							}
 						}
 					}
 					if !errors.Is(err, context.Canceled) {
-						markOpencodeProxyRealFailure(channel.ID, proxyAccount)
+						markOpencodeProxyRealFailureForKey(channel.ID, proxyAccountKeyID, proxyAccount)
 					}
 				}
 			} else if err != nil && isWarpProxy(channel) {

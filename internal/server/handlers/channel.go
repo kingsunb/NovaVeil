@@ -365,9 +365,10 @@ func testChannelKeys(c *gin.Context) {
 
 // proxyAccountProbeRequest 是一次批量代理账号体检请求:
 // accounts 为空时生成 count 个随机账号(默认 100), 均不填时按默认行为执行;
-// model 为空时由后端自动选择渠道首个 chat 协议模型。
+// key_id 指定渠道 Key(keyed 渠道必填); model 为空时由后端自动选择渠道首个 chat 协议模型。
 type proxyAccountProbeRequest struct {
 	ChannelID   int      `json:"channel_id" binding:"required"`
+	KeyID       string   `json:"key_id"`
 	Accounts    []string `json:"accounts"`
 	Count       int      `json:"count"`
 	Concurrency int      `json:"concurrency"`
@@ -384,17 +385,18 @@ func probeProxyAccounts(c *gin.Context) {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
 	}
-	job, err := relay.StartOpencodeAccountProbe(c.Request.Context(), request.ChannelID, request.Accounts, request.Count, request.Concurrency, request.TimeoutMS, request.Model)
+	job, err := relay.StartOpencodeAccountProbe(c.Request.Context(), request.ChannelID, request.KeyID, request.Accounts, request.Count, request.Concurrency, request.TimeoutMS, request.Model)
 	if err != nil {
 		resp.ErrorExposed(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	resp.Success(c, gin.H{
-		"job_id":    job.JobID,
+		"job_id":     job.JobID,
 		"channel_id": job.ChannelID,
-		"model":     job.Model,
-		"state":     job.State,
-		"total":     job.Total,
+		"key_id":     job.KeyID,
+		"model":      job.Model,
+		"state":      job.State,
+		"total":      job.Total,
 	})
 }
 
@@ -415,7 +417,7 @@ func getProxyAccountProbeJob(c *gin.Context) {
 	resp.Success(c, job)
 }
 
-// listProxyAccounts 返回渠道账号台账, filter 取 all/usable/untested/unusable/error/historic; untested 指今日未测试。
+// listProxyAccounts 返回渠道账号台账; key_id 限定渠道 Key, filter 取 all/usable/untested/unusable/error/historic, untested 指今日未测试。
 func listProxyAccounts(c *gin.Context) {
 	channelID, err := strconv.Atoi(c.Query("channel_id"))
 	if err != nil || channelID <= 0 {
@@ -423,7 +425,8 @@ func listProxyAccounts(c *gin.Context) {
 		return
 	}
 	filter := strings.TrimSpace(c.DefaultQuery("filter", "all"))
-	ledger, err := relay.ListOpencodeAccountStates(channelID, filter)
+	keyID := strings.TrimSpace(c.Query("key_id"))
+	ledger, err := relay.ListOpencodeAccountStates(channelID, keyID, filter)
 	if err != nil {
 		resp.ErrorExposed(c, http.StatusBadRequest, err.Error())
 		return
@@ -431,20 +434,21 @@ func listProxyAccounts(c *gin.Context) {
 	resp.Success(c, ledger)
 }
 
-// proxyAccountDeleteRequest 是台账账号删除请求。
+// proxyAccountDeleteRequest 是台账账号删除请求; key_id 限定渠道 Key。
 type proxyAccountDeleteRequest struct {
 	ChannelID int      `json:"channel_id" binding:"required"`
+	KeyID     string   `json:"key_id"`
 	Accounts  []string `json:"accounts" binding:"required"`
 }
 
-// deleteProxyAccounts 从台账删除指定账号并同步清理进程内池。
+// deleteProxyAccounts 从指定 Key 的台账删除账号并同步清理进程内池。
 func deleteProxyAccounts(c *gin.Context) {
 	var request proxyAccountDeleteRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
 	}
-	deleted, err := relay.DeleteOpencodeAccountsFromLedger(request.ChannelID, request.Accounts)
+	deleted, err := relay.DeleteOpencodeAccountsFromLedger(request.ChannelID, request.KeyID, request.Accounts)
 	if err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return

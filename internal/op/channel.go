@@ -44,6 +44,7 @@ func ChannelCreate(channel *model.Channel, ctx context.Context) error {
 	channel.IsFree = false
 	channel.Builtin = false
 	channel.OpencodeCompat = false
+	channel.Keyed = false
 	keys, err := normalizeChannelKeys(channel.Keys)
 	if err != nil {
 		return err

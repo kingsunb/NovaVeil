@@ -139,6 +139,8 @@ export interface Channel {
   auto_sync: boolean;
   /** 是否注入 opencode 兼容请求头（x-opencode-session，会话级稳定 UUID）。 */
   opencode_compat: boolean;
+  /** 密钥型免费渠道：无内置 public Key；配置 {account} 代理后按 Key 分池。 */
+  keyed?: boolean;
   custom_header: CustomHeader[];
   param_override?: string;
   channel_proxy?: string;

@@ -175,9 +175,29 @@ func parseRequestedOverflowTokens(detail string) (int64, bool) {
 	return 0, false
 }
 
+// ocProbeSelectChannelKey 按 Key ID 选渠道密钥; 空 ID 仅非 keyed 渠道沿用首条。
+func ocProbeSelectChannelKey(channel model.Channel, keyID string) (model.ChannelKey, error) {
+	candidates := channelKeyTestCandidates(channel)
+	if len(candidates) == 0 {
+		return model.ChannelKey{}, fmt.Errorf("渠道未配置任何密钥")
+	}
+	if keyID == "" {
+		if channel.Keyed {
+			return model.ChannelKey{}, fmt.Errorf("密钥型渠道需指定渠道 Key")
+		}
+		return candidates[0], nil
+	}
+	for _, candidate := range candidates {
+		if candidate.ID == keyID {
+			return candidate, nil
+		}
+	}
+	return model.ChannelKey{}, fmt.Errorf("渠道密钥 %q 不存在", keyID)
+}
+
 // probeOnce 发送一次指定构造规模的探测请求并按状态码判定容量。
 func probeOnce(ctx context.Context, channel model.Channel, modelName string, tokens int) (*ContextProbeResult, error) {
-	result, err := probeOnceWithAccount(ctx, channel, modelName, "", func(format llm.APIFormat) (*httpclient.Request, error) {
+	result, err := probeOnceWithAccount(ctx, channel, modelName, "", "", func(format llm.APIFormat) (*httpclient.Request, error) {
 		return newTestRequest(format, modelName, buildContextProbeText(tokens), 1)
 	}, true)
 	if err != nil {
@@ -187,20 +207,21 @@ func probeOnce(ctx context.Context, channel model.Channel, modelName string, tok
 }
 
 // probeOnceWithAccount 发送一次探测请求并按状态码判定容量:
+//   - keyID 选择渠道 Key; keyed 渠道必须指定, 空值仅非 keyed 沿用首条;
 //   - account 为空时从池内选号(上下文探测原行为), 非空时钉住账号, 供批量账号体检复用;
 //   - buildRaw 按生效协议构造原始请求; clampOutput 为 true 时把输出预算收敛到 1
 //     (上下文探测只测输入容量), 账号体检传 false 以与下游请求出站形态完全一致。
 //
 // 拿到 HTTP 响应时结论(Status/Detail/Latency)随 result 返回, error 仅表示未得出容量结论。
-func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName, account string, buildRaw func(llm.APIFormat) (*httpclient.Request, error), clampOutput bool) (*ContextProbeResult, error) {
+func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName, keyID, account string, buildRaw func(llm.APIFormat) (*httpclient.Request, error), clampOutput bool) (*ContextProbeResult, error) {
 	if isWarpProxy(channel) {
 		return nil, errWarpProbeUnsupported
 	}
-	candidates := channelKeyTestCandidates(channel)
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("渠道未配置任何密钥")
+	selected, err := ocProbeSelectChannelKey(channel, keyID)
+	if err != nil {
+		return nil, err
 	}
-	effective, err := effectiveChannelForKey(channel, candidates[0])
+	effective, err := effectiveChannelForKey(channel, selected)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +230,7 @@ func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName,
 	if proxyNeedsOpencodeAccount(channel) {
 		candidate := account
 		if candidate == "" {
-			candidate = pickOpencodeProxyAccount(ctx, channel.ID, "")
+			candidate = pickOpencodeProxyAccountForKey(ctx, channel.ID, keyID, "")
 		}
 		resolved, resolveErr := helper.ResolveProxyTemplate(*channel.ChannelProxy, candidate)
 		if resolveErr != nil {
@@ -311,9 +332,9 @@ func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName,
 	if proxyAccount != "" {
 		switch {
 		case result.Accepted:
-			markOpencodeProxySuccess(channel.ID, proxyAccount, true)
+			markOpencodeProxySuccessForKey(channel.ID, keyID, proxyAccount, true)
 		case response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests:
-			markOpencodeProxyRejected(channel.ID, proxyAccount, response.Header.Get("Retry-After"))
+			markOpencodeProxyRejectedForKey(channel.ID, keyID, proxyAccount, response.Header.Get("Retry-After"))
 		}
 	}
 	if probeErr != nil {

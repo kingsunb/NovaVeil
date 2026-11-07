@@ -815,6 +815,7 @@ export const api = {
   /** 启动后台体检作业: 逐账号发真实请求耗时可达分钟级, 因此立即返回 job_id, 进度用 getProxyAccountProbeJob 轮询。model 留空由后端自动选。 */
   probeProxyAccounts: async (body: {
     channel_id: number;
+    key_id?: string;
     accounts?: string[];
     count?: number;
     concurrency?: number;
@@ -861,13 +862,14 @@ export const api = {
   },
 
   /** 账号台账: 五类筛选 all/usable/untested/unusable/error/historic, untested 指今日未测试。 */
-  listProxyAccounts: async (channelId: number, filter: string) =>
-    (await http<unknown>(
-      `/channel/proxy-accounts?channel_id=${channelId}&filter=${encodeURIComponent(filter)}`,
-    )) as {
+  listProxyAccounts: async (channelId: number, filter: string, keyId?: string) => {
+    const query = new URLSearchParams({ channel_id: String(channelId), filter });
+    if (keyId) query.set("key_id", keyId);
+    return (await http<unknown>(`/channel/proxy-accounts?${query}`)) as {
       channel_id: number;
       items: Array<{
         account: string;
+        key_id?: string;
         state: string;
         outcome: string;
         last_probe_status: number;
@@ -887,12 +889,13 @@ export const api = {
       unusable: number;
       probe_error: number;
       historic: number;
-    },
+    };
+  },
   /** 从台账删除指定账号并同步清理进程内池。 */
-  deleteProxyAccounts: (channelId: number, accounts: string[]) =>
+  deleteProxyAccounts: (channelId: number, accounts: string[], keyId?: string) =>
     http<{ deleted: number }>("/channel/proxy-accounts", {
       method: "DELETE",
-      body: { channel_id: channelId, accounts },
+      body: { channel_id: channelId, accounts, ...(keyId ? { key_id: keyId } : {}) },
     }),
   /** 读取 24h 自动体检开关。 */
   getOpencodeAccountAutoProbe: async () => {

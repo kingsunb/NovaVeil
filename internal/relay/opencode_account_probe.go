@@ -100,9 +100,10 @@ type AccountProbeReport struct {
 	Summary   AccountProbeSummary  `json:"summary"`
 }
 
-// ocProbePlan 是一次体检的入参解算结果: 渠道、模型、账号列表、展示名与项目号。
+// ocProbePlan 是一次体检的入参解算结果: 渠道、Key、模型、账号列表、展示名与项目号。
 type ocProbePlan struct {
 	channel     model.Channel
+	keyID       string
 	modelName   string
 	displayName string
 	accounts    []string
@@ -110,9 +111,9 @@ type ocProbePlan struct {
 	projectID string
 }
 
-// prepareAccountProbe 解算体检入参并把「生成即落账」写入台账, 不发起任何上游请求。
+// prepareAccountProbe 解算体检入参并把「生成即落账」写入指定 Key 的台账, 不发起任何上游请求。
 // 校验失败要立即返回, 避免后台作业带着非法入参空跑。
-func prepareAccountProbe(ctx context.Context, channelID int, accounts []string, count int, modelName string) (*ocProbePlan, error) {
+func prepareAccountProbe(ctx context.Context, channelID int, keyID string, accounts []string, count int, modelName string) (*ocProbePlan, error) {
 	channel, err := op.ChannelGet(channelID)
 	if err != nil {
 		return nil, err
@@ -121,7 +122,11 @@ func prepareAccountProbe(ctx context.Context, channelID int, accounts []string, 
 		return nil, errWarpProbeUnsupported
 	}
 	if !proxyNeedsOpencodeAccount(channel) {
-		return nil, fmt.Errorf("渠道不是含 {account} 代理的 OpenCode 免费档, 无需账号体检")
+		return nil, fmt.Errorf("渠道需配置含 {account} 的代理才能进行账号体检")
+	}
+	selectedKey, err := ocProbeSelectChannelKey(channel, keyID)
+	if err != nil {
+		return nil, err
 	}
 	if modelName == "" {
 		// 默认钉死 deepseek-v4.1-flash-free(模板按它实抓对齐到字节级), 渠道未
@@ -135,12 +140,20 @@ func prepareAccountProbe(ctx context.Context, channelID int, accounts []string, 
 	} else if !ocProbeChannelHasModel(channel, modelName) {
 		return nil, fmt.Errorf("模型 %q 不在渠道模型列表中, 请先同步模型", modelName)
 	}
-	probing, err := ocProbeAccountList(accounts, count)
-	if err != nil {
-		return nil, err
+	var probing []string
+	if channel.Keyed {
+		if selectedKey.ID == "" {
+			return nil, fmt.Errorf("密钥型渠道的 Key 缺少 ID, 请重新保存渠道")
+		}
+		probing = []string{selectedKey.ID}
+	} else {
+		probing, err = ocProbeAccountList(accounts, count)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// 生成即落账: 台账长期保存, 探测结论随后回填, 未探测项供页面筛选。
-	if err := op.UpsertOpencodeGeneratedAccounts(channelID, probing); err != nil {
+	if err := op.UpsertOpencodeGeneratedAccountsForKey(channelID, keyID, probing); err != nil {
 		return nil, err
 	}
 	projectID, err := newOcProbeProjectID()
@@ -149,6 +162,7 @@ func prepareAccountProbe(ctx context.Context, channelID int, accounts []string, 
 	}
 	return &ocProbePlan{
 		channel:     channel,
+		keyID:       keyID,
 		modelName:   modelName,
 		displayName: ocProbeDisplayName(ctx, channel, modelName),
 		accounts:    probing,
@@ -178,7 +192,7 @@ func runAccountProbe(ctx context.Context, plan *ocProbePlan, concurrency int, ti
 			if ctx.Err() != nil {
 				return
 			}
-			result := ocProbeOne(ctx, plan.channel, plan.modelName, plan.displayName, plan.projectID, account, timeout)
+			result := ocProbeOne(ctx, plan.channel, plan.modelName, plan.displayName, plan.projectID, plan.keyID, account, timeout)
 			results[index] = result
 			if onProgress != nil {
 				onProgress(result)
@@ -212,11 +226,12 @@ func runAccountProbe(ctx context.Context, plan *ocProbePlan, concurrency int, ti
 }
 
 // ProbeOpencodeAccounts 并发钉住账号探测免费档渠道, 同步等到全部账号出结论。
+// keyID 指定渠道 Key; keyed 渠道必须给出, 非 keyed 传空沿用首条密钥。
 // accounts 非空时逐个探测(去重), 为空时生成 count 个随机账号; modelName 为空时
 // 自动选渠道首个 chat 协议模型。健康与 403/429 的入池/冷却由 probeOnceWithAccount
 // 的回填逻辑完成, 这里只汇总结论。
-func ProbeOpencodeAccounts(ctx context.Context, channelID int, accounts []string, count, concurrency, timeoutMS int, modelName string) (*AccountProbeReport, error) {
-	plan, err := prepareAccountProbe(ctx, channelID, accounts, count, modelName)
+func ProbeOpencodeAccounts(ctx context.Context, channelID int, keyID string, accounts []string, count, concurrency, timeoutMS int, modelName string) (*AccountProbeReport, error) {
+	plan, err := prepareAccountProbe(ctx, channelID, keyID, accounts, count, modelName)
 	if err != nil {
 		return nil, err
 	}
@@ -538,11 +553,11 @@ func ocProbeChannelMaxOutput(channel model.Channel, modelName string) int {
 // ocProbeOne 钉住单个账号探测一次并归类结论, 结论同步写回台账。
 // 每次调用经 probeOnceWithAccount 铸全新的 opencode 会话号: 账号间、同账号复测间
 // 的 x-opencode-session(及镜像头与 v1 档 msg_ id)互不相同, 避免上游按会话聚合识别。
-func ocProbeOne(ctx context.Context, channel model.Channel, modelName, displayName, projectID, account string, timeout time.Duration) AccountProbeResult {
+func ocProbeOne(ctx context.Context, channel model.Channel, modelName, displayName, projectID, keyID, account string, timeout time.Duration) AccountProbeResult {
 	result := AccountProbeResult{Account: account, Outcome: ocProbeOutcomeError}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	probe, err := probeOnceWithAccount(probeCtx, channel, modelName, account, func(format llm.APIFormat) (*httpclient.Request, error) {
+	probe, err := probeOnceWithAccount(probeCtx, channel, modelName, keyID, account, func(format llm.APIFormat) (*httpclient.Request, error) {
 		return ocProbeRawRequest(format, channel, modelName, displayName, projectID, ocProbeRandomQuestion(), ocProbeChannelMaxOutput(channel, modelName))
 	}, false)
 	switch {
@@ -563,7 +578,7 @@ func ocProbeOne(ctx context.Context, channel model.Channel, modelName, displayNa
 		result.Detail = probe.Detail
 		result.LatencyMS = probe.LatencyMS
 	}
-	if saveErr := op.SaveOpencodeProbeResult(channel.ID, account, result.Outcome, result.Status, time.Now()); saveErr != nil {
+	if saveErr := op.SaveOpencodeProbeResultForKey(channel.ID, keyID, account, result.Outcome, result.Status, time.Now()); saveErr != nil {
 		log.Warnf("账号体检结论落账失败: %v", saveErr)
 	}
 	return result
@@ -577,6 +592,7 @@ const ocAutoProbeMaxPerChannel = ocProbeMaxAccounts
 
 // OpencodeAccountLedgerItem 是台账中单个账号的展示条目。
 type OpencodeAccountLedgerItem struct {
+	KeyID           string    `json:"key_id"`
 	Account         string    `json:"account"`
 	State           string    `json:"state"`
 	Outcome         string    `json:"outcome"`
@@ -595,15 +611,16 @@ type OpencodeAccountLedgerItem struct {
 	ProbeSuccessCount int64 `json:"probe_success_count"`
 }
 
-// OpencodeAccountLedger 是某渠道账号台账的筛选视图。
+// OpencodeAccountLedger 是某渠道指定 Key 账号台账的筛选视图。
 type OpencodeAccountLedger struct {
 	ChannelID int                         `json:"channel_id"`
+	KeyID     string                      `json:"key_id"`
 	Items     []OpencodeAccountLedgerItem `json:"items"`
 	Total     int                         `json:"total"`
 	Usable    int                         `json:"usable"`
 	// Untested 为今日既未体检也未成功的账号数。
-	Untested  int                         `json:"untested"`
-	Unusable  int                         `json:"unusable"`
+	Untested int `json:"untested"`
+	Unusable int `json:"unusable"`
 	// ProbeError 是最近一次体检遇基础设施故障(网络/代理/上游 5xx)的账号数:
 	// 不代表账号被封, 单独筛选便于复测。
 	ProbeError int `json:"probe_error"`
@@ -611,13 +628,13 @@ type OpencodeAccountLedger struct {
 	Historic int `json:"historic"`
 }
 
-// ListOpencodeAccountStates 返回渠道账号台账并按状态派生与筛选。
-// filter: all(默认)/usable/untested/unusable/error/historic。派生口径:
+// ListOpencodeAccountStates 返回渠道指定 Key 的账号台账并按状态派生与筛选。
+// keyID 为空时读旧单 Key 台账; filter: all(默认)/usable/untested/unusable/error/historic。派生口径:
 // 可用 = 未冷却且(最近探测健康 或 7 天内有转发成功); 今日未测试 = 今日既无体检也无成功;
 // 不可用 = 冷却中或最近探测被上游拒绝; 网络错误 = 最近探测遇基础设施故障且无在效成功;
 // 历史可用 = 累计成功过(success_count > 0, 不依赖 last_success_at, 免受存量脏数据干扰)。
 // 条目默认按「真实成功 + 体检成功」降序, 同数按账号名升序, 好号置顶。
-func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLedger, error) {
+func ListOpencodeAccountStates(channelID int, keyID, filter string) (*OpencodeAccountLedger, error) {
 	channel, err := op.ChannelGet(channelID)
 	if err != nil {
 		return nil, err
@@ -628,13 +645,13 @@ func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLe
 	if !proxyNeedsOpencodeAccount(channel) {
 		return nil, fmt.Errorf("渠道不是含 {account} 代理的 OpenCode 免费档, 无账号台账")
 	}
-	rows, err := op.LoadOpencodeProxyAccounts(channelID)
+	rows, err := op.LoadOpencodeProxyAccountsForKey(channelID, keyID)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
 	today := now.Format("2006-01-02")
-	ledger := &OpencodeAccountLedger{ChannelID: channelID}
+	ledger := &OpencodeAccountLedger{ChannelID: channelID, KeyID: keyID}
 	for _, row := range rows {
 		state := ocAccountLedgerState(row, now)
 		hasSuccess := row.SuccessCount > 0
@@ -666,6 +683,7 @@ func ListOpencodeAccountStates(channelID int, filter string) (*OpencodeAccountLe
 			continue
 		}
 		ledger.Items = append(ledger.Items, OpencodeAccountLedgerItem{
+			KeyID:             row.KeyID,
 			Account:           row.Account,
 			State:             state,
 			Outcome:           row.LastProbeOutcome,
@@ -719,8 +737,8 @@ func ocAccountLedgerState(row model.OpencodeProxyAccount, now time.Time) string 
 	return "unusable"
 }
 
-// DeleteOpencodeAccountsFromLedger 从台账删除指定账号。
-func DeleteOpencodeAccountsFromLedger(channelID int, accounts []string) (int64, error) {
+// DeleteOpencodeAccountsFromLedger 从指定 Key 的台账删除账号。
+func DeleteOpencodeAccountsFromLedger(channelID int, keyID string, accounts []string) (int64, error) {
 	if len(accounts) == 0 {
 		return 0, nil
 	}
@@ -731,25 +749,23 @@ func DeleteOpencodeAccountsFromLedger(channelID int, accounts []string) (int64, 
 			cleaned = append(cleaned, account)
 		}
 	}
-	deleted, err := op.DeleteOpencodeProxyAccounts(channelID, cleaned)
+	deleted, err := op.DeleteOpencodeProxyAccountsForKey(channelID, keyID, cleaned)
 	if err != nil {
 		return 0, err
 	}
 	// 同步清理进程内池, 避免被删账号在本轮继续被选中。
-	if poolValue, ok := ocProxyPools.Load(channelID); ok {
-		pool := poolValue.(*ocProxyPool)
-		pool.mu.Lock()
-		for _, account := range cleaned {
-			delete(pool.accounts, account)
-		}
-		pool.mu.Unlock()
+	pool := ocProxyPoolForKey(channelID, keyID)
+	pool.mu.Lock()
+	for _, account := range cleaned {
+		delete(pool.accounts, account)
 	}
+	pool.mu.Unlock()
 	return deleted, nil
 }
 
-// AutoProbeOpencodeAccounts 对启用 {account} 代理的免费档渠道执行到期账号体检。
+// AutoProbeOpencodeAccounts 对启用 {account} 代理的免费档渠道执行体检。
 // 由后台任务每 24 小时调用; 开关(opencode_account_auto_probe)关闭时直接返回。
-// 到期 = 距上次体检超过周期(未探测的生成账号立即到期), 单渠道单轮上限与单次体检对齐。
+// 普通渠道按到期列表体检; keyed 渠道每个 Key 每轮只体检其固定账号。
 func AutoProbeOpencodeAccounts(ctx context.Context) error {
 	enabled, err := op.SettingGetBool(model.SettingKeyOpencodeAccountAutoProbe)
 	if err != nil {
@@ -765,22 +781,45 @@ func AutoProbeOpencodeAccounts(ctx context.Context) error {
 		if isWarpProxy(channel) {
 			continue
 		}
-		rows, err := op.LoadOpencodeProxyAccounts(channel.ID)
-		if err != nil {
-			log.Warnf("渠道 %d 账号台账读取失败, 跳过自动体检: %v", channel.ID, err)
+		if !channel.Keyed {
+			autoProbeOpencodeChannelKey(ctx, channel, "")
 			continue
 		}
-		due := ocAutoProbeDueAccounts(rows, time.Now(), ocAutoProbeInterval)
-		if len(due) == 0 {
-			continue
+		for _, key := range channelKeyTestCandidates(channel) {
+			if key.ID == "" {
+				continue
+			}
+			autoProbeOpencodeKeyedChannelKey(ctx, channel, key.ID)
 		}
-		if _, err := ProbeOpencodeAccounts(ctx, channel.ID, due, 0, ocProbeDefaultConcurrency, 0, ocProbeDefaultModelName(channel)); err != nil {
-			log.Warnf("渠道 %d 自动体检失败: %v", channel.ID, err)
-			continue
-		}
-		log.Infof("渠道 %d 自动体检完成: %d 个账号", channel.ID, len(due))
 	}
 	return nil
+}
+
+// autoProbeOpencodeChannelKey 体检指定 Key 的到期账号。
+func autoProbeOpencodeChannelKey(ctx context.Context, channel model.Channel, keyID string) {
+	rows, err := op.LoadOpencodeProxyAccountsForKey(channel.ID, keyID)
+	if err != nil {
+		log.Warnf("渠道 %d 账号台账读取失败, 跳过自动体检: %v", channel.ID, err)
+		return
+	}
+	due := ocAutoProbeDueAccounts(rows, time.Now(), ocAutoProbeInterval)
+	if len(due) == 0 {
+		return
+	}
+	if _, err := ProbeOpencodeAccounts(ctx, channel.ID, keyID, due, 0, ocProbeDefaultConcurrency, 0, ocProbeDefaultModelName(channel)); err != nil {
+		log.Warnf("渠道 %d 自动体检失败: %v", channel.ID, err)
+		return
+	}
+	log.Infof("渠道 %d 自动体检完成: %d 个账号", channel.ID, len(due))
+}
+
+// autoProbeOpencodeKeyedChannelKey 体检 keyed 渠道中由 Key.ID 固定的唯一账号。
+func autoProbeOpencodeKeyedChannelKey(ctx context.Context, channel model.Channel, keyID string) {
+	if _, err := ProbeOpencodeAccounts(ctx, channel.ID, keyID, []string{keyID}, 0, ocProbeDefaultConcurrency, 0, ocProbeDefaultModelName(channel)); err != nil {
+		log.Warnf("渠道 %d 密钥 %s 自动体检失败: %v", channel.ID, keyID, err)
+		return
+	}
+	log.Infof("渠道 %d 密钥 %s 自动体检完成: 1 个账号", channel.ID, keyID)
 }
 
 // ocProbeDefaultModelName 返回体检的默认探测模型: 钉死 deepseek-v4.1-flash-free

@@ -1,12 +1,90 @@
 package relay
 
 import (
+	"context"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/stretchr/testify/assert"
 )
+
+// TestProxyNeedsOpencodeAccountKeyed keyed 免费渠道配置 {account} 代理后仍走 IP 账号池。
+func TestProxyNeedsOpencodeAccountKeyed(t *testing.T) {
+	proxy := "socks5h://Default.{account}:token@resin.test:2260"
+	base := model.Channel{
+		OpencodeCompat: true,
+		BaseURL:        "https://opencode.ai/inference",
+		ChannelProxy:   &proxy,
+	}
+	assert.True(t, proxyNeedsOpencodeAccount(base), "普通免费渠道应进入 IP 账号池")
+
+	keyed := base
+	keyed.Keyed = true
+	assert.True(t, proxyNeedsOpencodeAccount(keyed), "keyed 渠道配置 {account} 后应按 Key 进入 IP 账号池")
+
+	keyedNoProxy := keyed
+	keyedNoProxy.ChannelProxy = nil
+	assert.False(t, proxyNeedsOpencodeAccount(keyedNoProxy), "keyed 渠道未配置代理时不进入账号池")
+
+	notPlaceholder := base
+	plainProxy := "http://127.0.0.1:7890"
+	notPlaceholder.ChannelProxy = &plainProxy
+	assert.False(t, proxyNeedsOpencodeAccount(notPlaceholder), "没有 {account} 的代理不走账号池")
+
+	notFree := base
+	notFree.OpencodeCompat = false
+	assert.False(t, proxyNeedsOpencodeAccount(notFree), "非免费档不走账号池")
+}
+
+// TestOcProxyPoolForKeyIsolation 验证同渠道不同 Key 的账号池互不共用。
+func TestOcProxyPoolForKeyIsolation(t *testing.T) {
+	const channelID = 980006
+	poolA := ocProxyPoolForKey(channelID, "key-a")
+	poolA.loaded = true
+	poolA.accounts["key-a"] = &ocProxyAccount{account: "key-a", verified: true, lastSuccessAt: time.Now()}
+	poolB := ocProxyPoolForKey(channelID, "key-b")
+	poolB.loaded = true
+	poolB.accounts["key-b"] = &ocProxyAccount{account: "key-b", verified: true, lastSuccessAt: time.Now()}
+	keyA := ocProxyPoolKey{channelID: channelID, keyID: "key-a"}
+	keyB := ocProxyPoolKey{channelID: channelID, keyID: "key-b"}
+	t.Cleanup(func() {
+		ocProxyKeyPools.Delete(keyA)
+		ocProxyKeyPools.Delete(keyB)
+	})
+
+	ctx := context.Background()
+	assert.Equal(t, "key-a", pickOpencodeProxyAccountForKey(ctx, channelID, "key-a", "s1"))
+	assert.Equal(t, "key-b", pickOpencodeProxyAccountForKey(ctx, channelID, "key-b", "s2"))
+	releaseOpencodeProxyAccountForKey(channelID, "key-a", "key-a", "s1")
+	releaseOpencodeProxyAccountForKey(channelID, "key-b", "key-b", "s2")
+}
+
+// TestOcProxyFixedAccountSingleSession 验证 keyed 渠道只使用固定 Key.ID 账号,
+// 不同活跃会话不会生成额外账号, 会话释放后同一账号可复用。
+func TestOcProxyFixedAccountSingleSession(t *testing.T) {
+	const channelID = 980007
+	const keyID = "0123456789abcdef"
+	poolKey := ocProxyPoolKey{channelID: channelID, keyID: keyID}
+	t.Cleanup(func() { ocProxyKeyPools.Delete(poolKey) })
+	pool := ocProxyPoolForKey(channelID, keyID)
+	pool.loaded = true
+
+	ctx := context.Background()
+	assert.Equal(t, keyID, pickOpencodeProxyAccountForKey(ctx, channelID, keyID, "s1"))
+	assert.Equal(t, "", pickOpencodeProxyAccountForKey(ctx, channelID, keyID, "s2"))
+
+	pool.mu.Lock()
+	assert.Len(t, pool.accounts, 1)
+	_, ok := pool.accounts[keyID]
+	pool.mu.Unlock()
+	assert.True(t, ok, "keyed 渠道不能生成固定账号之外的账号")
+
+	releaseOpencodeProxyAccountForKey(channelID, keyID, keyID, "s1")
+	assert.Equal(t, keyID, pickOpencodeProxyAccountForKey(ctx, channelID, keyID, "s2"))
+	releaseOpencodeProxyAccountForKey(channelID, keyID, keyID, "s2")
+}
 
 // TestTrimLockedEvictsUnverifiedFirst 内存满额淘汰与库内同口径:
 // 先清从未成功过的账号, 哪怕已验证号更久未活跃或未成功号仍在冷却。

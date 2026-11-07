@@ -178,7 +178,7 @@ func TestEnsureFreeBuiltinChannelsClearsCustomFreeFlag(t *testing.T) {
 }
 
 func TestBuiltinFreeChannelsDefinitions(t *testing.T) {
-	if got, want := len(BuiltinFreeChannels), 17; got != want {
+	if got, want := len(BuiltinFreeChannels), 20; got != want {
 		t.Fatalf("BuiltinFreeChannels count = %d, want %d", got, want)
 	}
 	seen := make(map[string]bool, len(BuiltinFreeChannels))
@@ -210,6 +210,65 @@ func TestBuiltinFreeChannelsDefinitions(t *testing.T) {
 		if len(def.Models) == 0 {
 			t.Fatalf("builtin free channel %q should ship a fallback model list", def.Name)
 		}
+	}
+}
+
+func TestBuiltinFreeChannelsKeepLegacyOpencodeNames(t *testing.T) {
+	byName := make(map[string]model.Channel)
+	for _, def := range BuiltinFreeChannels {
+		if def.OpencodeCompat {
+			byName[def.Name] = def
+		}
+	}
+	want := map[string]string{
+		"OpenCode Free":     "v2",
+		"OpenCode Free Old": "v1",
+		"OpenCode Free V2":  "v2",
+		"OpenCode Free V1":  "v1",
+	}
+	for name, lane := range want {
+		def, ok := byName[name]
+		if !ok {
+			t.Fatalf("channel %q missing", name)
+		}
+		if def.OpencodeLane != lane {
+			t.Fatalf("channel %q lane = %q, want %q", name, def.OpencodeLane, lane)
+		}
+		if def.BaseURL != "https://opencode.ai/inference" {
+			t.Fatalf("channel %q base_url = %q, want inference endpoint", name, def.BaseURL)
+		}
+	}
+}
+
+func TestBuiltinKeyedOpencodeFreeChannel(t *testing.T) {
+	var def *model.Channel
+	for i := range BuiltinFreeChannels {
+		if BuiltinFreeChannels[i].Name == "OpenCode Free V1 账号池" {
+			def = &BuiltinFreeChannels[i]
+			break
+		}
+	}
+	if def == nil {
+		t.Fatal("BuiltinFreeChannels should contain OpenCode Free V1 账号池")
+	}
+	if !def.Keyed {
+		t.Fatal("keyed channel should mark Keyed=true")
+	}
+	if def.Key != "" || def.ChannelProxy != nil {
+		t.Fatalf("keyed channel should have no public Key or proxy: key=%q proxy=%v", def.Key, def.ChannelProxy)
+	}
+	if !def.OpencodeCompat || def.OpencodeLane != "v1" {
+		t.Fatalf("keyed channel shape = compat%v lane%q, want v1", def.OpencodeCompat, def.OpencodeLane)
+	}
+	stored := freeChannelFromDefinition(*def)
+	if !stored.IsFree || !stored.Builtin || stored.Enabled {
+		t.Fatalf("keyed channel defaults wrong: IsFree=%v Builtin=%v Enabled=%v", stored.IsFree, stored.Builtin, stored.Enabled)
+	}
+	if stored.Key != "" || len(stored.Keys) != 0 {
+		t.Fatalf("keyed channel must start without keys: key=%q keys=%d", stored.Key, len(stored.Keys))
+	}
+	if len(stored.Models) == 0 {
+		t.Fatal("keyed channel should ship fallback models")
 	}
 }
 

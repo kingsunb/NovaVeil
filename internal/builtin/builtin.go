@@ -1,7 +1,7 @@
 // Package builtin 维护 NovaVeil 出厂内置的固定渠道/提供商，分为两类：
 //
-//   - 免费渠道（BuiltinFreeChannels）：IsFree=true，出厂启用、内置 Key、预置模型
-//     列表，开箱即用但 AutoSync/Proxy 默认关闭，管理员按需开启。
+//   - 免费渠道（BuiltinFreeChannels）：IsFree=true，普通渠道出厂启用并内置 Key；
+//     keyed 渠道无 Key 默认禁用。均预置模型列表，AutoSync/Proxy 默认关闭，管理员按需开启。
 //   - 官方渠道（BuiltinOfficialChannels）：IsFree=false，出厂禁用、无 Key、无
 //     模型，管理员需自行输入 API Key、拉取模型并启用后参与路由。
 //
@@ -40,7 +40,7 @@ func init() {
 //   - Name/Type/BaseURL/Models 必须填；
 //   - IsFree 与 Builtin 由 freeChannelFromDefinition 强制写入 true，
 //     不需要在条目里重复设置；
-//   - Enabled 默认 true；
+//   - Enabled 默认 true（keyed 免费渠道除外：无 Key 出厂禁用）；
 //   - AutoSync 默认 true：内置免费渠道跟随上游模型列表，服务启动后会触发一次同步
 //     任务（仅对开启 AutoSync 的渠道拉取 /v1/models 与目录）。预置的种子模型标记为
 //     auto，同步成功即被上游真实列表替换，失败时仍可兜底。代价是每次启动都会向
@@ -54,8 +54,13 @@ func init() {
 //
 //   - OpenCode Free V2：公开免费端点，OpenAI Compatible；需要 OpenCode 会话头，
 //     后端 OpencodeCompat 机制负责注入 x-opencode-session。
+//   - OpenCode Free / OpenCode Free Old：V2/V1 的旧名兼容条目，复用线上存量
+//     渠道与代理账号池，新库会与 V2/V1 并存。
 //   - OpenCode Free V1 备用1 / 备用2：V1 的同构副本，默认停用，供实例单独挂
 //     resin/WARP 代理做出出口隔离与容灾。
+//   - OpenCode Free V1 账号池：密钥型免费渠道，无 public Key、默认无代理，
+//     出厂禁用；管理员配置真实 Key 后启用，Key 走轮询，配置 {account} 代理后
+//     按 Key 分区进入 IP 账号池；每个 Key 的账号固定为 Key.ID，不随机生成。
 //   - AI Horde Free：社区志愿算力，OpenAI Compatible 匿名端点；匿名 key 固定为
 //     0000000000，队列式响应较慢，不保证工具调用。
 //   - Pollinations Free：免 key OpenAI Compatible 端点，模型列表较大，
@@ -113,6 +118,64 @@ var BuiltinFreeChannels = []model.Channel{
 		//   - 额外发送 x-opencode-request(msg_ 递增 id), v2 形态也发此头(2026-10-30 实抓)。
 		// 两条渠道都打 /inference, 形态由 OpencodeLane 显式指定, 不再由 BaseURL 推断。
 		Name:           "OpenCode Free V1",
+		Type:           model.ChannelProviderOpenAI,
+		BaseURL:        "https://opencode.ai/inference",
+		Key:            "public",
+		OpencodeCompat: true,
+		OpencodeLane:   "v1",
+		Models: []model.ChannelModel{
+			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+		},
+	},
+	{
+		// Keyed 免费档: 不带内置 public Key, 默认不配代理;
+		// 管理员配置真实 Key 后启用; 配置 {account} 代理后按 Key 分区入池,
+		// 每个 Key 的账号固定为 Key.ID, 不随机生成。
+		Name:           "OpenCode Free V1 账号池",
+		Type:           model.ChannelProviderOpenAI,
+		BaseURL:        "https://opencode.ai/inference",
+		Keyed:          true,
+		OpencodeCompat: true,
+		OpencodeLane:   "v1",
+		Models: []model.ChannelModel{
+			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+		},
+	},
+	// 旧名兼容: 复用线上存量渠道与账号池。
+	{
+		Name:           "OpenCode Free",
+		Type:           model.ChannelProviderOpenAI,
+		BaseURL:        "https://opencode.ai/inference",
+		Key:            "public",
+		OpencodeCompat: true,
+		OpencodeLane:   "v2",
+		Models: []model.ChannelModel{
+			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
+			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
+		},
+	},
+	{
+		Name:           "OpenCode Free Old",
 		Type:           model.ChannelProviderOpenAI,
 		BaseURL:        "https://opencode.ai/inference",
 		Key:            "public",
@@ -598,15 +661,19 @@ func sealBuiltinChannelForDB(channel model.Channel) (model.Channel, error) {
 // ---------------------------------------------------------------------------
 
 // freeChannelFromDefinition 返回一份可安全写入数据库的免费渠道副本：
-// 强制 IsFree=true/Builtin=true/Enabled=true，并清空 ID 与模型关联 ID。
+// 强制 IsFree=true/Builtin=true；普通免费渠道默认启用，keyed 免费渠道无 Key 默认禁用。
 func freeChannelFromDefinition(def model.Channel) model.Channel {
 	channel := def
 	channel.ID = 0
-	channel.Enabled = true
+	channel.Enabled = !def.Keyed
 	channel.IsFree = true
 	channel.Builtin = true
 	// 内置免费渠道跟随上游模型列表: 出厂开启自动同步, 种子模型标 auto 由同步替换。
 	channel.AutoSync = true
+	if def.Keyed {
+		channel.Key = ""
+		channel.Keys = nil
+	}
 
 	channel.Keys = append([]model.ChannelKey(nil), channel.Keys...)
 	channel.Models = append([]model.ChannelModel(nil), channel.Models...)

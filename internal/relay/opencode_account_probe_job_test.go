@@ -65,7 +65,7 @@ func TestStartOpencodeAccountProbeRunsInBackground(t *testing.T) {
 		}
 	}
 
-	job, err := StartOpencodeAccountProbe(context.Background(), channel.ID, []string{"probe-acct"}, 0, 1, 1000, "")
+	job, err := StartOpencodeAccountProbe(context.Background(), channel.ID, "", []string{"probe-acct"}, 0, 1, 1000, "")
 	if err != nil {
 		t.Fatalf("启动后台体检失败: %v", err)
 	}

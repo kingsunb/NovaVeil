@@ -29,6 +29,7 @@ const (
 type OpencodeProbeJob struct {
 	JobID      string               `json:"job_id"`
 	ChannelID  int                  `json:"channel_id"`
+	KeyID      string               `json:"key_id"`
 	Model      string               `json:"model"`
 	State      string               `json:"state"`
 	Total      int                  `json:"total"`
@@ -58,10 +59,10 @@ var ocProbeJobs = struct {
 }{items: map[string]*ocProbeJobEntry{}}
 
 // StartOpencodeAccountProbe 启动后台体检作业并立即返回。
-// 作业上下文独立于调用方的 HTTP 请求, 因此请求返回后体检继续在后台跑完;
+// keyID 指定渠道 Key; 作业上下文独立于调用方的 HTTP 请求, 因此请求返回后体检继续在后台跑完;
 // 作业整体时限到点后, 在途探测被取消, 未开始的账号记为已取消。
-func StartOpencodeAccountProbe(ctx context.Context, channelID int, accounts []string, count, concurrency, timeoutMS int, modelName string) (OpencodeProbeJob, error) {
-	plan, err := prepareAccountProbe(ctx, channelID, accounts, count, modelName)
+func StartOpencodeAccountProbe(ctx context.Context, channelID int, keyID string, accounts []string, count, concurrency, timeoutMS int, modelName string) (OpencodeProbeJob, error) {
+	plan, err := prepareAccountProbe(ctx, channelID, keyID, accounts, count, modelName)
 	if err != nil {
 		return OpencodeProbeJob{}, err
 	}
@@ -91,6 +92,7 @@ func StartOpencodeAccountProbe(ctx context.Context, channelID int, accounts []st
 		job: OpencodeProbeJob{
 			JobID:     newOcProbeJobID(),
 			ChannelID: plan.channel.ID,
+			KeyID:     plan.keyID,
 			Model:     plan.modelName,
 			State:     ocProbeJobStateRunning,
 			Total:     len(plan.accounts),

@@ -551,6 +551,177 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     expect(screen.queryByRole("button", { name: "开始体检" })).not.toBeInTheDocument();
   });
 
+  it("密钥型渠道展示逐 Key 体检, 不展示 IP 账号下拉", async () => {
+    const keyTestBodies: Array<Record<string, unknown>> = [];
+    const urls: string[] = [];
+    const keyedChannel = eligibleChannel({
+      id: 11,
+      name: "OpenCode Free V1 账号池",
+      enabled: false,
+      keyed: true,
+      channel_proxy: "",
+      key_masked: "sk-****a",
+      keys: [{ id: "key-a", key_masked: "sk-****a" }],
+      models: [{ id: 110, channel_id: 11, name: "model-a", source: "auto" }],
+    });
+
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("/channel/test_keys")) {
+        keyTestBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return jsonResponse([
+          { key_id: "key-a", label: "主 Key", ok: true, content: "ok", elapsed_ms: 120 },
+          { key_id: "key-b", label: "备用 Key", ok: false, error: "401", elapsed_ms: 80 },
+        ]);
+      }
+      if (url.includes("/channel/list")) return jsonResponse([keyedChannel]);
+      if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
+      return jsonResponse(null);
+    }));
+
+    render(
+      <Wrapper>
+        <ProxyAccountsPage />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByText("密钥渠道体检")).toBeInTheDocument();
+    expect(screen.getByText("OpenCode Free V1 账号池（未启用）")).toBeInTheDocument();
+    expect(screen.queryByLabelText("体检渠道")).not.toBeInTheDocument();
+    expect(screen.queryByText(/没有可体检的渠道/)).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "测试全部密钥" }));
+
+    expect(await screen.findByText("主 Key")).toBeInTheDocument();
+    expect(screen.getByText("备用 Key")).toBeInTheDocument();
+    expect(screen.getByText("成功")).toBeInTheDocument();
+    expect(screen.getByText("失败")).toBeInTheDocument();
+    expect(screen.getByText("120 ms")).toBeInTheDocument();
+    await waitFor(() => expect(keyTestBodies).toHaveLength(1));
+    expect(keyTestBodies[0]).toEqual({ id: 11, model: "model-a" });
+    expect(urls.some((url) => url.includes("/channel/proxy-accounts?"))).toBe(false);
+  });
+
+  it("keyed 渠道配置 {account} 代理后按所选 Key 体检账号池", async () => {
+    const ledgerUrls: string[] = [];
+    const probeBodies: Array<Record<string, unknown>> = [];
+    const deleteBodies: Array<Record<string, unknown>> = [];
+    const keyedPoolChannel = eligibleChannel({
+      id: 12,
+      name: "OpenCode Free V1 账号池",
+      keyed: true,
+      keys: [
+        { id: "key-a", key_masked: "sk-****a", remark: "主 Key" },
+        { id: "key-b", key_masked: "sk-****b", remark: "备用 Key" },
+      ],
+      models: [{ id: 120, channel_id: 12, name: "model-a", source: "auto" }],
+    });
+
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/channel/proxy-accounts?")) {
+        ledgerUrls.push(url);
+        return ledgerFor(url);
+      }
+      if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
+      if (url.includes("/channel/proxy-accounts/probe/")) return jsonResponse(jobDone);
+      if (url.includes("/channel/proxy-accounts/probe")) {
+        probeBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return jsonResponse(jobStart);
+      }
+      if (url.includes("/channel/proxy-accounts")) {
+        deleteBodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return jsonResponse({ deleted: 1 });
+      }
+      if (url.includes("/channel/list")) return jsonResponse([keyedPoolChannel]);
+      return jsonResponse(null);
+    }));
+
+    render(
+      <Wrapper>
+        <ProxyAccountsPage />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByText("opencode0a1b2c3d")).toBeInTheDocument();
+    expect(screen.getByLabelText("体检渠道")).toBeInTheDocument();
+    expect(screen.getByLabelText("渠道密钥")).toHaveValue("key-a");
+    expect(screen.queryByLabelText("生成数量")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        ledgerUrls.some(
+          (url) => url.includes("channel_id=12") && url.includes("key_id=key-a"),
+        ),
+      ).toBe(true),
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "开始体检" }));
+    await waitFor(() => expect(probeBodies).toHaveLength(1));
+    expect(probeBodies[0]).toEqual({
+      channel_id: 12,
+      key_id: "key-a",
+      accounts: ["key-a"],
+      concurrency: 10,
+      model: "model-a",
+    });
+    expect(await screen.findByText("健康 1")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "开始体检" })).toBeEnabled(),
+    );
+
+    await user.selectOptions(screen.getByLabelText("渠道密钥"), "key-b");
+    expect(screen.getByLabelText("渠道密钥")).toHaveValue("key-b");
+    expect(screen.queryByText("健康 1")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        ledgerUrls.some(
+          (url) => url.includes("channel_id=12") && url.includes("key_id=key-b"),
+        ),
+      ).toBe(true),
+    );
+    expect(await screen.findByText("opencode0a1b2c3d")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "删除" })[0]);
+    await user.click(screen.getByRole("button", { name: /再次点击确认/ }));
+    await waitFor(() => expect(deleteBodies).toHaveLength(1));
+    expect(deleteBodies[0]).toEqual({
+      channel_id: 12,
+      accounts: ["opencode0a1b2c3d"],
+      key_id: "key-b",
+    });
+  });
+
+  it("keyed 渠道 keys 为 null 时不崩溃", async () => {
+    const keyedChannel = eligibleChannel({
+      id: 13,
+      name: "OpenCode Free V1 账号池",
+      enabled: false,
+      keyed: true,
+      channel_proxy: "",
+      key_masked: "sk-****a",
+      keys: null as unknown as Channel["keys"],
+    });
+
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/channel/list")) return jsonResponse([keyedChannel]);
+      if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
+      return jsonResponse(null);
+    }));
+
+    render(
+      <Wrapper>
+        <ProxyAccountsPage />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByText("密钥渠道体检")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "测试全部密钥" })).toBeEnabled();
+  });
+
   it("台账分页: 默认 100 条一页, 可翻页并调整每页条数", async () => {
     const bigLedger = {
       channel_id: 7,

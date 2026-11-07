@@ -13,14 +13,19 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// LoadOpencodeProxyAccounts 读取某渠道已记录的代理账号, 供进程内池懒加载。
+// LoadOpencodeProxyAccounts 读取某渠道旧单 Key 的代理账号。
 func LoadOpencodeProxyAccounts(channelID int) ([]model.OpencodeProxyAccount, error) {
+	return LoadOpencodeProxyAccountsForKey(channelID, "")
+}
+
+// LoadOpencodeProxyAccountsForKey 读取某渠道指定 Key 的代理账号, 供进程内池懒加载。
+func LoadOpencodeProxyAccountsForKey(channelID int, keyID string) ([]model.OpencodeProxyAccount, error) {
 	conn := db.GetDB()
 	if conn == nil {
 		return nil, nil
 	}
 	var rows []model.OpencodeProxyAccount
-	if err := conn.Where("channel_id = ?", channelID).Find(&rows).Error; err != nil {
+	if err := conn.Where("channel_id = ? AND key_id = ?", channelID, keyID).Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("读取代理账号失败: %w", err)
 	}
 	return rows, nil
@@ -29,18 +34,27 @@ func LoadOpencodeProxyAccounts(channelID int) ([]model.OpencodeProxyAccount, err
 // SaveOpencodeProxySuccess 记录一次下游真实转发成功: 更新最近成功时间, 累计总成功
 // 与真实成功数并按自然日(0 点到 24 点)去重累计成功天数; 不存在则插入。
 func SaveOpencodeProxySuccess(channelID int, account string, at time.Time) error {
-	return saveOpencodeAccountSuccess(channelID, account, at, "real_success_count")
+	return SaveOpencodeProxySuccessForKey(channelID, "", account, at)
 }
 
-// SaveOpencodeProxyProbeSuccess 记录一次体检探测成功: 计数口径与真实转发共用
-// 最近成功时间与成功天数, 仅拆分计数列。
+// SaveOpencodeProxySuccessForKey 记录指定 Key 的一次下游真实转发成功。
+func SaveOpencodeProxySuccessForKey(channelID int, keyID, account string, at time.Time) error {
+	return saveOpencodeAccountSuccessForKey(channelID, keyID, account, at, "real_success_count")
+}
+
+// SaveOpencodeProxyProbeSuccess 记录旧单 Key 的一次体检探测成功。
 func SaveOpencodeProxyProbeSuccess(channelID int, account string, at time.Time) error {
-	return saveOpencodeAccountSuccess(channelID, account, at, "probe_success_count")
+	return SaveOpencodeProxyProbeSuccessForKey(channelID, "", account, at)
 }
 
-// saveOpencodeAccountSuccess 是两类成功记录的公共 upsert: counterColumn 取
+// SaveOpencodeProxyProbeSuccessForKey 记录指定 Key 的一次体检探测成功。
+func SaveOpencodeProxyProbeSuccessForKey(channelID int, keyID, account string, at time.Time) error {
+	return saveOpencodeAccountSuccessForKey(channelID, keyID, account, at, "probe_success_count")
+}
+
+// saveOpencodeAccountSuccessForKey 是两类成功记录的公共 upsert: counterColumn 取
 // real_success_count / probe_success_count, 插入行对应列置 1。
-func saveOpencodeAccountSuccess(channelID int, account string, at time.Time, counterColumn string) error {
+func saveOpencodeAccountSuccessForKey(channelID int, keyID, account string, at time.Time, counterColumn string) error {
 	conn := db.GetDB()
 	if conn == nil {
 		return nil
@@ -48,6 +62,7 @@ func saveOpencodeAccountSuccess(channelID int, account string, at time.Time, cou
 	day := at.Format("2006-01-02")
 	row := model.OpencodeProxyAccount{
 		ChannelID:      channelID,
+		KeyID:          keyID,
 		Account:        account,
 		LastSuccessAt:  at,
 		Source:         model.OpencodeAccountSourceTraffic,
@@ -61,7 +76,7 @@ func saveOpencodeAccountSuccess(channelID int, account string, at time.Time, cou
 		row.RealSuccessCount = 1
 	}
 	result := conn.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "channel_id"}, {Name: "account"}},
+		Columns: []clause.Column{{Name: "channel_id"}, {Name: "key_id"}, {Name: "account"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"last_success_at":  at,
 			"updated_at":       time.Now(),
@@ -91,13 +106,18 @@ const ocProxyFailureWindowLimit = 6
 // 计数加一; 计满 6 次窗口清零(起点归零)。该行仍在冷却中时只加总失败数,
 // 窗口与冷却截止不动。成功字段与冷却截止时间不在这里改。
 func SaveOpencodeProxyRealFailure(channelID int, account string) error {
+	return SaveOpencodeProxyRealFailureForKey(channelID, "", account)
+}
+
+// SaveOpencodeProxyRealFailureForKey 累计指定 Key 的一次下游真实转发失败。
+func SaveOpencodeProxyRealFailureForKey(channelID int, keyID, account string) error {
 	conn := db.GetDB()
 	if conn == nil {
 		return nil
 	}
 	now := time.Now()
 	var row model.OpencodeProxyAccount
-	err := conn.Where("channel_id = ? AND account = ?", channelID, account).First(&row).Error
+	err := conn.Where("channel_id = ? AND key_id = ? AND account = ?", channelID, keyID, account).First(&row).Error
 	notFound := errors.Is(err, gorm.ErrRecordNotFound)
 	if err != nil && !notFound {
 		return err
@@ -105,6 +125,7 @@ func SaveOpencodeProxyRealFailure(channelID int, account string) error {
 	if notFound {
 		row = model.OpencodeProxyAccount{
 			ChannelID: channelID,
+			KeyID:     keyID,
 			Account:   account,
 			Source:    model.OpencodeAccountSourceTraffic,
 		}
@@ -124,7 +145,7 @@ func SaveOpencodeProxyRealFailure(channelID int, account string) error {
 	row.UpdatedAt = now
 	// 原子 upsert: 并发首写不再撞 UNIQUE 竞态。
 	return conn.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "channel_id"}, {Name: "account"}},
+		Columns: []clause.Column{{Name: "channel_id"}, {Name: "key_id"}, {Name: "account"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"real_failure_count":   row.RealFailureCount,
 			"failure_window_start": row.FailureWindowStart,
@@ -137,18 +158,24 @@ func SaveOpencodeProxyRealFailure(channelID int, account string) error {
 // SaveOpencodeProxyCooldown 记录账号冷却截止时间, 不存在则插入。
 // 不伪造最近成功时间: 未成功过的账号冷却行保持零值, 由冷却字段本身驱动可用性。
 func SaveOpencodeProxyCooldown(channelID int, account string, until time.Time) error {
+	return SaveOpencodeProxyCooldownForKey(channelID, "", account, until)
+}
+
+// SaveOpencodeProxyCooldownForKey 记录指定 Key 的账号冷却截止时间。
+func SaveOpencodeProxyCooldownForKey(channelID int, keyID, account string, until time.Time) error {
 	conn := db.GetDB()
 	if conn == nil {
 		return nil
 	}
 	row := model.OpencodeProxyAccount{
 		ChannelID:     channelID,
+		KeyID:         keyID,
 		Account:       account,
 		Source:        model.OpencodeAccountSourceTraffic,
 		CooldownUntil: until,
 	}
 	result := conn.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "channel_id"}, {Name: "account"}},
+		Columns: []clause.Column{{Name: "channel_id"}, {Name: "key_id"}, {Name: "account"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"cooldown_until":       until,
 			"failure_window_start": time.Time{},
@@ -168,6 +195,11 @@ const opencodeAccountBatchSize = 500
 // UpsertOpencodeGeneratedAccounts 把体检页生成/粘贴的账号落账为未探测状态;
 // 已存在的账号不覆盖任何字段。生成即落账, 支撑台账长期展示与筛选。
 func UpsertOpencodeGeneratedAccounts(channelID int, accounts []string) error {
+	return UpsertOpencodeGeneratedAccountsForKey(channelID, "", accounts)
+}
+
+// UpsertOpencodeGeneratedAccountsForKey 把指定 Key 的生成/粘贴账号落账为未探测状态。
+func UpsertOpencodeGeneratedAccountsForKey(channelID int, keyID string, accounts []string) error {
 	conn := db.GetDB()
 	if conn == nil || len(accounts) == 0 {
 		return nil
@@ -177,13 +209,14 @@ func UpsertOpencodeGeneratedAccounts(channelID int, accounts []string) error {
 	for _, account := range accounts {
 		rows = append(rows, model.OpencodeProxyAccount{
 			ChannelID: channelID,
+			KeyID:     keyID,
 			Account:   account,
 			Source:    model.OpencodeAccountSourceGenerated,
 			UpdatedAt: now,
 		})
 	}
 	result := conn.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "channel_id"}, {Name: "account"}},
+		Columns:   []clause.Column{{Name: "channel_id"}, {Name: "key_id"}, {Name: "account"}},
 		DoNothing: true,
 	}).CreateInBatches(&rows, opencodeAccountBatchSize)
 	if result.Error != nil {
@@ -195,12 +228,18 @@ func UpsertOpencodeGeneratedAccounts(channelID int, accounts []string) error {
 // SaveOpencodeProbeResult 记录账号最近一次体检结论; 不存在的账号按体检来源插入。
 // 只更新探测字段, 成功时间与冷却由转发路径的回填逻辑维护。
 func SaveOpencodeProbeResult(channelID int, account string, outcome string, status int, at time.Time) error {
+	return SaveOpencodeProbeResultForKey(channelID, "", account, outcome, status, at)
+}
+
+// SaveOpencodeProbeResultForKey 记录指定 Key 的账号最近一次体检结论。
+func SaveOpencodeProbeResultForKey(channelID int, keyID, account string, outcome string, status int, at time.Time) error {
 	conn := db.GetDB()
 	if conn == nil {
 		return nil
 	}
 	row := model.OpencodeProxyAccount{
 		ChannelID:        channelID,
+		KeyID:            keyID,
 		Account:          account,
 		Source:           model.OpencodeAccountSourceGenerated,
 		LastProbeAt:      at,
@@ -208,7 +247,7 @@ func SaveOpencodeProbeResult(channelID int, account string, outcome string, stat
 		LastProbeStatus:  status,
 	}
 	result := conn.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "channel_id"}, {Name: "account"}},
+		Columns:   []clause.Column{{Name: "channel_id"}, {Name: "key_id"}, {Name: "account"}},
 		DoUpdates: clause.AssignmentColumns([]string{"last_probe_at", "last_probe_outcome", "last_probe_status", "updated_at"}),
 	}).Create(&row)
 	if result.Error != nil {
@@ -219,11 +258,16 @@ func SaveOpencodeProbeResult(channelID int, account string, outcome string, stat
 
 // DeleteOpencodeProxyAccounts 删除台账中的指定账号, 返回删除行数。
 func DeleteOpencodeProxyAccounts(channelID int, accounts []string) (int64, error) {
+	return DeleteOpencodeProxyAccountsForKey(channelID, "", accounts)
+}
+
+// DeleteOpencodeProxyAccountsForKey 删除指定 Key 台账中的指定账号。
+func DeleteOpencodeProxyAccountsForKey(channelID int, keyID string, accounts []string) (int64, error) {
 	conn := db.GetDB()
 	if conn == nil || len(accounts) == 0 {
 		return 0, nil
 	}
-	result := conn.Where("channel_id = ? AND account IN ?", channelID, accounts).
+	result := conn.Where("channel_id = ? AND key_id = ? AND account IN ?", channelID, keyID, accounts).
 		Delete(&model.OpencodeProxyAccount{})
 	if result.Error != nil {
 		return 0, fmt.Errorf("删除代理账号失败: %w", result.Error)
@@ -236,12 +280,17 @@ func DeleteOpencodeProxyAccounts(channelID int, accounts []string) (int64, error
 // 同组按最近活跃时间(成功/冷却/体检三者取最大)从旧到新淘汰。
 // 排序在应用层做: 多参 MAX 与裸 OFFSET 仅 SQLite 合法, MySQL/Postgres 直接报错。
 func PruneOpencodeProxyAccounts(channelID int, keep int) error {
+	return PruneOpencodeProxyAccountsForKey(channelID, "", keep)
+}
+
+// PruneOpencodeProxyAccountsForKey 淘汰指定 Key 的记录直到不超过 keep 条。
+func PruneOpencodeProxyAccountsForKey(channelID int, keyID string, keep int) error {
 	conn := db.GetDB()
 	if conn == nil || keep <= 0 {
 		return nil
 	}
 	var rows []model.OpencodeProxyAccount
-	if err := conn.Where("channel_id = ?", channelID).Find(&rows).Error; err != nil {
+	if err := conn.Where("channel_id = ? AND key_id = ?", channelID, keyID).Find(&rows).Error; err != nil {
 		return fmt.Errorf("查询待清理代理账号失败: %w", err)
 	}
 	if len(rows) <= keep {

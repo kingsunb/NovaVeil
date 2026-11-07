@@ -22,8 +22,9 @@ const (
 // 即以未探测状态落账, 供页面长期展示与筛选。
 type OpencodeProxyAccount struct {
 	ID            uint      `gorm:"primarykey" json:"id"`
-	ChannelID     int       `gorm:"uniqueIndex:idx_oc_proxy_channel_account;not null" json:"channel_id"`
-	Account       string    `gorm:"uniqueIndex:idx_oc_proxy_channel_account;size:128;not null" json:"account"`
+	ChannelID     int       `gorm:"uniqueIndex:idx_oc_proxy_channel_key_account;not null" json:"channel_id"`
+	KeyID         string    `gorm:"uniqueIndex:idx_oc_proxy_channel_key_account;size:16;not null;default:''" json:"key_id"`
+	Account       string    `gorm:"uniqueIndex:idx_oc_proxy_channel_key_account;size:128;not null" json:"account"`
 	LastSuccessAt time.Time `gorm:"not null" json:"last_success_at"`
 	CooldownUntil time.Time `json:"cooldown_until"`
 	// Source 是账号来源: generated(体检录入)/traffic(转发学习); 空=历史数据, 视同 traffic。

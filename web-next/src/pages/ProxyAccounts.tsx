@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { UsersRound } from "lucide-react";
 
 import { api } from "@/lib/api";
-import type { Channel } from "@/lib/types";
+import type { Channel, ChannelKey, ChannelKeyTestResult } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmButton } from "@/components/ui/confirm-button";
@@ -69,6 +69,10 @@ function fmtTime(value: string): string {
   return new Date(value).toLocaleString();
 }
 
+function keyOptionLabel(key: ChannelKey, index: number): string {
+  return `#${index + 1}(${key.remark || key.key_masked || key.id})`;
+}
+
 function outcomeTone(outcome: string): "success" | "danger" | "warning" | "neutral" {
   if (outcome === "healthy") return "success";
   if (outcome === "rejected") return "danger";
@@ -110,10 +114,14 @@ function ChannelSection({ channel }: { channel: Channel }) {
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
   const [pageSize, setPageSize] = useState(LEDGER_PAGE_SIZE_DEFAULT);
   const [pageIndex, setPageIndex] = useState(1);
+  const channelKeys = Array.isArray(channel.keys) ? channel.keys : [];
+  const showKeySelect = !!channel.keyed && channelKeys.length > 0;
+  const showCount = !channel.keyed;
+  const [keyId, setKeyId] = useState(showKeySelect ? channelKeys[0].id : "");
 
   const ledgerQuery = useQuery({
-    queryKey: ["proxy-accounts", channel.id, ledgerFilter],
-    queryFn: () => api.listProxyAccounts(channel.id, ledgerFilter),
+    queryKey: ["proxy-accounts", channel.id, keyId, ledgerFilter],
+    queryFn: () => api.listProxyAccounts(channel.id, ledgerFilter, keyId || undefined),
   });
   const ledgerItems = ledgerQuery.data?.items ?? [];
   const ledgerTotalPages = Math.max(1, Math.ceil(ledgerItems.length / pageSize));
@@ -129,11 +137,21 @@ function ChannelSection({ channel }: { channel: Channel }) {
     if (pageIndex > ledgerTotalPages) setPageIndex(ledgerTotalPages);
   }, [ledgerTotalPages, pageIndex]);
 
+  function changeKey(nextKeyId: string) {
+    setKeyId(nextKeyId);
+    setReport(null);
+    setSelectedAccounts(new Set());
+    setPageIndex(1);
+  }
+
   function parseInputs(): { count: number; concurrency: number } | null {
-    const parsedCount = Math.floor(Number(count));
-    if (!Number.isFinite(parsedCount) || parsedCount < 1 || parsedCount > MAX_ACCOUNTS) {
-      toast.error(zhCN.proxyAccounts.countInvalid(MAX_ACCOUNTS));
-      return null;
+    let parsedCount = 0;
+    if (!channel.keyed) {
+      parsedCount = Math.floor(Number(count));
+      if (!Number.isFinite(parsedCount) || parsedCount < 1 || parsedCount > MAX_ACCOUNTS) {
+        toast.error(zhCN.proxyAccounts.countInvalid(MAX_ACCOUNTS));
+        return null;
+      }
     }
     const parsedConcurrency = Math.floor(Number(concurrency));
     if (
@@ -163,11 +181,16 @@ function ChannelSection({ channel }: { channel: Channel }) {
   async function run() {
     const inputs = parseInputs();
     if (!inputs) return;
+    if (channel.keyed && !keyId) {
+      toast.error(zhCN.proxyAccounts.keyedNoKey);
+      return;
+    }
     setRunning(true);
     try {
       const started = await api.probeProxyAccounts({
         channel_id: channel.id,
-        count: inputs.count,
+        key_id: keyId || undefined,
+        ...(channel.keyed ? { accounts: [keyId] } : { count: inputs.count }),
         concurrency: inputs.concurrency,
         model: modelName || undefined,
       });
@@ -206,7 +229,7 @@ function ChannelSection({ channel }: { channel: Channel }) {
     }
     setBulk({ done: 0, total: 0 });
     try {
-      const full = await api.listProxyAccounts(channel.id, "all");
+      const full = await api.listProxyAccounts(channel.id, "all", keyId || undefined);
       const ledgerAccounts = (full.items ?? []).map((item) => item.account);
       const accounts =
         selectedAccounts.size > 0
@@ -220,6 +243,7 @@ function ChannelSection({ channel }: { channel: Channel }) {
       setBulk({ done: 0, total: accounts.length });
       const started = await api.probeProxyAccounts({
         channel_id: channel.id,
+        key_id: keyId || undefined,
         accounts,
         concurrency: parsedConcurrency,
         model: modelName || undefined,
@@ -250,7 +274,7 @@ function ChannelSection({ channel }: { channel: Channel }) {
 
   async function deleteAccounts(accounts: string[]) {
     try {
-      const result = await api.deleteProxyAccounts(channel.id, accounts);
+      const result = await api.deleteProxyAccounts(channel.id, accounts, keyId || undefined);
       await queryClient.invalidateQueries({ queryKey: ["proxy-accounts"] });
       // 已删账号同步移出选择集, 避免一键测试再带上。
       setSelectedAccounts((prev) => {
@@ -274,7 +298,23 @@ function ChannelSection({ channel }: { channel: Channel }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className={showKeySelect && showCount ? "grid gap-4 md:grid-cols-4" : "grid gap-4 md:grid-cols-3"}>
+          {showKeySelect && (
+            <Field label={zhCN.proxyAccounts.channelKey} hint={zhCN.proxyAccounts.channelKeyHint}>
+              <select
+                className="h-9 w-full rounded-md border bg-transparent px-3 text-sm"
+                value={keyId}
+                onChange={(event) => changeKey(event.target.value)}
+                disabled={running || bulk !== null}
+              >
+                {channelKeys.map((key, index) => (
+                  <option key={key.id || index} value={key.id}>
+                    {keyOptionLabel(key, index)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
           <Field label={zhCN.proxyAccounts.model}>
             <select
               className="h-9 w-full rounded-md border bg-transparent px-3 text-sm"
@@ -288,9 +328,11 @@ function ChannelSection({ channel }: { channel: Channel }) {
               ))}
             </select>
           </Field>
-          <Field label={zhCN.proxyAccounts.count} hint={zhCN.proxyAccounts.countHint(MAX_ACCOUNTS)}>
-            <Input value={count} onChange={(event) => setCount(event.target.value)} inputMode="numeric" />
-          </Field>
+          {showCount && (
+            <Field label={zhCN.proxyAccounts.count} hint={zhCN.proxyAccounts.countHint(MAX_ACCOUNTS)}>
+              <Input value={count} onChange={(event) => setCount(event.target.value)} inputMode="numeric" />
+            </Field>
+          )}
           <Field
             label={zhCN.proxyAccounts.concurrency}
             hint={zhCN.proxyAccounts.concurrencyHint(MAX_CONCURRENCY)}
@@ -539,6 +581,92 @@ function ChannelSection({ channel }: { channel: Channel }) {
   );
 }
 
+function KeyedChannelSection({ channels }: { channels: Channel[] }) {
+  const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
+  const selectedChannel =
+    channels.find((channel) => channel.id === selectedChannelId) ?? channels[0] ?? null;
+  const [results, setResults] = useState<ChannelKeyTestResult[] | null>(null);
+  const [testing, setTesting] = useState(false);
+  const channelKeys =
+    selectedChannel && Array.isArray(selectedChannel.keys) ? selectedChannel.keys : [];
+  const hasTestableKey =
+    !!selectedChannel && (channelKeys.length > 0 || !!selectedChannel.key_masked);
+
+  useEffect(() => {
+    setResults(null);
+  }, [selectedChannel?.id]);
+
+  async function testKeys() {
+    if (!selectedChannel || testing) return;
+    setTesting(true);
+    setResults(null);
+    try {
+      const next = await api.testChannelKeys(selectedChannel.id, selectedChannel.models?.[0]?.name);
+      setResults(next);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.keyedTestFailed);
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{zhCN.proxyAccounts.keyedTitle}</CardTitle>
+        <CardDescription>{zhCN.proxyAccounts.keyedDescription}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-end gap-4">
+          <Field label={zhCN.proxyAccounts.keyedChannel}>
+            <select
+              className="h-9 w-full min-w-56 rounded-md border bg-transparent px-3 text-sm"
+              value={selectedChannel?.id ?? ""}
+              onChange={(event) => setSelectedChannelId(Number(event.target.value))}
+            >
+              {channels.map((channel) => (
+                <option key={channel.id} value={channel.id}>
+                  {channel.name}
+                  {channel.enabled ? "" : zhCN.proxyAccounts.keyedDisabledSuffix}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Button
+            variant="outline"
+            disabled={!selectedChannel || !hasTestableKey || testing}
+            onClick={() => void testKeys()}
+          >
+            {testing ? zhCN.proxyAccounts.keyedTesting : zhCN.proxyAccounts.keyedTestAll}
+          </Button>
+        </div>
+        {!hasTestableKey && <p className="text-sm text-ink-muted">{zhCN.proxyAccounts.keyedNoKey}</p>}
+        {results && results.length > 0 ? (
+          <div className="space-y-2">
+            {results.map((result) => (
+              <div
+                key={`${result.key_id}-${result.label}`}
+                className="flex flex-wrap items-center gap-3 rounded-md border border-border/60 p-2 text-sm"
+              >
+                <Pill tone={result.ok ? "success" : "danger"}>
+                  {result.ok ? zhCN.proxyAccounts.keyedOk : zhCN.proxyAccounts.keyedFailed}
+                </Pill>
+                <span className="font-medium">{result.label || result.key_id}</span>
+                <span className="text-ink-muted">{result.elapsed_ms} ms</span>
+                <span className="min-w-0 break-all text-ink-muted">
+                  {result.ok ? result.content : result.error}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : results ? (
+          <p className="text-sm text-ink-muted">{zhCN.proxyAccounts.keyedNoResults}</p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ProxyAccountsPage() {
   const queryClient = useQueryClient();
   const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: () => api.listChannels() });
@@ -549,8 +677,10 @@ export default function ProxyAccountsPage() {
       channel.opencode_compat &&
       !!channel.channel_proxy &&
       channel.channel_proxy.includes("{account}") &&
+      (!channel.keyed || (Array.isArray(channel.keys) && channel.keys.some((key) => !!key.id))) &&
       (channel.base_url?.includes("/zen") || channel.base_url?.includes("/inference")),
   );
+  const keyedChannels = (channelsQuery.data ?? []).filter((channel) => channel.keyed);
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
   const selectedChannel =
     eligible.find((channel) => channel.id === selectedChannelId) ?? eligible[0] ?? null;
@@ -571,15 +701,18 @@ export default function ProxyAccountsPage() {
 
   return (
     <div className="space-y-4 p-4">
+      {keyedChannels.length > 0 && <KeyedChannelSection channels={keyedChannels} />}
       {eligible.length === 0 ? (
-        <Card>
-          <CardContent>
-            <EmptyState
-              icon={<UsersRound className="size-8" />}
-              title={zhCN.proxyAccounts.eligibleEmpty}
-            />
-          </CardContent>
-        </Card>
+        keyedChannels.length === 0 ? (
+          <Card>
+            <CardContent>
+              <EmptyState
+                icon={<UsersRound className="size-8" />}
+                title={zhCN.proxyAccounts.eligibleEmpty}
+              />
+            </CardContent>
+          </Card>
+        ) : null
       ) : (
         <>
           <Card>
