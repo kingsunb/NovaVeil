@@ -7,8 +7,8 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/charmbracelet/log v1.0.0
 	github.com/dlclark/regexp2 v1.12.0
-	github.com/gin-contrib/cors v1.7.9
-	github.com/gin-contrib/sse v1.1.2
+	github.com/gin-contrib/cors v1.7.10
+	github.com/gin-contrib/sse v1.2.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
