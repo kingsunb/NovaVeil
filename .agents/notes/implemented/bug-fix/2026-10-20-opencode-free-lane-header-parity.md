@@ -83,3 +83,7 @@ OpenCode 免费档的传输层（Bun ClientHello 与 HTTP/1.1 头序）已在 20
 - `SessionIDFromSignal(s)` 输出满足 `^ses_[0-9a-f]{9}f[c-f][0-9a-f][0-9A-Za-z]{14}$`，同一输入两次调用同值。
 - `ProjectIDForLane("", v1)` 与 `ProjectIDForLane("", false)` 均为 40 位小写 hex；`ProjectIDForLane("<40 hex>", true)` 原样返回；`ProjectIDForLane("global", true)` 返回 `global`。
 - `shapeOpencodeFreeBody(body, true)`：正文已含 `function.name == "read"` 时返回原字节，否则追加一个同名占位；`shapeOpencodeFreeBody(body, false)` 仍补齐五个核心工具。
+
+## 复核
+
+2026-11-08 按官方 1.19.5 客户端再次核对：v1 只发 `x-opencode-session` 与 `x-opencode-session-id`，本笔记的 v1 头集合结论不变。此前 `docs/modules/relay.md` 与 `TestInjectOpencodeCorrelationHeadersV1Unchanged` 曾按「两档都发三头」描述，已按实测改正。

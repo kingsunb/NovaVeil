@@ -247,7 +247,7 @@ func applyResolvedOpencodeSession(channel model.Channel, session string, request
 // injectOpencodeCorrelationHeaders 在 OpencodeCompat 渠道上补充 opencode 关联头。
 // 调用方应在 x-opencode-session 最终写入之后调用(applyChannelConfig 里紧跟
 // applyResolvedOpencodeSession), 这样关联头镜像的是最终会话号而非占位值。
-// v1 档镜像 x-opencode-session-id 并同样发 affinity/X-Session-Id(2026-10-30 实抓);
+// v1 档只镜像 x-opencode-session-id(1.19.5 实抓不发 affinity/X-Session-Id);
 // v2 档保留客户端 child session, root 会话用于 x-opencode-session/affinity/X-Session-Id。
 // 非空父会话规范化为官方会话号并写双 parent 头; v2 同时把 root 切到父会话。
 // v2 免费档补 b3/traceparent。
@@ -279,9 +279,6 @@ func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient
 	if session != "" {
 		if v1 {
 			request.Headers.Set(opencodeSessionIDHeader, session)
-			// 实抓 v1 客户端同样发送 affinity 与 X-Session-Id
-			request.Headers.Set(opencodeAffinityHeader, session)
-			request.Headers.Set(opencodeUpstreamSessID, session)
 		} else {
 			if childSession == "" {
 				childSession = childFallback
