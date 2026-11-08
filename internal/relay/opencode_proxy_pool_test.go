@@ -122,27 +122,21 @@ func TestOcProxyEvictFirstOrder(t *testing.T) {
 	assert.False(t, ocProxyEvictFirst(historicOld, untested))
 }
 
-// TestOpencodeRejectCooldown 覆盖冷却时长的边界: 上游秒数优先, 缺失或不可信时
-// 回落到下一个 UTC 零点(免费档配额按 UTC 天重置), 上限 24 小时。
+// TestOpencodeRejectCooldown 覆盖冷却时长: 一律到下一个 UTC 零点, 上限 24 小时。
 func TestOpencodeRejectCooldown(t *testing.T) {
 	now := time.Date(2026, 10, 25, 20, 16, 28, 0, time.UTC)
-	toMidnight := 3*time.Hour + 43*time.Minute + 32*time.Second
 	cases := []struct {
-		name       string
-		retryAfter string
-		want       time.Duration
+		name string
+		now  time.Time
+		want time.Duration
 	}{
-		{"上游秒数", "3600", time.Hour},
-		{"秒数带空白", " 3600 ", time.Hour},
-		{"超上限钳到 24 小时", "259200", 24 * time.Hour},
-		{"HTTP 日期回落到零点", "Wed, 21 Oct 2026 07:28:00 GMT", toMidnight},
-		{"空值回落到零点", "", toMidnight},
-		{"零秒回落到零点", "0", toMidnight},
-		{"负值回落到零点", "-1", toMidnight},
+		{"非零点回落到下一个 UTC 零点", now, 3*time.Hour + 43*time.Minute + 32*time.Second},
+		{"临近午夜只冷却一分钟", time.Date(2026, 10, 25, 23, 59, 0, 0, time.UTC), time.Minute},
+		{"UTC 零点整冷却一整天的上限", time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC), 24 * time.Hour},
 	}
 	for _, item := range cases {
 		t.Run(item.name, func(t *testing.T) {
-			assert.Equal(t, item.want, opencodeRejectCooldown(item.retryAfter, now))
+			assert.Equal(t, item.want, opencodeRejectCooldown(item.now))
 		})
 	}
 }
@@ -222,15 +216,20 @@ func TestOcProxyRateLimitedQuorum(t *testing.T) {
 }
 
 func accountAt(name string, failures int, verified bool, success time.Time) *ocProxyAccount {
-	return &ocProxyAccount{
+	account := &ocProxyAccount{
 		account:             name,
 		consecutiveFailures: failures,
 		verified:            verified,
 		lastSuccessAt:       success,
 	}
+	// 真实成功过的账号成功计数必然大于零, 与落库路径一致。
+	if verified && !success.IsZero() {
+		account.successCount = 1
+	}
+	return account
 }
 
-// 连续失败少者优先, 同级已验证优先, 再按最近成功时间新者优先。
+// 选号先比可用分层, 同层再比连续失败、验证状态与最近成功时间。
 func TestOcProxyCandidatePrefersFewerFailures(t *testing.T) {
 	now := time.Now()
 	fresh := accountAt("fresh", 0, false, time.Time{})
@@ -239,20 +238,102 @@ func TestOcProxyCandidatePrefersFewerFailures(t *testing.T) {
 	newer := accountAt("newer", 0, true, now)
 	unverified := accountAt("unverified", 0, false, time.Time{})
 
-	assert.True(t, ocProxyCandidateBetter(fresh, failed), "失败一次应让位于零失败号")
-	assert.True(t, ocProxyCandidateBetter(newer, older), "同级已验证号选最近成功")
-	assert.True(t, ocProxyCandidateBetter(older, unverified), "零失败时已验证仍优先于未验证")
-	assert.False(t, ocProxyCandidateBetter(failed, fresh))
+	assert.False(t, ocProxyCandidateBetter(fresh, failed, now), "可用层应优先于未测试层")
+	assert.True(t, ocProxyCandidateBetter(newer, older, now), "同级已验证号选最近成功")
+	assert.True(t, ocProxyCandidateBetter(older, unverified, now), "可用层优先于未测试层")
+	assert.True(t, ocProxyCandidateBetter(failed, fresh, now))
 }
 
-// 选号时失败过的已验证号让位于零失败的未验证新号。
-func TestOcProxyPickPrefersZeroFailure(t *testing.T) {
+// 选号时可用层账号优先于零失败的未验证新号。
+func TestOcProxyPickPrefersUsableTier(t *testing.T) {
 	now := time.Now()
 	pool := &ocProxyPool{accounts: map[string]*ocProxyAccount{
 		"proven": accountAt("proven", 1, true, now),
 		"new":    accountAt("new", 0, false, time.Time{}),
 	}}
-	assert.Equal(t, "new", pool.pickLocked(now, "").account)
+	assert.Equal(t, "proven", pool.pickLocked(now, "").account)
+}
+
+// 可用分层与台账同口径: 体检健康/近期真实成功 > 历史可用 > 今日未测试 > 今日已测非健康。
+func TestOcProxyCandidateTier(t *testing.T) {
+	now := time.Now()
+	probeHealthy := accountAt("probe", 0, false, time.Time{})
+	probeHealthy.lastProbeAt = now
+	probeHealthy.lastProbeOutcome = model.OpencodeAccountOutcomeHealthy
+	recent := accountAt("recent", 0, true, now)
+	history := accountAt("history", 2, true, now.Add(-8*24*time.Hour))
+	history.successCount = 3
+	untested := accountAt("untested", 0, false, time.Time{})
+	testedToday := accountAt("tested", 0, false, time.Time{})
+	testedToday.lastProbeAt = now.UTC().Truncate(24 * time.Hour)
+	testedToday.lastProbeOutcome = model.OpencodeAccountOutcomeRejected
+
+	assert.Equal(t, ocProxyTierUsable, ocProxyCandidateTier(probeHealthy, now))
+	assert.Equal(t, ocProxyTierUsable, ocProxyCandidateTier(recent, now))
+	assert.Equal(t, ocProxyTierHistory, ocProxyCandidateTier(history, now))
+	assert.Equal(t, ocProxyTierUntested, ocProxyCandidateTier(untested, now))
+	assert.Equal(t, ocProxyTierFallback, ocProxyCandidateTier(testedToday, now))
+
+	assert.False(t, ocProxyCandidateBetter(probeHealthy, recent, now), "同层不按体检优先")
+	assert.True(t, ocProxyCandidateBetter(recent, history, now), "可用层优先于历史层")
+	assert.True(t, ocProxyCandidateBetter(history, untested, now), "历史可用优先于未测试")
+	assert.True(t, ocProxyCandidateBetter(untested, testedToday, now), "今日未测试优先于今日已测非健康")
+}
+
+// 新网络错误覆盖旧成功, 降为历史层而不是继续可用。
+func TestOcProxyCandidateTierProbeErrorAfterSuccess(t *testing.T) {
+	now := time.Now()
+	account := accountAt("neterr", 0, true, now.Add(-time.Hour))
+	account.lastProbeAt = now
+	account.lastProbeOutcome = model.OpencodeAccountOutcomeError
+	assert.Equal(t, ocProxyTierHistory, ocProxyCandidateTier(account, now))
+}
+
+// 新体检被拒覆盖旧成功, 同样降为历史层。
+func TestOcProxyCandidateTierProbeRejectedAfterSuccess(t *testing.T) {
+	now := time.Now()
+	account := accountAt("rejected", 0, true, now.Add(-time.Hour))
+	account.lastProbeAt = now
+	account.lastProbeOutcome = model.OpencodeAccountOutcomeRejected
+	assert.Equal(t, ocProxyTierHistory, ocProxyCandidateTier(account, now))
+}
+
+// 可用池为空时才回退: 历史可用优先于当天未测试, 当天未测试优先于当天已测非健康。
+func TestOcProxyPickFallsBackByTier(t *testing.T) {
+	now := time.Now()
+	pool := new(ocProxyPool)
+	pool.accounts = make(map[string]*ocProxyAccount)
+	history := accountAt("history", 0, true, now.Add(-8*24*time.Hour))
+	history.successCount = 1
+	pool.accounts["history"] = history
+	pool.accounts["untested"] = accountAt("untested", 0, false, time.Time{})
+	tested := accountAt("tested", 0, false, time.Time{})
+	tested.lastProbeAt = now.UTC().Truncate(24 * time.Hour)
+	tested.lastProbeOutcome = model.OpencodeAccountOutcomeRejected
+	pool.accounts["tested"] = tested
+
+	assert.Equal(t, "history", pool.pickLocked(now, "").account)
+
+	delete(pool.accounts, "history")
+	assert.Equal(t, "untested", pool.pickLocked(now, "").account)
+}
+
+// 体检结论即时同步到进程内池, 避免重启前仍按旧状态选号。
+func TestOcProxyProbeOutcomeUpdatesPool(t *testing.T) {
+	pool := new(ocProxyPool)
+	pool.loaded = true
+	pool.accounts = make(map[string]*ocProxyAccount)
+	ocProxyPools.Store(980002, pool)
+	t.Cleanup(func() { ocProxyPools.Delete(980002) })
+
+	markOpencodeProxyProbeOutcomeForKey(980002, "", "acct", model.OpencodeAccountOutcomeHealthy)
+	state := pool.accounts["acct"]
+	if !assert.NotNil(t, state) {
+		return
+	}
+	assert.Equal(t, model.OpencodeAccountOutcomeHealthy, state.lastProbeOutcome)
+	assert.False(t, state.lastProbeAt.IsZero())
+	assert.Equal(t, ocProxyTierUsable, ocProxyCandidateTier(state, time.Now()))
 }
 
 // 真实转发成功与体检成功都清连续失败, 都不清窗口。

@@ -32,7 +32,7 @@ func LoadOpencodeProxyAccountsForKey(channelID int, keyID string) ([]model.Openc
 }
 
 // SaveOpencodeProxySuccess 记录一次下游真实转发成功: 更新最近成功时间, 累计总成功
-// 与真实成功数并按自然日(0 点到 24 点)去重累计成功天数; 不存在则插入。
+// 与真实成功数并按 UTC 日去重累计成功天数; 不存在则插入。
 func SaveOpencodeProxySuccess(channelID int, account string, at time.Time) error {
 	return SaveOpencodeProxySuccessForKey(channelID, "", account, at)
 }
@@ -59,7 +59,8 @@ func saveOpencodeAccountSuccessForKey(channelID int, keyID, account string, at t
 	if conn == nil {
 		return nil
 	}
-	day := at.Format("2006-01-02")
+	// 成功天数按 UTC 日去重, 与冷却重置对齐。
+	day := at.UTC().Format("2006-01-02")
 	row := model.OpencodeProxyAccount{
 		ChannelID:      channelID,
 		KeyID:          keyID,

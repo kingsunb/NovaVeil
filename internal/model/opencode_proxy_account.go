@@ -34,7 +34,7 @@ type OpencodeProxyAccount struct {
 	LastProbeOutcome string    `json:"last_probe_outcome"`
 	LastProbeStatus  int       `json:"last_probe_status"`
 	// SuccessCount 是累计成功请求数(真实转发 + 体检); SuccessDays 是有成功请求的
-	// 自然日天数(0 点到 24 点为一天); LastSuccessDay 是最近成功的日键, 用于跨天判定。
+	// UTC 日天数; LastSuccessDay 是最近成功的日键, 用于跨天判定。
 	// RealSuccessCount/RealFailureCount 是下游真实转发的成功/失败数; ProbeSuccessCount
 	// 是体检探测的成功数; 三者按来源拆分, SuccessCount 仍为两路合计。
 	SuccessCount      int64     `json:"success_count"`

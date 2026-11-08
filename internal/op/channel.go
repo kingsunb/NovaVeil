@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/log"
 	"github.com/kingsunb/NovaVeil/internal/db"
@@ -382,6 +383,12 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 				return fmt.Errorf("更新渠道失败: %w", err)
 			}
 		}
+		// 启用状态变化即接管渠道, 清标记。
+		if req.Enabled != nil && *req.Enabled != existingChannel.Enabled {
+			if err := tx.Model(&model.Channel{}).Where("id = ?", req.ID).Update("auto_disabled_until", nil).Error; err != nil {
+				return fmt.Errorf("清除渠道自动停用标记失败: %w", err)
+			}
+		}
 		if sortUpdateVal != nil {
 			// map 更新可靠写入任意 int(含 0 与负值), 不受 GORM struct 零值跳过影响。
 			if err := tx.Model(&model.Channel{}).Where("id = ?", req.ID).Update("sort", *sortUpdateVal).Error; err != nil {
@@ -443,19 +450,77 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	return &snapshot, nil
 }
 
-// ChannelEnabled 更新渠道启用状态。
+// ChannelEnabled 更新渠道启用状态; 人工启停清除自动停用标记。
 func ChannelEnabled(id int, enabled bool, ctx context.Context) error {
 	if _, ok := channelCache.Get(id); !ok {
 		return fmt.Errorf("渠道不存在，请刷新页面后重试")
 	}
-	if err := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).Update("enabled", enabled).Error; err != nil {
+	if err := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).
+		Updates(map[string]any{"enabled": enabled, "auto_disabled_until": nil}).Error; err != nil {
 		return err
 	}
 	if channel, ok := channelCache.Get(id); ok {
 		channel.Enabled = enabled
+		channel.AutoDisabledUntil = nil
 		channelCache.Set(id, cacheableChannel(channel))
 	}
 	return nil
+}
+
+// ChannelAutoDisable 把渠道停用至下一个 UTC 零点。
+func ChannelAutoDisable(id int, ctx context.Context) error {
+	channel, ok := channelCache.Get(id)
+	if !ok {
+		return fmt.Errorf("渠道不存在，请刷新页面后重试")
+	}
+	until := nextUTCZero(time.Now())
+	if err := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).
+		Updates(map[string]any{"enabled": false, "auto_disabled_until": until}).Error; err != nil {
+		return err
+	}
+	channel.Enabled = false
+	channel.AutoDisabledUntil = &until
+	channelCache.Set(id, cacheableChannel(channel))
+	return nil
+}
+
+// ChannelAutoEnableExpired 恢复已到期的自动停用渠道, 返回恢复条数。
+func ChannelAutoEnableExpired(ctx context.Context) (int, error) {
+	// 统一 UTC 比较, 避免跨时区字典序错。
+	now := time.Now().UTC()
+	var ids []int
+	if err := db.GetDB().WithContext(ctx).Model(&model.Channel{}).
+		Where("enabled = ? AND auto_disabled_until IS NOT NULL AND auto_disabled_until <= ?", false, now).
+		Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	restored := 0
+	for _, id := range ids {
+		// 带条件更新: 期间被人工接管(标记已清)的渠道不再恢复。
+		result := db.GetDB().WithContext(ctx).Model(&model.Channel{}).
+			Where("id = ? AND auto_disabled_until IS NOT NULL AND auto_disabled_until <= ?", id, now).
+			Updates(map[string]any{"enabled": true, "auto_disabled_until": nil})
+		if result.Error != nil {
+			log.Warnf("auto enable channel %d: %v", id, result.Error)
+			continue
+		}
+		if result.RowsAffected == 0 {
+			continue
+		}
+		if cached, ok := channelCache.Get(id); ok {
+			cached.Enabled = true
+			cached.AutoDisabledUntil = nil
+			channelCache.Set(id, cacheableChannel(cached))
+		}
+		restored++
+	}
+	return restored, nil
+}
+
+// nextUTCZero 返回 now 之后最近的 UTC 零点。
+func nextUTCZero(now time.Time) time.Time {
+	utc := now.UTC()
+	return time.Date(utc.Year(), utc.Month(), utc.Day()+1, 0, 0, 0, 0, time.UTC)
 }
 
 // ChannelDel 删除渠道及其模型，关联分组成员与评估排序由应用层级联清理。

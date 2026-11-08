@@ -180,8 +180,26 @@ func TestPrepareAccountProbeKeyedUsesKeyID(t *testing.T) {
 	}
 }
 
+// 最近体检被拒覆盖旧成功, 冷却后仍不可用。
+func TestOcAccountLedgerStateRejectedAfterSuccess(t *testing.T) {
+	now := time.Now()
+	row := model.OpencodeProxyAccount{
+		Account:          "acct",
+		LastSuccessAt:    now.Add(-time.Minute),
+		LastProbeAt:      now,
+		LastProbeOutcome: model.OpencodeAccountOutcomeRejected,
+	}
+	if got := ocAccountLedgerState(row, now); got != "unusable" {
+		t.Fatalf("最近体检被拒应不可用: %s", got)
+	}
+	row.LastSuccessAt = now.Add(time.Minute)
+	if got := ocAccountLedgerState(row, now); got != "usable" {
+		t.Fatalf("体检后成功应恢复可用: %s", got)
+	}
+}
+
 // TestOpencodeAccountLedgerStates 验证台账状态派生、筛选与删除:
-// 可用=健康探测; 今日未测试=今日无体检且无成功; 不可用=冷却中或被上游拒绝; 网络错误=基础设施故障可复测。
+// 网络错误同时计入不可用, 之后的真实成功可恢复可用。
 func TestOpencodeAccountLedgerStates(t *testing.T) {
 	setupFailoverTest(t)
 	probe := newOpencodeProxyProbe(t, func(string) (int, []byte) {
@@ -214,12 +232,24 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 	if err := op.SaveOpencodeProxySuccess(channel.ID, "acct_today_success", now); err != nil {
 		t.Fatalf("写今日成功记录失败: %v", err)
 	}
+	if err := op.SaveOpencodeProxySuccess(channel.ID, "acct_prior_success_neterr", now.Add(-time.Minute)); err != nil {
+		t.Fatalf("写网络错误前成功记录失败: %v", err)
+	}
+	if err := op.SaveOpencodeProbeResult(channel.ID, "acct_prior_success_neterr", model.OpencodeAccountOutcomeError, 0, now); err != nil {
+		t.Fatalf("写后续网络错误记录失败: %v", err)
+	}
+	if err := op.SaveOpencodeProbeResult(channel.ID, "acct_recovered_after_neterr", model.OpencodeAccountOutcomeError, 0, now.Add(-time.Minute)); err != nil {
+		t.Fatalf("写网络错误记录失败: %v", err)
+	}
+	if err := op.SaveOpencodeProxySuccess(channel.ID, "acct_recovered_after_neterr", now); err != nil {
+		t.Fatalf("写网络错误后成功记录失败: %v", err)
+	}
 
 	ledger, err := ListOpencodeAccountStates(channel.ID, "", "all")
 	if err != nil {
 		t.Fatalf("读台账失败: %v", err)
 	}
-	if ledger.Total != 7 || ledger.Usable != 3 || ledger.Unusable != 2 || ledger.Untested != 3 || ledger.ProbeError != 1 {
+	if ledger.Total != 9 || ledger.Usable != 4 || ledger.Unusable != 4 || ledger.Untested != 3 || ledger.ProbeError != 2 {
 		t.Fatalf("状态计数异常: %+v", ledger)
 	}
 	states := make(map[string]string, len(ledger.Items))
@@ -227,9 +257,10 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 		states[item.Account] = item.State
 	}
 	if states["acct_ok"] != "usable" || states["acct_stale"] != "usable" ||
-		states["acct_today_success"] != "usable" || states["acct_cooling"] != "unusable" ||
-		states["acct_untested"] != "untested" || states["acct_rejected"] != "unusable" ||
-		states["acct_neterr"] != "error" {
+		states["acct_today_success"] != "usable" || states["acct_recovered_after_neterr"] != "usable" ||
+		states["acct_cooling"] != "unusable" || states["acct_rejected"] != "unusable" ||
+		states["acct_untested"] != "untested" || states["acct_neterr"] != "error" ||
+		states["acct_prior_success_neterr"] != "error" {
 		t.Fatalf("状态派生异常: %+v", states)
 	}
 
@@ -237,8 +268,22 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("筛选失败: %v", err)
 	}
-	if len(filtered.Items) != 1 || filtered.Items[0].Account != "acct_neterr" {
+	if len(filtered.Items) != 2 || filtered.Items[0].State != "error" || filtered.Items[1].State != "error" {
 		t.Fatalf("error 筛选异常: %+v", filtered.Items)
+	}
+
+	unusable, err := ListOpencodeAccountStates(channel.ID, "", "unusable")
+	if err != nil {
+		t.Fatalf("筛选不可用失败: %v", err)
+	}
+	unusableStates := make(map[string]string, len(unusable.Items))
+	for _, item := range unusable.Items {
+		unusableStates[item.Account] = item.State
+	}
+	if len(unusable.Items) != 4 || unusableStates["acct_neterr"] != "error" ||
+		unusableStates["acct_prior_success_neterr"] != "error" ||
+		unusableStates["acct_rejected"] != "unusable" || unusableStates["acct_cooling"] != "unusable" {
+		t.Fatalf("unusable 筛选异常: %+v", unusable.Items)
 	}
 
 	untested, err := ListOpencodeAccountStates(channel.ID, "", "untested")
@@ -258,8 +303,8 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 	if err != nil || deleted != 1 {
 		t.Fatalf("删除应移除 1 行: deleted=%d err=%v", deleted, err)
 	}
-	if ledger2, _ := ListOpencodeAccountStates(channel.ID, "", "all"); ledger2.Total != 6 || ledger2.Untested != 2 {
-		t.Fatalf("删除后台账应剩 6 行且今日未测试 2 条: %+v", ledger2)
+	if ledger2, _ := ListOpencodeAccountStates(channel.ID, "", "all"); ledger2.Total != 8 || ledger2.Untested != 2 {
+		t.Fatalf("删除后台账应剩 8 行且今日未测试 2 条: %+v", ledger2)
 	}
 
 	// 成功统计: 同一自然日多次成功只累计次数不增天数, 跨自然日天数 +1。

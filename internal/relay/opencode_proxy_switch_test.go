@@ -326,8 +326,8 @@ func TestOpencodeProxy403RetriesAnotherAccount(t *testing.T) {
 	if cooldown != 1 {
 		t.Fatalf("账号池应恰有 1 个冷却账号, 实际 %d: %+v", cooldown, pool)
 	}
-	assertOpencodeProxyCooldownDuration(t, pool["bad-account"].cooldownUntil, opencodeRejectCooldown("", time.Now()))
-	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", opencodeRejectCooldown("", time.Now()))
+	assertOpencodeProxyCooldownDuration(t, pool["bad-account"].cooldownUntil, opencodeRejectCooldown(time.Now()))
+	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", opencodeRejectCooldown(time.Now()))
 	// 真实流量计数拆分: 坏账号一次真实失败, 好账号一次真实成功, 体检计数均为 0。
 	waitForOpencodeAccountCounters(t, channel.ID, "bad-account", 0, 1, 0)
 	waitForOpencodeAccountCounters(t, channel.ID, "good-account", 1, 0, 0)
@@ -447,8 +447,8 @@ func TestOpencodeProxy429QuorumCoolsAccount(t *testing.T) {
 
 	dumpOcProxyPoolDiag(t, channel.ID, "quorum-final")
 	pool := opencodeProxyPoolSnapshot(t, channel.ID)
-	assertOpencodeProxyCooldownDuration(t, pool["bad-account"].cooldownUntil, opencodeRejectCooldown("", time.Now()))
-	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", opencodeRejectCooldown("", time.Now()))
+	assertOpencodeProxyCooldownDuration(t, pool["bad-account"].cooldownUntil, opencodeRejectCooldown(time.Now()))
+	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", opencodeRejectCooldown(time.Now()))
 	assertOpencodeProxyKeysNotCooling(t, channel)
 }
 
@@ -769,9 +769,9 @@ func TestOpencodeProxy403ConcurrentRetry(t *testing.T) {
 	}
 }
 
-// TestOpencodeProxy429UsesUpstreamRetryAfter 两个会话报 429 触发冷却后,
-// 上游给出可信 Retry-After 时按其冷却, 不再回落到 UTC 零点。
-func TestOpencodeProxy429UsesUpstreamRetryAfter(t *testing.T) {
+// TestOpencodeProxy429CoolsUntilUTCMidnight 两个会话报 429 触发冷却后,
+// 统一冷却到下一个 UTC 零点, 忽略上游 Retry-After。
+func TestOpencodeProxy429CoolsUntilUTCMidnight(t *testing.T) {
 	setupFailoverTest(t)
 	resetChannelKeyHealth()
 	t.Cleanup(resetChannelKeyHealth)
@@ -806,7 +806,8 @@ func TestOpencodeProxy429UsesUpstreamRetryAfter(t *testing.T) {
 	if !ok {
 		t.Fatalf("被限速账号应留在池内, 实际 %+v", pool)
 	}
-	assertOpencodeProxyCooldownDuration(t, bad.cooldownUntil, time.Hour)
-	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", time.Hour)
+	want := opencodeRejectCooldown(time.Now())
+	assertOpencodeProxyCooldownDuration(t, bad.cooldownUntil, want)
+	assertOpencodeProxyPersistedCooldown(t, channel.ID, "bad-account", want)
 	assertOpencodeProxyKeysNotCooling(t, channel)
 }

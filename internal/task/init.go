@@ -18,6 +18,8 @@ const (
 	TaskSyncLLM           = "sync_llm"
 	TaskCleanErrorLogs    = "clean_error_logs"
 	TaskCleanUsageBuckets = "clean_usage_buckets"
+	// TaskChannelAutoEnable 恢复已到期的 429 自动停用渠道。
+	TaskChannelAutoEnable = "channel_auto_enable"
 	// TaskOpencodeAccountAutoProbe 是 OpenCode 账号台账的定时体检任务:
 	// 每 24 小时一轮, 是否执行由 opencode_account_auto_probe 设置决定。
 	TaskOpencodeAccountAutoProbe = "opencode_account_auto_probe"
@@ -31,6 +33,20 @@ func Init() {
 	// 注册在 LLM 同步之前, 避免同步间隔读取失败提前返回时连带丢失清理任务。
 	// 客户端统计定期刷入数据库(5 分钟), 与优雅关停时的最终 flush 互补。
 	Register("prune_ephemeral_state", time.Minute, true, relay.PruneEphemeralState)
+
+	// 每分钟恢复到期的自动停用渠道。
+	Register(TaskChannelAutoEnable, time.Minute, true, func() {
+		ctx, cancel := context.WithTimeout(LifecycleContext(), time.Minute)
+		defer cancel()
+		restored, err := op.ChannelAutoEnableExpired(ctx)
+		if err != nil {
+			log.Warnf("channel auto enable: %v", err)
+			return
+		}
+		if restored > 0 {
+			log.Infof("restored %d auto-disabled channels", restored)
+		}
+	})
 
 	Register("client_stat_flush", 5*time.Minute, true, func() {
 		ctx, cancel := context.WithTimeout(LifecycleContext(), time.Minute)

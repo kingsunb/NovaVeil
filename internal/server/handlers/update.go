@@ -47,7 +47,7 @@ func getNowVersion(c *gin.Context) {
 	defer cancel()
 
 	// range 联动 KPI 口径: 默认 forever(全量), 与趋势图默认档位一致。
-	// 选中某档位时, 四个 KPI 分别统计该时间窗口内的请求数 / 活跃客户端 IP / 错误数 / Token 用量。
+	// 选中某档位时, KPI 分别统计该时间窗口内的请求数 / 活跃客户端 IP / 错误数 / Token 用量。
 	rangeKey := c.Query("range")
 	if rangeKey == "" {
 		rangeKey = "forever"

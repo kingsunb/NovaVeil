@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> 2026-11-08 起冷却时长已改回固定下一个 UTC 零点并忽略 `Retry-After`，见 [可用分层与统一 UTC 冷却](./2026-11-08-opencode-account-tier-and-utc-cooldown.md)。本篇保留当初采纳 `Retry-After` 的取证与理由。
+
 ## 问题
 
 [2026-10-24 统一冷却笔记](./2026-10-24-opencode-403-429-uniform-cooldown.md)把 403/429 的出口账号冷却定为固定 24 小时，并在「已知上限」里留下重访信号：上游开始返回可信 `Retry-After` 时可再评估分级冷却。

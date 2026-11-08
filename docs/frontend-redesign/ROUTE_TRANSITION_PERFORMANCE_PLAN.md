@@ -52,7 +52,7 @@
 
 ### 2.1 源码状态补充（2026-09-16）
 
-- **P0 性能四项目前已落地，待验收**：`App.tsx` 的 `LazyPage` 已按路由传入 `TableSkeleton`/`CardGridSkeleton`/`LogsSkeleton`/`SettingsSkeleton`，未登录分支改用 `LoginSkeleton`；`AppShell.tsx` 已绑定 pathname 与 main 滚动 ref 并在切换时复位；Sidebar（`preloadPage`）与 CommandPalette 已接入页面 loader 预加载——loader 已统一收敛到 `lib/page-loaders.ts` 的 `createPageLoader`（缓存 Promise、失败清 pending），`route-loaders.ts` 仅作 re-export；并配 `App.route-transition.test.tsx` 回归。
+- **P0 性能四项目前已落地，待验收**：`App.tsx` 的 `LazyPage` 已按路由传入 `TableSkeleton`/`CardGridSkeleton`/`LogsSkeleton`/`SettingsSkeleton`，未登录分支改用 `LoginSkeleton`；`AppShell.tsx` 已绑定 pathname 与 main 滚动 ref 并在切换时复位；Sidebar（`preloadPage`）已接入页面 loader 预加载——loader 已统一收敛到 `lib/page-loaders.ts` 的 `createPageLoader`（缓存 Promise、失败清 pending），`route-loaders.ts` 仅作 re-export；并配 `App.route-transition.test.tsx` 回归。命令面板已于 2026-11-07 后续需求中移除，本文 §3.3/§4 的相关描述不再适用。
 - **灰度匿名 bucket 已用 `sessionStorage` 固定**：`flags.ts` 的 `getAnonymousBucket()` 读取/写入 `sessionStorage`（仅接受规范整数，存储不可用时由模块内存兜底），同一浏览器会话内保持一致；粘性用户仍按 `userBucket(userId)` 哈希。依赖变化和重挂载仍需验证。
 - **Groups 已有部分计算优化与缓存保护**：列表过滤/排序、渠道映射已使用 `useMemo`，自定义排序有乐观更新和失败回滚，编辑保存返回实体后直接回填 `['groups']`。仍未见搜索 debounce 或卡片 memo 隔离；性能改造需保留自定义顺序、成员名次与路由 priority 的不同语义。
 - **Query 并非没有缓存策略**：`main.tsx` 已配置 30 秒 `staleTime`、4xx 不重试与禁用窗口聚焦刷新。渠道、自定义模型、分组保存已取消在途查询并回填实体；下一步是核验返回页面、后台失败和跨 query key 的展示策略，不是重做已存在的保存回填。
@@ -118,16 +118,14 @@
 
 - `web-next/src/App.tsx`
 - `web-next/src/components/layout/Sidebar.tsx`
-- `web-next/src/components/layout/CommandPalette.tsx`
 
 方案：
 
 1. 将高频页面的动态 import 提取为具名 loader，例如 `loadDashboardPage`、`loadGroupsPage`。
 2. `lazy(loader)` 继续作为实际渲染入口，保证现有错误边界和 Suspense 行为不变。
 3. 侧栏导航项在 `onMouseEnter` 和 `onFocus` 时调用对应 loader；移动端点击前无法依赖 hover，因此保留点击后的正常加载路径。
-4. Command Palette 选择项也复用同一组 loader，避免两套路由预加载逻辑。
-5. 只预加载高频且体积可控的页面，不在首屏一次性加载全部页面。
-6. 预加载函数要具备幂等性；动态 import 自身会缓存 Promise，不另建复杂缓存层。
+4. 只预加载高频且体积可控的页面，不在首屏一次性加载全部页面。
+5. 预加载函数要具备幂等性；动态 import 自身会缓存 Promise，不另建复杂缓存层。
 
 验收：
 
@@ -288,7 +286,7 @@
    - 路由滚动复位
 2. `perf(frontend): preload frequently visited route chunks`
    - 具名 dynamic import loader
-   - Sidebar/CommandPalette 预加载
+   - Sidebar 预加载
 3. `fix(frontend): persist anonymous rollout bucket`
    - 匿名灰度 bucket 稳定化
 4. `perf(logs): isolate live stream updates`

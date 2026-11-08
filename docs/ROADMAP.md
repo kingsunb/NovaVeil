@@ -20,7 +20,7 @@
 - 脱敏命中摘要有界下发；脱敏映射在 `apiKeyID > 0` 时按 `apiKeyID + ":" + sessionKey` 隔离。MAC/USCC 规则默认关闭。
 - 凭据列 `nv1:` 静态加密覆盖渠道 Key、多 Key、渠道代理和 API Key。列表接口对渠道 Key 与多 Key 打码，渠道代理保留明文。数据库备份导出的渠道 Key 与 API Key 是明文，代理和自定义头值仍打成 `****`。
 - Cookie 在 `cookie_secure`、直接 TLS，或入站 `X-Forwarded-Proto: https` 时带 Secure。管理 API 令牌桶有开关，默认关闭。
-- 评估队列有 panic 恢复、条件更新、running 租约和单实例互斥。路由骨架、滚动复位、导航预加载、命令面板入口已在前端。
+- 评估队列有 panic 恢复、条件更新、running 租约和单实例互斥。路由骨架、滚动复位、导航预加载已在前端。
 - 渠道 `sort` 可以写成 0。完全透传不跳过分组路由、故障转移和 Key 轮询。
 - OpenCode 免费渠道（V1/V2 两条 lane）与官方渠道均为内置渠道。自定义渠道的 `opencode_compat` 被强制关掉。Chat、Responses、Anthropic 的转换在现有 relay，不需要第二套协议栈。
 

@@ -30,7 +30,7 @@ Bun 启动失败被永久缓存；本地 HTTP 请求虽携带 Go Context，上�
 
 ### HTTP 错误与 Bun 生命周期
 
-- 同协议流式失败保留状态、响应头、有限正文以及读取/关闭错误；[错误分类](../../../../internal/relay/state.go) 遇到明确非零 HTTP 状态优先按状态分类，不因错误正文截断降为网络故障。只修传递链，不更改秒数 `Retry-After` 优先、UTC 零点回退、24 小时上限的[冷却决定](./2026-10-26-opencode-429-retry-after-cooldown.md)。
+- 同协议流式失败保留状态、响应头、有限正文以及读取/关闭错误；[错误分类](../../../../internal/relay/state.go) 遇到明确非零 HTTP 状态优先按状态分类，不因错误正文截断降为网络故障。只修传递链，不更改当时的秒数 `Retry-After` 优先、UTC 零点回退、24 小时上限的[冷却决定](./2026-10-26-opencode-429-retry-after-cooldown.md)；该时长口径已于 2026-11-08 改为固定 UTC 零点，见[可用分层与统一 UTC 冷却](./2026-11-08-opencode-account-tier-and-utc-cooldown.md)。
 - Bun 保留单进程、串行启动和 JSON/base64 本地协议。启动失败冷却 1 秒，后续请求按需重试启动，成功清空失败状态，不自动重放业务请求。fetch 绑定 `req.signal`，保留 `idleTimeout: 0`。Go 正文改为 `[]byte` 由 JSON 编码，Bun 直接使用 Buffer，减少中间复制。同步既有 [sidecar 决定](./2026-10-26-opencode-bun-sidecar-tls-behavior.md) 与[空闲超时笔记](./2026-10-28-bun-sidecar-idle-timeout.md)，不另换传输协议。
 
 ## 备选方案

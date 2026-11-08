@@ -207,7 +207,7 @@ func UsageTotals(ctx context.Context) (totalInput, totalOutput int64, err error)
 //   - 其余档位返回「当前小时 − span」, 与桶的小时粒度对齐。
 //
 // 供 handler 层为 client_stats / error_logs 等非 usage_buckets 表计算窗口下界,
-// 让四个 KPI 卡片共享同一时间口径。
+// 让 KPI 卡片共享同一时间口径。
 func UsageWindowSince(rangeKey string) time.Time {
 	window, ok := usageWindows[rangeKey]
 	if !ok || rangeKey == "forever" {

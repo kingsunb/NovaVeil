@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/kingsunb/NovaVeil/internal/helper"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/looplj/axonhub/llm"
@@ -438,6 +439,10 @@ func (s *officialToolStream) flushPending() []*httpclient.StreamEvent {
 				args = adaptOfficialToolArguments(pending.name, args, target)
 			}
 		}
+		// 上游可能给出残缺参数, 直接告警便于定位
+		if args != "" && !gjson.Valid(args) {
+			log.Warnf("tool call %q 参数非法 JSON, 长度 %d, 首 60 字节: %.60q", name, len(args), args)
+		}
 		if ev := s.syntheticToolCall(pending, name, args); ev != nil {
 			out = append(out, ev)
 		}
@@ -528,12 +533,13 @@ func mergeOfficialToolArguments(builder *strings.Builder, next string) {
 		return
 	}
 	previous := builder.String()
-	if strings.HasPrefix(next, previous) {
-		builder.Reset()
-		builder.WriteString(next)
+	if next == previous {
 		return
 	}
-	if strings.HasPrefix(previous, next) {
+	// 仅严格超集按累积重发处理, 避免增量被误吞
+	if len(next) > len(previous) && strings.HasPrefix(next, previous) {
+		builder.Reset()
+		builder.WriteString(next)
 		return
 	}
 	builder.WriteString(next)

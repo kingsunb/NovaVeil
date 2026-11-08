@@ -581,6 +581,7 @@ func ocProbeOne(ctx context.Context, channel model.Channel, modelName, displayNa
 	if saveErr := op.SaveOpencodeProbeResultForKey(channel.ID, keyID, account, result.Outcome, result.Status, time.Now()); saveErr != nil {
 		log.Warnf("账号体检结论落账失败: %v", saveErr)
 	}
+	markOpencodeProxyProbeOutcomeForKey(channel.ID, keyID, account, result.Outcome)
 	return result
 }
 
@@ -620,9 +621,10 @@ type OpencodeAccountLedger struct {
 	Usable    int                         `json:"usable"`
 	// Untested 为今日既未体检也未成功的账号数。
 	Untested int `json:"untested"`
+	// Unusable 为不可用账号数, 包含网络错误子集。
 	Unusable int `json:"unusable"`
 	// ProbeError 是最近一次体检遇基础设施故障(网络/代理/上游 5xx)的账号数:
-	// 不代表账号被封, 单独筛选便于复测。
+	// 不可用总数包含该子集, 可通过网络错误筛选复测。
 	ProbeError int `json:"probe_error"`
 	// Historic 是历史可用账号数: 曾经成功过(不论当前冷却或过期)。
 	Historic int `json:"historic"`
@@ -630,8 +632,8 @@ type OpencodeAccountLedger struct {
 
 // ListOpencodeAccountStates 返回渠道指定 Key 的账号台账并按状态派生与筛选。
 // keyID 为空时读旧单 Key 台账; filter: all(默认)/usable/untested/unusable/error/historic。派生口径:
-// 可用 = 未冷却且(最近探测健康 或 7 天内有转发成功); 今日未测试 = 今日既无体检也无成功;
-// 不可用 = 冷却中或最近探测被上游拒绝; 网络错误 = 最近探测遇基础设施故障且无在效成功;
+// 可用 = 未冷却且(最近探测健康 或 7 天内有转发成功且晚于最近探测错误); 今日未测试 = 今日既无体检也无成功;
+// 不可用 = 冷却中、最近探测被上游拒绝或网络错误; 网络错误是不可用的可复测子集;
 // 历史可用 = 累计成功过(success_count > 0, 不依赖 last_success_at, 免受存量脏数据干扰)。
 // 条目默认按「真实成功 + 体检成功」降序, 同数按账号名升序, 好号置顶。
 func ListOpencodeAccountStates(channelID int, keyID, filter string) (*OpencodeAccountLedger, error) {
@@ -650,7 +652,7 @@ func ListOpencodeAccountStates(channelID int, keyID, filter string) (*OpencodeAc
 		return nil, err
 	}
 	now := time.Now()
-	today := now.Format("2006-01-02")
+	today := now.UTC().Format("2006-01-02")
 	ledger := &OpencodeAccountLedger{ChannelID: channelID, KeyID: keyID}
 	for _, row := range rows {
 		state := ocAccountLedgerState(row, now)
@@ -664,6 +666,7 @@ func ListOpencodeAccountStates(channelID int, keyID, filter string) (*OpencodeAc
 			ledger.Usable++
 		case "error":
 			ledger.ProbeError++
+			ledger.Unusable++
 		case "untested":
 		default:
 			ledger.Unusable++
@@ -677,6 +680,10 @@ func ListOpencodeAccountStates(channelID int, keyID, filter string) (*OpencodeAc
 			}
 		} else if filter == "untested" {
 			if testedToday {
+				continue
+			}
+		} else if filter == "unusable" {
+			if state != "unusable" && state != "error" {
 				continue
 			}
 		} else if filter != "all" && filter != state {
@@ -711,10 +718,10 @@ func ListOpencodeAccountStates(channelID int, keyID, filter string) (*OpencodeAc
 	return ledger, nil
 }
 
-// ocAccountTestedToday 判断账号今日是否体检或成功过。
+// ocAccountTestedToday 判断账号 UTC 今日是否体检或成功过。
 func ocAccountTestedToday(row model.OpencodeProxyAccount, today string) bool {
-	probeToday := !row.LastProbeAt.IsZero() && row.LastProbeAt.In(time.Local).Format("2006-01-02") == today
-	successToday := !row.LastSuccessAt.IsZero() && row.LastSuccessAt.In(time.Local).Format("2006-01-02") == today
+	probeToday := !row.LastProbeAt.IsZero() && row.LastProbeAt.UTC().Format("2006-01-02") == today
+	successToday := !row.LastSuccessAt.IsZero() && row.LastSuccessAt.UTC().Format("2006-01-02") == today
 	return probeToday || successToday
 }
 
@@ -723,16 +730,23 @@ func ocAccountLedgerState(row model.OpencodeProxyAccount, now time.Time) string 
 	if now.Before(row.CooldownUntil) {
 		return "unusable"
 	}
-	usedInTTL := !row.LastSuccessAt.IsZero() && now.Sub(row.LastSuccessAt) <= ocProxySuccessTTL
+	probeUnhealthyAfterSuccess := row.LastProbeOutcome != "" &&
+		row.LastProbeOutcome != model.OpencodeAccountOutcomeHealthy &&
+		(row.LastSuccessAt.IsZero() || !row.LastSuccessAt.After(row.LastProbeAt))
+	if probeUnhealthyAfterSuccess {
+		if row.LastProbeOutcome == model.OpencodeAccountOutcomeError {
+			return "error"
+		}
+		return "unusable"
+	}
+	// 只认实际成功次数, 避免计数为零的历史伪造成功时间进入可用。
+	hasSuccess := row.SuccessCount > 0
+	usedInTTL := hasSuccess && !row.LastSuccessAt.IsZero() && now.Sub(row.LastSuccessAt) <= ocProxySuccessTTL
 	if row.LastProbeOutcome == model.OpencodeAccountOutcomeHealthy || usedInTTL {
 		return "usable"
 	}
-	if row.LastProbeOutcome == "" && row.LastSuccessAt.IsZero() {
+	if row.LastProbeOutcome == "" && !hasSuccess {
 		return "untested"
-	}
-	// 网络/代理/上游 5xx 故障与「被上游拒绝」区分开: 前者不代表账号被封, 可复测。
-	if row.LastProbeOutcome == model.OpencodeAccountOutcomeError {
-		return "error"
 	}
 	return "unusable"
 }

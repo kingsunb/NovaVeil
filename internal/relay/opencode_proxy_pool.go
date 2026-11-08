@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,7 +19,7 @@ const (
 	ocProxyPerAccountSessions = 1
 	// ocProxySuccessTTL 内成功过的账号优先复用。
 	ocProxySuccessTTL = 7 * 24 * time.Hour
-	// 403/429 被拒账号冷却上限, 无 Retry-After 时的回落值。
+	// 403/429 被拒账号统一冷却到下一个 UTC 零点, 上限 24 小时。
 	ocProxyRejectedCooldown = 24 * time.Hour
 	// ocProxyMaxAccounts 是每渠道账号数上限, 库内按此淘汰。
 	ocProxyMaxAccounts = 30000
@@ -50,6 +48,11 @@ type ocProxyAccount struct {
 	// 活跃会话及请求数, 空会话不登记。
 	sessions map[string]int
 	verified bool
+	// 最近一次体检结论, 与台账同口径; 用于可用分层。
+	lastProbeAt      time.Time
+	lastProbeOutcome string
+	// 累计成功次数(真实 + 体检), 用于识别历史可用账号。
+	successCount int64
 	// 连续真实失败数, 仅内存, 成功或冷却即清零。
 	consecutiveFailures int
 	// 24h 失败窗口, 落库供重启恢复。
@@ -146,10 +149,13 @@ func loadOpencodeProxyPoolForKey(pool *ocProxyPool, channelID int, keyID string)
 		// 台账里存在未探测的生成账号(探测前即落账), 不能整行视为已验证:
 		// 只有真实成功过(含冷却行的历史成功)才可信, 未探测项降级为普通候选。
 		state := &ocProxyAccount{
-			account:       row.Account,
-			lastSuccessAt: row.LastSuccessAt,
-			cooldownUntil: row.CooldownUntil,
-			verified:      !row.LastSuccessAt.IsZero(),
+			account:          row.Account,
+			lastSuccessAt:    row.LastSuccessAt,
+			cooldownUntil:    row.CooldownUntil,
+			verified:         !row.LastSuccessAt.IsZero(),
+			lastProbeAt:      row.LastProbeAt,
+			lastProbeOutcome: row.LastProbeOutcome,
+			successCount:     row.SuccessCount,
 		}
 		// 冷却行的窗口由冷却写入清零; 未冷却行按库内快照恢复, 到期后接着累计。
 		if !row.CooldownUntil.After(time.Now()) {
@@ -232,7 +238,7 @@ func (p *ocProxyPool) pickLocked(now time.Time, session string) *ocProxyAccount 
 		if bound != "" && candidate.account == bound {
 			continue
 		}
-		if picked == nil || ocProxyCandidateBetter(candidate, picked) {
+		if picked == nil || ocProxyCandidateBetter(candidate, picked, now) {
 			picked = candidate
 		}
 	}
@@ -274,8 +280,11 @@ func (p *ocProxyPool) pickFixedLocked(now time.Time, session, account string) *o
 }
 
 // ocProxyCandidateBetter 报告 a 是否优先于 b; 调用方需持锁。
-// 连续失败少者优先(哪怕未验证), 同级已验证优先, 再按最近成功时间新者优先。
-func ocProxyCandidateBetter(a, b *ocProxyAccount) bool {
+// 先比可用分层, 同层再比连续失败、是否验证过、最近成功时间。
+func ocProxyCandidateBetter(a, b *ocProxyAccount, now time.Time) bool {
+	if ta, tb := ocProxyCandidateTier(a, now), ocProxyCandidateTier(b, now); ta != tb {
+		return ta < tb
+	}
 	if a.consecutiveFailures != b.consecutiveFailures {
 		return a.consecutiveFailures < b.consecutiveFailures
 	}
@@ -283,6 +292,44 @@ func ocProxyCandidateBetter(a, b *ocProxyAccount) bool {
 		return a.verified
 	}
 	return a.verified && a.lastSuccessAt.After(b.lastSuccessAt)
+}
+
+// 可用分层: 0 实测/近期真实成功, 1 历史可用, 2 UTC 日未测试, 3 UTC 日已测非健康。
+const (
+	ocProxyTierUsable = iota
+	ocProxyTierHistory
+	ocProxyTierUntested
+	ocProxyTierFallback
+)
+
+// ocProxyCandidateTier 返回账号的选号分层; 口径与台账可用一致。
+func ocProxyCandidateTier(account *ocProxyAccount, now time.Time) int {
+	probeUnhealthyAfterSuccess := account.lastProbeOutcome != "" &&
+		account.lastProbeOutcome != model.OpencodeAccountOutcomeHealthy &&
+		(account.lastSuccessAt.IsZero() || !account.lastSuccessAt.After(account.lastProbeAt))
+	// 只认实际成功次数, 避免计数为零的历史伪造成功时间进入可用层。
+	hasSuccess := account.successCount > 0
+	usedInTTL := hasSuccess && !account.lastSuccessAt.IsZero() && now.Sub(account.lastSuccessAt) <= ocProxySuccessTTL
+	if !probeUnhealthyAfterSuccess &&
+		(account.lastProbeOutcome == model.OpencodeAccountOutcomeHealthy || usedInTTL) {
+		return ocProxyTierUsable
+	}
+	if hasSuccess {
+		return ocProxyTierHistory
+	}
+	if !ocProxyTestedToday(account, now) {
+		return ocProxyTierUntested
+	}
+	return ocProxyTierFallback
+}
+
+// ocProxyTestedToday 报告账号 UTC 今日是否体检过。
+func ocProxyTestedToday(account *ocProxyAccount, now time.Time) bool {
+	if account.lastProbeAt.IsZero() {
+		return false
+	}
+	const layout = "2006-01-02"
+	return account.lastProbeAt.UTC().Format(layout) == now.UTC().Format(layout)
 }
 
 // pruneLocked 清理过期的会话记忆与 429 计票; 调用方需持锁。
@@ -309,18 +356,12 @@ func (p *ocProxyPool) pruneLocked(now time.Time) {
 	}
 }
 
-// ocProxyUsable 报告账号是否未冷却、未过期且并发未满。
+// ocProxyUsable 报告账号是否未冷却且并发未满; 实测结论只决定选号优先级。
 func ocProxyUsable(account *ocProxyAccount, now time.Time) bool {
 	if account.active >= ocProxyPerAccountLimit {
 		return false
 	}
-	if now.Before(account.cooldownUntil) {
-		return false
-	}
-	if account.verified && now.Sub(account.lastSuccessAt) > ocProxySuccessTTL {
-		return false
-	}
-	return true
+	return !now.Before(account.cooldownUntil)
 }
 
 // ocProxySessionAvailable 报告账号能否容纳该会话; 空会话不登记、不独占。
@@ -434,6 +475,11 @@ func markOpencodeProxySuccessForKey(channelID int, keyID, account string, probe 
 	}
 	state.verified = true
 	state.lastSuccessAt = now
+	state.successCount++
+	if probe {
+		state.lastProbeAt = now
+		state.lastProbeOutcome = model.OpencodeAccountOutcomeHealthy
+	}
 	state.cooldownUntil = time.Time{}
 	state.consecutiveFailures = 0
 	prune := pool.needsPrune()
@@ -454,6 +500,27 @@ func markOpencodeProxySuccessForKey(channelID int, keyID, account string, probe 
 			log.Warnf("opencode 代理账号清理失败: %v", err)
 		}
 	})
+}
+
+// markOpencodeProxyProbeOutcomeForKey 把体检结论同步到进程内池, 供选号分层即时生效;
+// 不写成功时间, 与台账一致: 体检健康只证明账号当前可用。
+func markOpencodeProxyProbeOutcomeForKey(channelID int, keyID, account, outcome string) {
+	if account == "" || outcome == "" {
+		return
+	}
+	pool := ocProxyPoolForKey(channelID, keyID)
+	pool.mu.Lock()
+	loadOpencodeProxyPoolForKey(pool, channelID, keyID)
+	state, ok := pool.accounts[account]
+	if !ok {
+		state = new(ocProxyAccount)
+		state.account = account
+		pool.accounts[account] = state
+		pool.trimLocked(account)
+	}
+	state.lastProbeAt = time.Now()
+	state.lastProbeOutcome = outcome
+	pool.mu.Unlock()
 }
 
 // markOpencodeProxyRealFailure 锁内记账一次下游真实转发失败, 锁外异步落库。
@@ -487,7 +554,7 @@ func markOpencodeProxyRealFailureForKey(channelID int, keyID, account string) {
 	}
 	var cooldown time.Duration
 	if !cooling && state.failureWindowCount >= ocProxyFailureWindowLimit {
-		cooldown = opencodeRejectCooldown("", now)
+		cooldown = opencodeRejectCooldown(now)
 		state.cooldownUntil = now.Add(cooldown)
 		state.consecutiveFailures = 0
 		state.failureWindowStart = time.Time{}
@@ -529,13 +596,13 @@ func banOpencodeProxyAccountForKey(channelID int, keyID, session, account string
 }
 
 // 403 属于凭据/权限拒绝, 单次即冷却旧单 Key 渠道账号并异步落库。
-func markOpencodeProxyRejected(channelID int, account, retryAfter string) {
-	markOpencodeProxyRejectedForKey(channelID, "", account, retryAfter)
+func markOpencodeProxyRejected(channelID int, account string) {
+	markOpencodeProxyRejectedForKey(channelID, "", account)
 }
 
 // markOpencodeProxyRejectedForKey 冷却指定 Key 的账号。
-func markOpencodeProxyRejectedForKey(channelID int, keyID, account, retryAfter string) {
-	markOpencodeProxyCooldownForKey(channelID, keyID, account, opencodeRejectCooldown(retryAfter, time.Now()))
+func markOpencodeProxyRejectedForKey(channelID int, keyID, account string) {
+	markOpencodeProxyCooldownForKey(channelID, keyID, account, opencodeRejectCooldown(time.Now()))
 }
 
 // recordRateLimitedLocked 记录一次会话 429, 返回是否达到冷却 quorum; 调用方需持锁。
@@ -554,15 +621,15 @@ func (p *ocProxyPool) recordRateLimitedLocked(session string, now time.Time) boo
 
 // markOpencodeProxyRateLimited 处理 429: 24 小时窗口内两个不同会话报出才冷却账号,
 // 单会话仅计票不冷却; 无会话标识时无法计票, 回退单次冷却避免反复使用被限流账号。
-func markOpencodeProxyRateLimited(channelID int, account, session, retryAfter string) {
-	markOpencodeProxyRateLimitedForKey(channelID, "", account, session, retryAfter)
+func markOpencodeProxyRateLimited(channelID int, account, session string) {
+	markOpencodeProxyRateLimitedForKey(channelID, "", account, session)
 }
 
 // markOpencodeProxyRateLimitedForKey 处理指定 Key 的 429 计票与冷却。
-func markOpencodeProxyRateLimitedForKey(channelID int, keyID, account, session, retryAfter string) {
+func markOpencodeProxyRateLimitedForKey(channelID int, keyID, account, session string) {
 	now := time.Now()
 	if session == "" {
-		markOpencodeProxyCooldownForKey(channelID, keyID, account, opencodeRejectCooldown(retryAfter, now))
+		markOpencodeProxyCooldownForKey(channelID, keyID, account, opencodeRejectCooldown(now))
 		return
 	}
 	pool := ocProxyPoolForKey(channelID, keyID)
@@ -571,19 +638,13 @@ func markOpencodeProxyRateLimitedForKey(channelID int, keyID, account, session, 
 	quorum := pool.recordRateLimitedLocked(session, now)
 	pool.mu.Unlock()
 	if quorum {
-		markOpencodeProxyCooldownForKey(channelID, keyID, account, opencodeRejectCooldown(retryAfter, now))
+		markOpencodeProxyCooldownForKey(channelID, keyID, account, opencodeRejectCooldown(now))
 	}
 }
 
-// opencodeRejectCooldown 按上游 Retry-After(秒)定冷却时长; 缺失时回落到下一个
-// UTC 零点——免费档配额按 UTC 天重置, 固定冷却会跨过重置点白白闲置出口。
-func opencodeRejectCooldown(retryAfter string, now time.Time) time.Duration {
-	if seconds, err := strconv.Atoi(strings.TrimSpace(retryAfter)); err == nil && seconds > 0 {
-		if cooldown := time.Duration(seconds) * time.Second; cooldown < ocProxyRejectedCooldown {
-			return cooldown
-		}
-		return ocProxyRejectedCooldown
-	}
+// opencodeRejectCooldown 统一冷却到下一个 UTC 零点: 免费档配额按 UTC 天重置,
+// 不跟随上游 Retry-After, 避免长冷却跨过重置点白白闲置出口。
+func opencodeRejectCooldown(now time.Time) time.Duration {
 	utc := now.UTC()
 	next := utc.Truncate(24 * time.Hour).Add(24 * time.Hour)
 	if cooldown := next.Sub(utc); cooldown > 0 && cooldown < ocProxyRejectedCooldown {

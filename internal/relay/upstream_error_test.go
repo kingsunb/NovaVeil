@@ -66,7 +66,7 @@ func TestPassthroughStreamErrorPreservesRetryAfter(t *testing.T) {
 			if got := UpstreamRetryAfter(err); got != "900" {
 				t.Fatalf("Retry-After = %q", got)
 			}
-			if got := opencodeRejectCooldown(UpstreamRetryAfter(err), time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)); got != 15*time.Minute {
+			if got := opencodeRejectCooldown(time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)); got != 12*time.Hour {
 				t.Fatalf("cooldown = %s", got)
 			}
 			if failure.Method != request.Method || failure.URL != request.URL || failure.Status != "429 Too Many Requests" {

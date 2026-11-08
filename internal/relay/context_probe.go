@@ -341,7 +341,7 @@ func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName,
 		case result.Accepted:
 			markOpencodeProxySuccessForKey(channel.ID, keyID, proxyAccount, true)
 		case response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests:
-			markOpencodeProxyRejectedForKey(channel.ID, keyID, proxyAccount, response.Header.Get("Retry-After"))
+			markOpencodeProxyRejectedForKey(channel.ID, keyID, proxyAccount)
 		}
 	}
 	if probeErr != nil {

@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 // 渠道使用的上游服务提供方。
 type ChannelProvider string
 
@@ -43,6 +45,7 @@ type Channel struct {
 	Name                   string                       `json:"name" gorm:"unique;not null"`                                    // 渠道名称。
 	Type                   ChannelProvider              `json:"type"`                                                           // 上游服务提供方。
 	Enabled                bool                         `json:"enabled"`                                                        // 渠道是否可用。注意不可加 default 标签, 否则插入 false 会被数据库默认值覆盖为 true。
+	AutoDisabledUntil      *time.Time                   `json:"auto_disabled_until,omitempty"`                                  // 429 自动停用截止时刻。
 	IsFree                 bool                         `json:"is_free" gorm:"not null;default:false"`                          // 免费渠道分类: 内置免费渠道恒为 true, 自定义/用户渠道为 false; 免费渠道与自定义渠道在选路中一视同仁, 不影响故障转移顺序。
 	Builtin                bool                         `json:"builtin" gorm:"not null;default:false"`                          // 是否内置固定渠道: 由代码维护, 启动时自动补建; 用户渠道恒为 false.
 	BaseURL                string                       `json:"base_url"`                                                       // 唯一的上游基础地址。

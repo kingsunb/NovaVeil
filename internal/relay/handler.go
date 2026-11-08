@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/log"
 	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
 	"github.com/kingsunb/NovaVeil/internal/client"
@@ -708,11 +709,11 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 							if code == http.StatusTooManyRequests {
 								// 计票用粘合键, 不用带账号的出站号: 同一段对话换出口
 								// 不能被当成两个不同会话凑满 quorum。
-								markOpencodeProxyRateLimitedForKey(channel.ID, proxyAccountKeyID, proxyAccount, ocSessionBindingKey, UpstreamRetryAfter(err))
+								markOpencodeProxyRateLimitedForKey(channel.ID, proxyAccountKeyID, proxyAccount, ocSessionBindingKey)
 								// 429 拉黑该账号并解除粘合: 重试换新出口, 出站会话随之重派。
 								banOpencodeProxyAccountForKey(channel.ID, proxyAccountKeyID, ocSessionBindingKey, proxyAccount)
 							} else {
-								markOpencodeProxyRejectedForKey(channel.ID, proxyAccountKeyID, proxyAccount, UpstreamRetryAfter(err))
+								markOpencodeProxyRejectedForKey(channel.ID, proxyAccountKeyID, proxyAccount)
 							}
 						}
 					}
@@ -749,6 +750,23 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				brief := ""
 				if outcome == AttemptFailed {
 					brief = err.Error()
+				}
+				// 直连免费档 429 停用至 UTC 零点。
+				// 定时任务恢复; 优先于 Key 轮换。
+				if outcome == AttemptFailed && isOpencodeFreeLane(channel) && !channel.Proxy && isKeyRateLimitError(err) {
+					disableCtx, cancelDisable := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+					disableErr := op.ChannelAutoDisable(channel.ID, disableCtx)
+					cancelDisable()
+					if disableErr != nil {
+						log.Warnf("channel %d auto disable: %v", channel.ID, disableErr)
+					} else {
+						log.Warnf("channel %d(%s) disabled until next UTC midnight: upstream 429", channel.ID, channel.Name)
+					}
+					request.finishRound(AttemptFailed, classifyRound(err, ctx, roundCtx), brief)
+					request.releaseRoundLifecycle()
+					releaseRefChainHops(hops)
+					exclude = item.ID
+					continue
 				}
 				// 多 Key 认证/限额拒绝轮换: 上游明确拒绝当前凭据(401)或标记其限速配额(429)
 				// 且该渠道配置了多把 Key 时, 仅把本轮使用的 Key 标记冷却(时长取分组

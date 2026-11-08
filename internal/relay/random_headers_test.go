@@ -562,6 +562,32 @@ func TestOpencodeSessionEmptyKeyMintsOncePerCaller(t *testing.T) {
 	}
 }
 
+// TestInjectOpencodeCorrelationHeadersV1Lane 锁定 v1 档头集合。
+// 1.19.5 实抓只发 x-opencode-session-id, 不发 affinity 与 X-Session-Id。
+func TestInjectOpencodeCorrelationHeadersV1Lane(t *testing.T) {
+	channel := model.Channel{
+		ID:            1001,
+		OpencodeCompat: true,
+		BaseURL:        "https://opencode.ai/inference",
+		OpencodeLane:   "v1",
+	}
+	req := newRandomHeaderRequest()
+	applyResolvedOpencodeSession(channel, validSesA, req)
+	mustInjectOpencodeCorrelationHeaders(t, channel, req)
+
+	if got := req.Headers.Get(opencodeSessionIDHeader); got != validSesA {
+		t.Fatalf("x-opencode-session-id = %q, 期望 %q", got, validSesA)
+	}
+	for _, header := range []string{opencodeAffinityHeader, opencodeUpstreamSessID} {
+		if got := req.Headers.Get(header); got != "" {
+			t.Fatalf("v1 档不应注入 %s, 实际 %q", header, got)
+		}
+	}
+	if got := req.Headers.Get(opencodeProjectHeader); got != "global" {
+		t.Fatalf("x-opencode-project = %q, 期望 global", got)
+	}
+}
+
 // TestInjectOpencodeCorrelationHeaders 验证 OpencodeCompat 渠道在会话号确定后补关联头:
 // x-session-affinity / x-opencode-session-id / X-Session-Id 三者镜像最终会话号,
 // 无合法项目信号时 x-opencode-project 回退 global; 非 OpencodeCompat 渠道完全不注入。

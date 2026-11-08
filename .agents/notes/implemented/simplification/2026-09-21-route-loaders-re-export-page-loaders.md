@@ -6,14 +6,13 @@ Status: implemented
 
 审计 FE-07/F-L2 确认：`src/lib/route-loaders.ts` 与 `src/lib/page-loaders.ts` 各自维护一份 11 个页面的
 loader 清单——前者裸 `import()`，后者经 `createPageLoader` 带 Promise 缓存与失败清空。两边路径只要漏改
-一边，App 懒加载、Sidebar `preloadPage` 与命令面板预加载就会漂移，且翻车通常是运行时才暴露的 chunk 404。
+一边，App 懒加载与 Sidebar `preloadPage` 就会漂移，且翻车通常是运行时才暴露的 chunk 404。
 
 ## 决定
 
 - `route-loaders.ts` 不再定义 loader，改为 re-export `page-loaders.ts` 的 11 个 `load*Page` 与
   `preloadPage`。两个模块名保留，调用方零改动。
-- App 的 `lazy()`、Sidebar 的 `preloadPage` 与 CommandPalette 共享同一组 `createPageLoader` 实例，
-  Promise 缓存和失败清 pending 全局唯一。
+- App 的 `lazy()` 与 Sidebar 的 `preloadPage` 共享同一组 `createPageLoader` 实例，Promise 缓存和失败清 pending 全局唯一。命令面板移除后不再是 loader 消费方，相关变更见[命令面板移除记录](2026-11-07-remove-command-palette.md)。
 
 ## 备选方案
 
