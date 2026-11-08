@@ -3,13 +3,13 @@
  * 体检控制与账号台账。生成即落账长期保存，台账随体检与转发流量实时更新，支持三态
  * 筛选、逐账号删除与一键测试台账全部账号。可开启每 24 小时自动体检。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { UsersRound } from "lucide-react";
 
 import { api } from "@/lib/api";
-import type { Channel, ChannelKey, ChannelKeyTestResult } from "@/lib/types";
+import type { Channel, ChannelKey } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmButton } from "@/components/ui/confirm-button";
@@ -582,102 +582,6 @@ function ChannelSection({ channel }: { channel: Channel }) {
   );
 }
 
-function KeyedChannelSection({ channels }: { channels: Channel[] }) {
-  const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
-  const selectedChannel =
-    channels.find((channel) => channel.id === selectedChannelId) ?? channels[0] ?? null;
-  const [results, setResults] = useState<ChannelKeyTestResult[] | null>(null);
-  const [testing, setTesting] = useState(false);
-  const testSeq = useRef(0);
-  const channelKeys =
-    selectedChannel && Array.isArray(selectedChannel.keys) ? selectedChannel.keys : [];
-  const hasTestableKey =
-    !!selectedChannel && (channelKeys.length > 0 || !!selectedChannel.key_masked);
-
-  useEffect(() => {
-    testSeq.current += 1;
-    setResults(null);
-    setTesting(false);
-  }, [selectedChannel?.id]);
-
-  async function testKeys() {
-    if (!selectedChannel || testing) return;
-    const seq = ++testSeq.current;
-    setTesting(true);
-    setResults(null);
-    try {
-      const next = await api.testChannelKeys(selectedChannel.id, selectedChannel.models?.[0]?.name);
-      if (seq === testSeq.current) {
-        setResults(next);
-      }
-    } catch (error) {
-      if (seq === testSeq.current) {
-        toast.error(error instanceof Error ? error.message : zhCN.proxyAccounts.keyedTestFailed);
-      }
-    } finally {
-      if (seq === testSeq.current) {
-        setTesting(false);
-      }
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{zhCN.proxyAccounts.keyedTitle}</CardTitle>
-        <CardDescription>{zhCN.proxyAccounts.keyedDescription}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-wrap items-end gap-4">
-          <Field label={zhCN.proxyAccounts.keyedChannel}>
-            <select
-              className="h-9 w-full min-w-56 rounded-md border bg-transparent px-3 text-sm"
-              value={selectedChannel?.id ?? ""}
-              onChange={(event) => setSelectedChannelId(Number(event.target.value))}
-            >
-              {channels.map((channel) => (
-                <option key={channel.id} value={channel.id}>
-                  {channel.name}
-                  {channel.enabled ? "" : zhCN.proxyAccounts.keyedDisabledSuffix}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Button
-            variant="outline"
-            disabled={!selectedChannel || !hasTestableKey || testing}
-            onClick={() => void testKeys()}
-          >
-            {testing ? zhCN.proxyAccounts.keyedTesting : zhCN.proxyAccounts.keyedTestAll}
-          </Button>
-        </div>
-        {!hasTestableKey && <p className="text-sm text-ink-muted">{zhCN.proxyAccounts.keyedNoKey}</p>}
-        {results && results.length > 0 ? (
-          <div className="space-y-2">
-            {results.map((result) => (
-              <div
-                key={`${result.key_id}-${result.label}`}
-                className="flex flex-wrap items-center gap-3 rounded-md border border-border/60 p-2 text-sm"
-              >
-                <Pill tone={result.ok ? "success" : "danger"}>
-                  {result.ok ? zhCN.proxyAccounts.keyedOk : zhCN.proxyAccounts.keyedFailed}
-                </Pill>
-                <span className="font-medium">{result.label || result.key_id}</span>
-                <span className="text-ink-muted">{result.elapsed_ms} ms</span>
-                <span className="min-w-0 break-all text-ink-muted">
-                  {result.ok ? result.content : result.error}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : results ? (
-          <p className="text-sm text-ink-muted">{zhCN.proxyAccounts.keyedNoResults}</p>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
 export default function ProxyAccountsPage() {
   const queryClient = useQueryClient();
   const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: () => api.listChannels() });
@@ -691,7 +595,6 @@ export default function ProxyAccountsPage() {
       (!channel.keyed || (Array.isArray(channel.keys) && channel.keys.some((key) => !!key.id))) &&
       (channel.base_url?.includes("/zen") || channel.base_url?.includes("/inference")),
   );
-  const keyedChannels = (channelsQuery.data ?? []).filter((channel) => channel.keyed);
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
   const selectedChannel =
     eligible.find((channel) => channel.id === selectedChannelId) ?? eligible[0] ?? null;
@@ -712,18 +615,15 @@ export default function ProxyAccountsPage() {
 
   return (
     <div className="space-y-4 p-4">
-      {keyedChannels.length > 0 && <KeyedChannelSection channels={keyedChannels} />}
       {eligible.length === 0 ? (
-        keyedChannels.length === 0 ? (
-          <Card>
-            <CardContent>
-              <EmptyState
-                icon={<UsersRound className="size-8" />}
-                title={zhCN.proxyAccounts.eligibleEmpty}
-              />
-            </CardContent>
-          </Card>
-        ) : null
+        <Card>
+          <CardContent>
+            <EmptyState
+              icon={<UsersRound className="size-8" />}
+              title={zhCN.proxyAccounts.eligibleEmpty}
+            />
+          </CardContent>
+        </Card>
       ) : (
         <>
           <Card>

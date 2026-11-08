@@ -23,8 +23,6 @@ vi.mock("./Topbar", () => ({
     </header>
   ),
 }));
-vi.mock("./CommandPalette", () => ({ CommandPalette: () => null }));
-
 function Navigation() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -89,9 +87,6 @@ describe("AppShell 主区滚动复位", () => {
       expect(main.scrollTop).toBe(500);
     }
     view.rerender(shell());
-    expect(main.scrollTop).toBe(500);
-    // 命令面板状态更新仍不触发路由滚动副作用。
-    await user.keyboard("{Control>}k{/Control}");
     expect(main.scrollTop).toBe(500);
   });
 });

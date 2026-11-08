@@ -6,8 +6,8 @@ import {
   KeyRound,
   Sigma,
   GaugeCircle,
-  DollarSign,
-  Clock,
+  ArrowDownToLine,
+  ArrowUpFromLine,
 } from "lucide-react";
 
 import { api } from "@/lib/api";
@@ -50,10 +50,10 @@ const RANGE_HINTS: Record<Range, string> = {
 };
 
 /**
- * 仪表盘 —— 参考 TokenArena 的 Usage 总览 / 详细指标 / 预计消耗 / 使用时长 / 热力图
- *  - 6 KPI（总请求 / 客户端 IP / 错误数 / Token 用量 / 预计消耗 / 使用时长），随趋势档位联动
+ * 仪表盘 —— 参考 TokenArena 的 Usage 总览 / 详细指标 / 热力图
+ *  - 6 KPI（总请求 / 客户端 IP / 错误数 / Token 用量 / 输入 Token / 输出 Token），随趋势档位联动
  *  - Token 趋势（24h/7d/30d/1y/3y，真实分桶时序），默认 24h
- *  - Token 构成环形图（input/output/reasoning/cached 占比）
+ *  - Token 构成环形图（input/output 占比）
  *  - 使用热力图（GitHub 风格，每日 token 用量）
  *  - 模型 Top + 最近错误
  */
@@ -104,7 +104,9 @@ export default function DashboardPage() {
     queryFn: () => api.listErrorLogs(5),
   });
 
-  const kpis = buildKpis(now, range);
+  const statsUnavailable = now?.stats_available === false;
+  const statsUnresolved = nowError || statsUnavailable;
+  const kpis = buildKpis(now, range, nowError);
   const top = (now?.tokens_by_model ?? [])
     .map((model) => ({
       ...model,
@@ -115,10 +117,16 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-5">
-      {/* 总览拉取失败时 KPI 全是 "—"，容易被当成「没有调用」；显式提示可重试 */}
-      {nowError && <QueryErrorBanner onRetry={() => refetchNow()} />}
+      {/* 失败状态不显示为零用量。 */}
+      {nowError ? (
+        <QueryErrorBanner onRetry={() => refetchNow()} />
+      ) : statsUnavailable ? (
+        <div role="status" className="rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-sm text-ink-muted">
+          统计暂不可用
+        </div>
+      ) : null}
 
-      {/* ── KPI 卡片: 总请求 / 客户端 IP / 错误数 / Token 用量 / 预计消耗 / 使用时长 ── */}
+      {/* ── KPI 卡片: 总请求 / 客户端 IP / 错误数 / Token 用量 / 输入 Token / 输出 Token ── */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
         {kpis.map((k) => (
           <KpiCard key={k.label} {...k} loading={loadingNow} />
@@ -132,8 +140,11 @@ export default function DashboardPage() {
             <div>
               <CardTitle>Token 用量趋势</CardTitle>
               <CardDescription>
-                输入 {formatNumber(now?.total_tokens_input ?? 0)} · 输出{" "}
-                {formatNumber(now?.total_tokens_output ?? 0)}
+                {loadingNow
+                  ? "加载统计中…"
+                  : statsUnresolved
+                    ? "统计暂不可用"
+                    : `输入 ${formatNumber(now?.total_tokens_input ?? 0)} · 输出 ${formatNumber(now?.total_tokens_output ?? 0)}`}
               </CardDescription>
             </div>
             <SegmentedControl
@@ -180,7 +191,9 @@ export default function DashboardPage() {
             <div>
               <CardTitle>Token 构成</CardTitle>
               <CardDescription>
-                {RANGE_HINTS[range]} · input/output/reasoning/cache
+                {statsUnresolved
+                  ? "统计暂不可用"
+                  : `${RANGE_HINTS[range]} · input/output`}
               </CardDescription>
             </div>
           </CardHeader>
@@ -190,12 +203,14 @@ export default function DashboardPage() {
                 <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
                 <span className="text-xs text-ink-muted">加载中</span>
               </div>
+            ) : statsUnresolved ? (
+              <div role="status" className="flex h-40 items-center justify-center text-sm text-ink-muted">
+                统计暂不可用
+              </div>
             ) : (
               <TokenBreakdownChart
                 input={now?.total_tokens_input ?? 0}
                 output={now?.total_tokens_output ?? 0}
-                reasoning={now?.reasoning_tokens ?? 0}
-                cached={now?.cached_tokens ?? 0}
               />
             )}
           </CardContent>
@@ -239,8 +254,10 @@ export default function DashboardPage() {
                 <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
                 <span className="text-xs text-ink-muted">加载中</span>
               </div>
-            ) : nowError ? (
-              <QueryErrorBanner onRetry={() => refetchNow()} />
+            ) : statsUnresolved ? (
+              <div role="status" className="py-8 text-center text-sm text-ink-muted">
+                统计暂不可用
+              </div>
             ) : top.length === 0 ? (
               <EmptyState
                 className="py-8"
@@ -343,28 +360,20 @@ interface Kpi {
   value: string;
   icon: React.ReactNode;
   hint?: string;
-  tone?: "neutral" | "success" | "warning" | "danger" | "info" | "cost";
+  tone?: "neutral" | "success" | "warning" | "danger" | "info";
+  unavailable?: boolean;
 }
 
 function buildKpis(
   latest: Awaited<ReturnType<typeof api.getNowVersion>> | undefined,
   range: Range,
+  failed = false,
 ): Kpi[] {
+  const unavailable = failed || latest?.stats_available === false;
   // KPI 共享同一时间窗口口径，hint 随档位联动。
   const hint = RANGE_HINTS[range];
 
-  // 格式化使用时长
-  const formatDurationLabel = (ms: number) => {
-    if (ms <= 0) return "—";
-    const seconds = Math.floor(ms / 1000);
-    if (seconds < 60) return `${seconds}s`;
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-    const hours = Math.floor(minutes / 60);
-    return `${hours}h ${minutes % 60}m`;
-  };
-
-  return [
+  const kpis: Kpi[] = [
     {
       label: "总请求",
       value: latest ? formatNumber(latest.total_requests) : "—",
@@ -399,25 +408,28 @@ function buildKpis(
       tone: "info",
     },
     {
-      label: "预计消耗",
-      value:
-        latest && (latest.total_cost ?? 0) > 0
-          ? `$${latest.total_cost!.toFixed(2)}`
-          : "—",
-      icon: <DollarSign className="h-4 w-4" aria-hidden />,
+      label: "输入 Token",
+      value: latest
+        ? formatNumber(latest.total_tokens_input, { notation: "compact" })
+        : "—",
+      icon: <ArrowDownToLine className="h-4 w-4" aria-hidden />,
       hint,
-      tone: "cost",
+      tone: "info",
     },
     {
-      label: "使用时长",
+      label: "输出 Token",
       value: latest
-        ? formatDurationLabel(latest.total_duration_ms ?? 0)
+        ? formatNumber(latest.total_tokens_output, { notation: "compact" })
         : "—",
-      icon: <Clock className="h-4 w-4" aria-hidden />,
+      icon: <ArrowUpFromLine className="h-4 w-4" aria-hidden />,
       hint,
-      tone: "neutral",
+      tone: "success",
     },
   ];
+
+  return unavailable
+    ? kpis.map((kpi) => ({ ...kpi, value: "—", unavailable: true }))
+    : kpis;
 }
 
 const TONE_BG: Record<NonNullable<Kpi["tone"]>, string> = {
@@ -426,7 +438,6 @@ const TONE_BG: Record<NonNullable<Kpi["tone"]>, string> = {
   warning: "bg-amber-500/[0.10] text-amber-600 dark:text-amber-400",
   danger: "bg-red-500/[0.10] text-red-600 dark:text-red-400",
   info: "bg-blue-500/[0.10] text-blue-600 dark:text-blue-400",
-  cost: "bg-violet-500/[0.10] text-violet-600 dark:text-violet-400",
 };
 
 function KpiCard({
@@ -436,6 +447,7 @@ function KpiCard({
   hint,
   tone = "neutral",
   loading,
+  unavailable,
 }: Kpi & { loading?: boolean }) {
   return (
     <Card className="kpi-card">
@@ -458,7 +470,11 @@ function KpiCard({
             value
           )}
         </div>
-        {hint && <div className="text-[11px] text-ink-subtle">{hint}</div>}
+        {unavailable ? (
+          <div className="text-[11px] text-amber-700 dark:text-amber-300">暂不可用</div>
+        ) : hint ? (
+          <div className="text-[11px] text-ink-subtle">{hint}</div>
+        ) : null}
       </CardContent>
     </Card>
   );

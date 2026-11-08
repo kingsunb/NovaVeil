@@ -72,7 +72,7 @@
   --shadow-apple-sm: 0 1px 2px hsl(255 25% 30% / 0.06), 0 2px 8px hsl(255 25% 30% / 0.04);
   --shadow-apple-md: 0 2px 4px hsl(255 25% 30% / 0.06), 0 4px 16px hsl(255 25% 30% / 0.08);
   --shadow-apple-lg: 0 4px 8px hsl(255 25% 30% / 0.07), 0 12px 32px hsl(255 25% 30% / 0.11);
-  /* 命令面板 / 错误卡片 / 图表 tooltip 等悬浮层的抬升阴影 */
+  /* 错误卡片 / 图表 tooltip 等悬浮层的抬升阴影 */
   --shadow-overlay: 0 24px 48px hsl(255 25% 20% / 0.18), 0 8px 16px hsl(255 25% 20% / 0.09);
 }
 

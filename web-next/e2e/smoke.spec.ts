@@ -3,7 +3,7 @@ import { test, expect, type Page, type Route } from "@playwright/test";
 /**
  * E2E 冒烟 —— 五大核心页面
  *  策略：Playwright 拦截 /api/* 返回固定数据，避免依赖真实后端
- *  覆盖：路由可达 + 关键元素渲染 + 主题切换 + ⌘K 命令面板
+ *  覆盖：路由可达 + 关键元素渲染 + 主题切换
  *
  * 鉴权处理：所有已登录用例都先到 /（让 AuthProvider 完成 /user/status），
  * 再通过点击侧栏 NavLink 导航到目标页 —— 比直接 page.goto 更接近真实用户路径。

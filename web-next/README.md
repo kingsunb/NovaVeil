@@ -104,7 +104,7 @@ web-next/
     │   └── auth.tsx         # 认证上下文（JWT cookie 探活）
     ├── components/
     │   ├── ui/              # 原语：button / card / input / pill / switch / dialog / skeleton ...
-    │   ├── layout/          # AppShell / Sidebar / Topbar / CommandPalette / ErrorBoundary / ThemeProvider
+    │   ├── layout/          # AppShell / Sidebar / Topbar / ErrorBoundary / ThemeProvider
     │   └── charts/          # TokenTrendChart（SVG，数据为示意占位）
     └── pages/               # 6 个核心页
         ├── Login / Dashboard / Channels / Groups / Keys / Logs / Settings
@@ -130,7 +130,7 @@ web-next/
 - 浏览器：Chrome ≥ 100 / Edge ≥ 100 / Safari ≥ 16 / Firefox ≥ 100
 - 主题切换无过渡动画防止闪烁
 - 全部交互尊重 `prefers-reduced-motion`
-- 键盘可达：Tab 顺序合理 / `⌘K` 命令面板 / `Esc` 关闭覆盖层
+- 键盘可达：Tab 顺序合理 / `Esc` 关闭覆盖层
 
 ## 文档
 

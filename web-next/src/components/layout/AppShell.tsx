@@ -3,7 +3,6 @@ import { useLocation } from "react-router-dom";
 import { Menu } from "lucide-react";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
-import { CommandPalette } from "./CommandPalette";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -24,7 +23,6 @@ function prefersMobileDrawer(): boolean {
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const [cmdkOpen, setCmdkOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState(prefersMobileDrawer);
   const { pathname } = useLocation();
@@ -40,10 +38,6 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setCmdkOpen((o) => !o);
-      }
       if (e.key === "Escape") setMobileNavOpen(false);
     }
     document.addEventListener("keydown", onKey);
@@ -143,15 +137,11 @@ export function AppShell({ children }: { children: ReactNode }) {
         <Sidebar onNavigate={() => setMobileNavOpen(false)} />
       </div>
       <div className="flex min-w-0 flex-1 flex-col" inert={trap ? true : undefined}>
-        <Topbar
-          onOpenCommand={() => setCmdkOpen(true)}
-          onOpenNavigation={openNavigation}
-        />
+        <Topbar onOpenNavigation={openNavigation} />
         <main ref={mainRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
           <div className="mx-auto h-full w-full max-w-[1440px]">{children}</div>
         </main>
       </div>
-      <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} />
     </div>
   );
 }

@@ -49,6 +49,7 @@ describe("api 关键 endpoint 路径", () => {
     vi.stubGlobal("fetch", fetch);
     await expect(api.getNowVersion()).resolves.toMatchObject({
       version: "dev",
+      stats_available: true,
       tokens_by_model: [{ name: "gpt-4o", input: 4, output: 6 }],
     });
   });

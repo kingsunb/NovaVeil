@@ -2,25 +2,20 @@ import { formatNumber } from "@/lib/utils";
 
 /**
  * TokenBreakdownChart —— Token 构成环形图。
- * 展示 input / output / reasoning / cached 四类 token 的占比,
- * 参考 TokenArena 的详细指标功能, 用纯 SVG 环形图实现。
+ * 展示 input / output 两类 token 的占比, 用纯 SVG 环形图实现。
  */
 export function TokenBreakdownChart({
   input,
   output,
-  reasoning,
-  cached,
 }: {
   input: number;
   output: number;
-  reasoning: number;
-  cached: number;
 }) {
+  const normalizeTokenCount = (value: number) =>
+    Number.isFinite(value) ? Math.max(0, value) : 0;
   const segments = [
-    { label: "输入", value: input, color: "#6D5AE6" },
-    { label: "输出", value: output, color: "#2FAE86" },
-    { label: "推理", value: reasoning, color: "#E6A23C" },
-    { label: "缓存命中", value: cached, color: "#4EA8DE" },
+    { label: "输入", value: normalizeTokenCount(input), color: "#6D5AE6" },
+    { label: "输出", value: normalizeTokenCount(output), color: "#2FAE86" },
   ];
 
   const total = segments.reduce((sum, s) => sum + s.value, 0);
@@ -56,7 +51,14 @@ export function TokenBreakdownChart({
     const y1 = center + radius * Math.sin(startAngle);
     const x2 = center + radius * Math.cos(endAngle);
     const y2 = center + radius * Math.sin(endAngle);
-    const largeArc = endAngle - startAngle > Math.PI ? 1 : 0;
+    const angleSpan = endAngle - startAngle;
+    if (angleSpan >= 2 * Math.PI) {
+      const midAngle = startAngle + Math.PI;
+      const xm = center + radius * Math.cos(midAngle);
+      const ym = center + radius * Math.sin(midAngle);
+      return `M ${x1} ${y1} A ${radius} ${radius} 0 1 1 ${xm} ${ym} A ${radius} ${radius} 0 1 1 ${x1} ${y1}`;
+    }
+    const largeArc = angleSpan > Math.PI ? 1 : 0;
     return `M ${x1} ${y1} A ${radius} ${radius} 0 ${largeArc} 1 ${x2} ${y2}`;
   };
 

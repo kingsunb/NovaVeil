@@ -86,6 +86,69 @@ describe("<DashboardPage /> KPI tone", () => {
     });
   });
 
+  it("用输入/输出 Token 替代成本与时长卡", async () => {
+    const Wrapper = makeWrapper();
+    render(<DashboardPage />, { wrapper: Wrapper });
+    await waitFor(() => {
+      expect(screen.getByText("输入 Token")).toBeInTheDocument();
+      expect(screen.getByText("输出 Token")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("预计消耗")).toBeNull();
+    expect(screen.queryByText("使用时长")).toBeNull();
+    const inputCard = screen.getByText("输入 Token").closest(".kpi-card");
+    const outputCard = screen.getByText("输出 Token").closest(".kpi-card");
+    expect(inputCard).toHaveTextContent(/10万|100K/);
+    expect(outputCard).toHaveTextContent(/5万|50K/);
+  });
+
+  it("统计不可用时 KPI、Token 构成和模型 Top 不显示零或空数据", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("/stats/now-version")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                code: 200,
+                message: "success",
+                data: {
+                  stats_available: false,
+                  total_requests: 0,
+                  client_ip_count: 0,
+                  error_count: 0,
+                  total_tokens_input: 0,
+                  total_tokens_output: 0,
+                  tokens_by_model: [],
+                },
+              }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
+          );
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ code: 200, message: "success", data: {} }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+    const Wrapper = makeWrapper();
+    render(<DashboardPage />, { wrapper: Wrapper });
+    await waitFor(() => {
+      expect(screen.getAllByText("统计暂不可用").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("暂不可用")).toHaveLength(6);
+    });
+    expect(screen.queryByText("暂无模型用量")).not.toBeInTheDocument();
+    expect(screen.queryByText("总 tokens")).not.toBeInTheDocument();
+    expect(document.querySelectorAll(".kpi-card .num")).toHaveLength(6);
+    expect(
+      Array.from(document.querySelectorAll(".kpi-card .num")).every(
+        (node) => node.textContent === "—",
+      ),
+    ).toBe(true);
+  });
+
   it("错误数为 0 时错误数卡用 neutral 色", async () => {
     const Wrapper = makeWrapper();
     render(<DashboardPage />, { wrapper: Wrapper });
@@ -96,6 +159,50 @@ describe("<DashboardPage /> KPI tone", () => {
     const card = screen.getByText("错误数").closest("div")?.parentElement;
     const iconWrap = card?.parentElement?.querySelector(".text-ink-muted");
     expect(iconWrap).toBeTruthy();
+  });
+
+  it("首次加载时趋势摘要显示加载中，不显示零", async () => {
+    let resolveNow: ((response: Response) => void) | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("/stats/now-version")) {
+          return new Promise<Response>((resolve) => {
+            resolveNow = resolve;
+          });
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ code: 200, message: "success", data: {} }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+    const Wrapper = makeWrapper();
+    render(<DashboardPage />, { wrapper: Wrapper });
+
+    expect(await screen.findByText("加载统计中…")).toBeInTheDocument();
+    expect(screen.queryByText(/输入 0/)).not.toBeInTheDocument();
+
+    resolveNow?.(
+      new Response(
+        JSON.stringify({
+          code: 200,
+          message: "success",
+          data: {
+            stats_available: true,
+            total_tokens_input: 1,
+            total_tokens_output: 2,
+            tokens_by_model: [],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    await waitFor(() => {
+      expect(screen.queryByText("加载统计中…")).not.toBeInTheDocument();
+    });
   });
 });
 
@@ -218,7 +325,7 @@ describe("<DashboardPage /> Token 趋势", () => {
     expect(screen.getByText("暂无模型用量")).toBeInTheDocument();
   });
 
-  it("总览统计失败时模型 Top 显示加载失败，而不是暂无模型用量", async () => {
+  it("总览请求失败时模型 Top 显示不可用，而不是暂无模型用量", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) => {
@@ -244,5 +351,12 @@ describe("<DashboardPage /> Token 趋势", () => {
       expect(screen.getAllByText("加载失败，请检查网络后重试").length).toBeGreaterThan(0);
     });
     expect(screen.queryByText("暂无模型用量")).not.toBeInTheDocument();
+    expect(screen.getAllByText("暂不可用")).toHaveLength(6);
+    expect(
+      Array.from(document.querySelectorAll(".kpi-card .num")).every(
+        (node) => node.textContent === "—",
+      ),
+    ).toBe(true);
+    expect(screen.queryByText("总 tokens")).not.toBeInTheDocument();
   });
 });

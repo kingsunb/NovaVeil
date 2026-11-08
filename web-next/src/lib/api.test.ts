@@ -37,10 +37,11 @@ describe("api.getNowVersion", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("GET /api/v1/stats/now-version，拆 data 信封", async () => {
+  it("GET /api/v1/stats/now-version，旧响应缺少可用性时按可用兼容", async () => {
     const r = await api.getNowVersion();
     expect(r.version).toBe("0.13.0");
     expect(r.client_ip_count).toBe(42);
+    expect(r.stats_available).toBe(true);
     expect(fetch).toHaveBeenCalledWith(
       "/api/v1/stats/now-version",
       expect.objectContaining({ credentials: "include" }),
@@ -662,6 +663,53 @@ describe("归一化函数降级分支", () => {
       total_tokens_input: 0,
       total_tokens_output: 0,
       tokens_by_model: [],
+      stats_available: false,
+    });
+  });
+
+  it("getNowVersion 数组响应回退为不可用", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(ok([]))));
+    await expect(api.getNowVersion()).resolves.toMatchObject({
+      stats_available: false,
+      tokens_by_model: [],
+    });
+  });
+
+  it("getNowVersion 显式的非布尔可用状态视为统计不可用", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(ok({ stats_available: "false" }))),
+    );
+    await expect(api.getNowVersion()).resolves.toMatchObject({
+      stats_available: false,
+    });
+  });
+
+  it("getNowVersion 将负数、null 和非数字 Token 归零并保留统计不可用", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          ok({
+            stats_available: false,
+            total_tokens_input: -100,
+            total_tokens_output: "invalid",
+            tokens_by_model: [
+              { name: "bad", input: -100, output: 200 },
+              { name: "invalid", input: null, output: "Infinity" },
+            ],
+          }),
+        ),
+      ),
+    );
+    await expect(api.getNowVersion()).resolves.toMatchObject({
+      stats_available: false,
+      total_tokens_input: 0,
+      total_tokens_output: 0,
+      tokens_by_model: [
+        { name: "bad", input: 0, output: 200 },
+        { name: "invalid", input: 0, output: 0 },
+      ],
     });
   });
 

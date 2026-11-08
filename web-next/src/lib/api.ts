@@ -423,8 +423,14 @@ function normalizeBuildInfo(raw: unknown): BuildInfo {
   };
 }
 
+function normalizeNonNegativeNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, value)
+    : 0;
+}
+
 function normalizeNowVersion(raw: unknown): NowVersion {
-  if (!raw || typeof raw !== "object") {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return {
       version: "",
       commit: "",
@@ -435,6 +441,7 @@ function normalizeNowVersion(raw: unknown): NowVersion {
       total_tokens_input: 0,
       total_tokens_output: 0,
       tokens_by_model: [],
+      stats_available: false,
     };
   }
   const value = raw as Record<string, unknown>;
@@ -449,13 +456,10 @@ function normalizeNowVersion(raw: unknown): NowVersion {
               ? token.model
               : "";
         if (!name) return [];
-        const input =
-          typeof token.input === "number"
-            ? token.input
-            : typeof token.total_tokens === "number"
-              ? token.total_tokens
-              : 0;
-        const output = typeof token.output === "number" ? token.output : 0;
+        const input = normalizeNonNegativeNumber(
+          typeof token.input === "number" ? token.input : token.total_tokens,
+        );
+        const output = normalizeNonNegativeNumber(token.output);
         return [{ name, input, output }];
       })
     : [];
@@ -469,11 +473,12 @@ function normalizeNowVersion(raw: unknown): NowVersion {
       typeof value.total_requests === "number" ? value.total_requests : 0,
     error_count:
       typeof value.error_count === "number" ? value.error_count : 0,
-    total_tokens_input:
-      typeof value.total_tokens_input === "number" ? value.total_tokens_input : 0,
-    total_tokens_output:
-      typeof value.total_tokens_output === "number" ? value.total_tokens_output : 0,
+    total_tokens_input: normalizeNonNegativeNumber(value.total_tokens_input),
+    total_tokens_output: normalizeNonNegativeNumber(value.total_tokens_output),
     tokens_by_model: tokens,
+    stats_available:
+      !Object.prototype.hasOwnProperty.call(value, "stats_available") ||
+      value.stats_available === true,
   };
 }
 
@@ -769,7 +774,7 @@ export const api = {
 
   // ----- 总览 -----
   /**
-   * 仪表盘总览 KPI。传入 range 时按该时间窗口聚合四项 KPI（与趋势图档位联动）；
+   * 仪表盘总览数据。传入 range 时按该时间窗口聚合 KPI 与模型用量（与趋势图档位联动）；
    * 省略 range 时后端默认 forever（全量）。range 同时作为 queryKey 的一部分，
    * 切换档位会触发重新拉取。
    */

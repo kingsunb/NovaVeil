@@ -169,7 +169,7 @@ const ledger = {
   total: 4,
   usable: 1,
   untested: 3,
-  unusable: 1,
+  unusable: 2,
   probe_error: 1,
   historic: 2,
 };
@@ -195,6 +195,7 @@ function ledgerFor(url: string) {
     if (filter === "all") return true;
     if (filter === "historic") return hasSuccess(item);
     if (filter === "untested") return !isTestedToday(item);
+    if (filter === "unusable") return item.state === "unusable" || item.state === "error";
     return item.state === filter;
   });
   return jsonResponse({
@@ -203,7 +204,7 @@ function ledgerFor(url: string) {
     total: ledger.items.length,
     usable: ledger.items.filter((item) => item.state === "usable").length,
     untested: ledger.items.filter((item) => !isTestedToday(item)).length,
-    unusable: ledger.items.filter((item) => item.state === "unusable").length,
+    unusable: ledger.items.filter((item) => item.state === "unusable" || item.state === "error").length,
     probe_error: ledger.items.filter((item) => item.state === "error").length,
     historic: ledger.items.filter(hasSuccess).length,
   });
@@ -391,7 +392,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     await screen.findByText("opencode0a1b2c3d");
     expect(await screen.findByText("可用 1")).toBeInTheDocument();
     expect(screen.getByText("今日未测试 3")).toBeInTheDocument();
-    expect(screen.getByText("不可用 1")).toBeInTheDocument();
+    expect(screen.getByText("不可用 2")).toBeInTheDocument();
     expect(screen.getByText("网络错误 1")).toBeInTheDocument();
     expect(screen.getByText(/冷却至/)).toBeInTheDocument();
 
@@ -407,6 +408,11 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
       concurrency: 10,
       model: "model-a",
     });
+
+    // 不可用筛选含网络错误账号，网络错误仍是可单独筛选的子集
+    await user.click(screen.getByText("不可用 2"));
+    expect((await screen.findAllByText("opencode0e4f5a6b")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("opencode0d9e0f1a2").length).toBeGreaterThan(0);
 
     // 网络错误筛选: 台账只剩网络错误账号(结果表仍展示批量体检结果)
     await user.click(screen.getByText("网络错误 1"));
@@ -551,8 +557,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     expect(screen.queryByRole("button", { name: "开始体检" })).not.toBeInTheDocument();
   });
 
-  it("密钥型渠道展示逐 Key 体检, 不展示 IP 账号下拉", async () => {
-    const keyTestBodies: Array<Record<string, unknown>> = [];
+  it("无 eligible 的 keyed 渠道显示空态, 不提供独立逐 Key 体检", async () => {
     const urls: string[] = [];
     const keyedChannel = eligibleChannel({
       id: 11,
@@ -565,16 +570,9 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
       models: [{ id: 110, channel_id: 11, name: "model-a", source: "auto" }],
     });
 
-    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       urls.push(url);
-      if (url.includes("/channel/test_keys")) {
-        keyTestBodies.push(JSON.parse(String(init?.body ?? "{}")));
-        return jsonResponse([
-          { key_id: "key-a", label: "主 Key", ok: true, content: "ok", elapsed_ms: 120 },
-          { key_id: "key-b", label: "备用 Key", ok: false, error: "401", elapsed_ms: 80 },
-        ]);
-      }
       if (url.includes("/channel/list")) return jsonResponse([keyedChannel]);
       if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
       return jsonResponse(null);
@@ -586,84 +584,10 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
       </Wrapper>,
     );
 
-    expect(await screen.findByText("密钥渠道体检")).toBeInTheDocument();
-    expect(screen.getByText("OpenCode Free V1 账号池（未启用）")).toBeInTheDocument();
-    expect(screen.queryByLabelText("体检渠道")).not.toBeInTheDocument();
-    expect(screen.queryByText(/没有可体检的渠道/)).not.toBeInTheDocument();
-
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "测试全部密钥" }));
-
-    expect(await screen.findByText("主 Key")).toBeInTheDocument();
-    expect(screen.getByText("备用 Key")).toBeInTheDocument();
-    expect(screen.getByText("成功")).toBeInTheDocument();
-    expect(screen.getByText("失败")).toBeInTheDocument();
-    expect(screen.getByText("120 ms")).toBeInTheDocument();
-    await waitFor(() => expect(keyTestBodies).toHaveLength(1));
-    expect(keyTestBodies[0]).toEqual({ id: 11, model: "model-a" });
-    expect(urls.some((url) => url.includes("/channel/proxy-accounts?"))).toBe(false);
-  });
-
-  it("逐 Key 测试延迟响应期间切换渠道不串用旧结果", async () => {
-    const channelA = eligibleChannel({
-      id: 21,
-      name: "Keyed A",
-      keyed: true,
-      channel_proxy: "",
-      key_masked: "sk-****a",
-      keys: [{ id: "key-a", key_masked: "sk-****a" }],
-      models: [{ id: 210, channel_id: 21, name: "model-a", source: "auto" }],
-    });
-    const channelB = eligibleChannel({
-      id: 22,
-      name: "Keyed B",
-      keyed: true,
-      channel_proxy: "",
-      key_masked: "sk-****b",
-      keys: [{ id: "key-b", key_masked: "sk-****b" }],
-      models: [{ id: 220, channel_id: 22, name: "model-b", source: "auto" }],
-    });
-    let resolveFirst: ((response: Response) => void) | undefined;
-    let testCalls = 0;
-    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/channel/test_keys")) {
-        testCalls += 1;
-        if (testCalls === 1) {
-          return new Promise<Response>((resolve) => {
-            resolveFirst = resolve;
-          });
-        }
-        return jsonResponse([
-          { key_id: "key-b", label: "新渠道 Key", ok: true, content: "ok", elapsed_ms: 50 },
-        ]);
-      }
-      if (url.includes("/channel/list")) return jsonResponse([channelA, channelB]);
-      if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
-      return jsonResponse(null);
-    }));
-
-    render(
-      <Wrapper>
-        <ProxyAccountsPage />
-      </Wrapper>,
-    );
-
-    expect(await screen.findByText("密钥渠道体检")).toBeInTheDocument();
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "测试全部密钥" }));
-    await waitFor(() => expect(testCalls).toBe(1));
-
-    await user.selectOptions(screen.getByLabelText("密钥渠道"), "22");
-    await user.click(screen.getByRole("button", { name: "测试全部密钥" }));
-    expect(await screen.findByText("新渠道 Key")).toBeInTheDocument();
-
-    resolveFirst?.(
-      okResponse([{ key_id: "key-a", label: "旧渠道 Key", ok: true, content: "ok", elapsed_ms: 120 }]),
-    );
-    await waitFor(() => expect(screen.queryByText("旧渠道 Key")).not.toBeInTheDocument());
-    expect(screen.getByText("新渠道 Key")).toBeInTheDocument();
-    expect(testCalls).toBe(2);
+    expect(await screen.findByText(/没有可体检的渠道/)).toBeInTheDocument();
+    expect(screen.queryByText("密钥渠道体检")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "测试全部密钥" })).not.toBeInTheDocument();
+    expect(urls.some((url) => url.includes("/channel/test_keys"))).toBe(false);
   });
 
   it("keyed 渠道配置 {account} 代理后按所选 Key 体检账号池", async () => {
@@ -780,8 +704,8 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
       </Wrapper>,
     );
 
-    expect(await screen.findByText("密钥渠道体检")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "测试全部密钥" })).toBeEnabled();
+    expect(await screen.findByText(/没有可体检的渠道/)).toBeInTheDocument();
+    expect(screen.queryByText("密钥渠道体检")).not.toBeInTheDocument();
   });
 
   it("台账分页: 默认 100 条一页, 可翻页并调整每页条数", async () => {
@@ -805,7 +729,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
       total: 250,
       usable: 63,
       untested: 63,
-      unusable: 62,
+      unusable: 124,
       probe_error: 62,
       historic: 63,
     };

@@ -463,6 +463,8 @@ export interface NowVersion {
   total_tokens_input: number;
   total_tokens_output: number;
   tokens_by_model: ModelTokenUsage[];
+  /** 统计聚合状态；旧响应缺字段时视为可用。 */
+  stats_available: boolean;
   /** 推理 token 总量（reasoning/thinking tokens）。 */
   reasoning_tokens?: number;
   /** 缓存命中 token 总量。 */
