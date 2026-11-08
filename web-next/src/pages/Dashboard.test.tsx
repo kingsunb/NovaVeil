@@ -92,13 +92,12 @@ describe("<DashboardPage /> KPI tone", () => {
     await waitFor(() => {
       expect(screen.getByText("输入 Token")).toBeInTheDocument();
       expect(screen.getByText("输出 Token")).toBeInTheDocument();
+      // KPI 卡片在统计加载完成前只渲染骨架, 需等待数值落位。
+      expect(screen.getByText("输入 Token").closest(".kpi-card")).toHaveTextContent(/10万|100K/);
+      expect(screen.getByText("输出 Token").closest(".kpi-card")).toHaveTextContent(/5万|50K/);
     });
     expect(screen.queryByText("预计消耗")).toBeNull();
     expect(screen.queryByText("使用时长")).toBeNull();
-    const inputCard = screen.getByText("输入 Token").closest(".kpi-card");
-    const outputCard = screen.getByText("输出 Token").closest(".kpi-card");
-    expect(inputCard).toHaveTextContent(/10万|100K/);
-    expect(outputCard).toHaveTextContent(/5万|50K/);
   });
 
   it("统计不可用时 KPI、Token 构成和模型 Top 不显示零或空数据", async () => {

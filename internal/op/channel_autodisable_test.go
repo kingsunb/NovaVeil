@@ -83,11 +83,12 @@ func TestChannelAutoDisableAndExpire(t *testing.T) {
 	if restored == 0 {
 		t.Fatal("到期渠道应被恢复")
 	}
-	if err := db.GetDB().First(&stored, channel.ID).Error; err != nil {
+	var reloaded model.Channel
+	if err := db.GetDB().First(&reloaded, channel.ID).Error; err != nil {
 		t.Fatalf("reload channel: %v", err)
 	}
-	if !stored.Enabled || stored.AutoDisabledUntil != nil {
-		t.Fatalf("恢复后应启用且清空标记, enabled=%v until=%v", stored.Enabled, stored.AutoDisabledUntil)
+	if !reloaded.Enabled || reloaded.AutoDisabledUntil != nil {
+		t.Fatalf("恢复后应启用且清空标记, enabled=%v until=%v", reloaded.Enabled, reloaded.AutoDisabledUntil)
 	}
 	if cached, _ := ChannelGetCore(channel.ID); !cached.Enabled || cached.AutoDisabledUntil != nil {
 		t.Fatal("缓存应同步恢复状态")

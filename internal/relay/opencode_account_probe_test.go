@@ -193,6 +193,7 @@ func TestOcAccountLedgerStateRejectedAfterSuccess(t *testing.T) {
 		t.Fatalf("最近体检被拒应不可用: %s", got)
 	}
 	row.LastSuccessAt = now.Add(time.Minute)
+	row.SuccessCount = 1
 	if got := ocAccountLedgerState(row, now); got != "usable" {
 		t.Fatalf("体检后成功应恢复可用: %s", got)
 	}

@@ -158,7 +158,8 @@ func seedOpencodeProxyAccounts(t *testing.T, channelID int, accounts map[string]
 	t.Helper()
 	pool := &ocProxyPool{loaded: true, accounts: make(map[string]*ocProxyAccount, len(accounts))}
 	for account, successAt := range accounts {
-		pool.accounts[account] = &ocProxyAccount{account: account, lastSuccessAt: successAt, verified: true}
+		// 真实成功过的账号成功计数必然大于零, 与落库路径一致。
+		pool.accounts[account] = &ocProxyAccount{account: account, lastSuccessAt: successAt, verified: true, successCount: 1}
 	}
 	ocProxyPools.Store(channelID, pool)
 	t.Cleanup(func() { ocProxyPools.Delete(channelID) })
@@ -278,6 +279,7 @@ func prioritizeOpencodeProxyAccount(t *testing.T, channelID int, account string)
 	}
 	state.verified = true
 	state.lastSuccessAt = time.Now()
+	state.successCount = 1
 	state.consecutiveFailures = 0
 }
 
