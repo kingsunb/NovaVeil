@@ -3,6 +3,7 @@ module github.com/kingsunb/NovaVeil
 go 1.27.3
 
 require (
+	fyne.io/systray v1.12.2
 	github.com/andybalholm/brotli v1.2.7
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/charmbracelet/log v1.0.0
@@ -65,6 +66,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.22 // indirect

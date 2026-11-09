@@ -236,13 +236,17 @@ generate_licenses() {
     # missing license file aborts the release.
     echo "Generating Go third-party license report from module metadata"
     local go_license_rows="${OUTPUT_DIR}/THIRD_PARTY_LICENSES.rows.csv"
+    local windows_license_rows="${OUTPUT_DIR}/THIRD_PARTY_LICENSES.rows.windows.csv"
     GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go list -deps -json -tags=jsoniter . \
         | node scripts/licenses/go-module-report.mjs >"${go_license_rows}"
+    # Windows 专属依赖也需入清单(如托盘库)。
+    GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go list -deps -json -tags=jsoniter . \
+        | node scripts/licenses/go-module-report.mjs >"${windows_license_rows}"
     {
         printf '%s\n' 'module,license_url,license_type'
-        cat "${go_license_rows}"
+        sort -u "${go_license_rows}" "${windows_license_rows}"
     } >"${OUTPUT_DIR}/THIRD_PARTY_LICENSES.csv"
-    rm -f "${go_license_rows}"
+    rm -f "${go_license_rows}" "${windows_license_rows}"
 
     echo "Generating frontend production dependency license report"
     local frontend_license_raw="${OUTPUT_DIR}/THIRD_PARTY_LICENSES.frontend.raw.json"

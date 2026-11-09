@@ -9,7 +9,7 @@
 - **顺序硬约束**：`rm -rf static/out` → `web-next pnpm install --frozen-lockfile && pnpm build`（vite outDir 指向 `../static/out`）→ `go build`。`static/static.go` 用 `//go:embed all:out` 在编译期抓产物——**不先构建前端，连 `go test` 都过不了**（`static/out/.gitkeep` 保证干净克隆可编译）。
 - Go 构建参数：`-trimpath -ldflags "-X conf.Version/... -s -w" -tags=jsoniter`，`CGO_ENABLED=0`；go.mod 的 go 指令（1.27.3）让旧工具链在构建期即报错拦截。
 - 参数矩阵：`--local`（本机架构，跳过许可证与 zip）、`--targets all`（7 个非 cgo 平台）、`--include-android`（需 NDK r28c，仅正式发布）。
-- 发布归档 = 改名二进制 + README + LICENSE + 两份许可证清单（go list -deps 与 pnpm licenses 归一化，fail-closed 校验）+ SHA256SUMS；linux 产物另存 `build/docker/<platform>/` 供 Dockerfile 按 TARGETPLATFORM COPY。
+- 发布归档 = 改名二进制 + README + LICENSE + 两份许可证清单（go list -deps 取 linux 与 windows 依赖并集，pnpm licenses 归一化，fail-closed 校验）+ SHA256SUMS；linux 产物另存 `build/docker/<platform>/` 供 Dockerfile 按 TARGETPLATFORM COPY。
 - 版本注入靠 ldflags，手动 `go build` 的产物显示 dev。
 
 ### 运行与 Docker

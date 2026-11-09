@@ -153,7 +153,17 @@ go run main.go start
 `NOVAVEIL_SERVER_HOST=0.0.0.0`，本地脚本 run-local.sh 默认 `0.0.0.0`）。SQLite 数据库落在
 `data/data.db`，配置文件 `data/config.json` 首次启动自动生成。浏览器访问 `http://127.0.0.1:8080`。
 
-### 4.2 首次登录
+### 4.2 Windows 桌面模式（双击启动）
+
+Windows 发行包里的 `novaveil.exe` 不带参数双击时进入桌面模式：控制台窗口启动服务并显示日志，
+默认浏览器自动打开控制台，任务栏通知区出现 NovaVeil 图标。托盘右键菜单提供「打开控制台」与
+「退出」；「退出」和 Ctrl+C 都会走与 `novaveil start` 相同的优雅停机（等待在途请求与后台任务收尾）。
+
+- 浏览器地址按监听配置生成：`host` 为空或 `0.0.0.0`/`::` 时访问 `http://127.0.0.1:<port>`，其他 host 原样使用。
+- 桌面模式固定读取默认配置 `data/config.json`；需要 `--config` 等参数时仍用 `novaveil.exe start --config ...`。
+- 端口被占用（已有实例在跑）时双击会因监听失败立即退出；请先退出托盘实例。
+
+### 4.3 首次登录
 
 首次启动自动创建管理员 `admin`，随机密码写入 `data/initial-admin-password`（权限 `0600`）：
 
@@ -163,7 +173,7 @@ cat data/initial-admin-password     # username: admin / password: <随机>
 
 登录后**必须立即修改密码**才能进行其他操作；首次成功登录后该引导文件即自动删除。
 
-### 4.3 开发模式（前后端分离热更新）
+### 4.4 开发模式（前后端分离热更新）
 
 ```bash
 # 终端 1：前端开发服务器（Vite，端口 5174）
