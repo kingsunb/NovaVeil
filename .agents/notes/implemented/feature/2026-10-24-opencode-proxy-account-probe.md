@@ -14,7 +14,7 @@ Status: implemented
 
 ### 批量体检（`internal/relay/opencode_account_probe.go`）
 
-`ProbeOpencodeAccounts(ctx, channelID, accounts, count, concurrency, timeoutMS)`：渠道须为含 `{account}` 代理的免费档（`proxyNeedsOpencodeAccount` 同口径）；accounts 空时生成随机账号（复用 `opencodeXXXX` 生成器），非空时去重并校验字符集（`^[A-Za-z0-9_-]{1,64}$`，账号要拼进代理 userinfo）；worker 池并发（默认 10、上限 50）各打一次官方客户端形态探测请求（形态见下节）。结论三分类：healthy（2xx）/ rejected（403/429）/ error（其余，含代理与网络故障，不入池不冷却）。单次上限 30000 个、单账号超时上限 120s。
+`ProbeOpencodeAccounts(ctx, channelID, accounts, count, concurrency, timeoutMS)`：渠道须为含 `{account}` 代理的免费档（`proxyNeedsOpencodeAccount` 同口径）；accounts 空时生成随机账号（复用 `opencodeXXXX` 生成器），非空时去重并校验字符集（`^[A-Za-z0-9_-]{1,64}$`，账号要拼进代理 userinfo）；worker 池并发（默认 10、上限 50）各打一次官方客户端形态探测请求（形态见下节）。结论三分类：healthy（2xx）/ rejected（403/429）/ error（其余，含代理与网络故障，不入池不冷却）。单次上限 30000 个、单账号超时默认与上限均为 120s。
 
 2026-10-25 起探测消息改用问题池轮换（`ocProbeQuestions` 五问，洗车问的距离以 1-1000 随机填充）：全量账号同一文案出站易被上游按消息指纹聚合识别。曾同日加过平滑放行与随机错峰，同日按运营决策回收（体检吞吐优先），前端并发上限与后端对齐为 50/默认 10。
 

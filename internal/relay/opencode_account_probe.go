@@ -41,6 +41,8 @@ const (
 	ocProbeDefaultConcurrency = 10
 	// ocProbeDefaultCount 未指定时的生成数量。
 	ocProbeDefaultCount = 100
+	// ocProbeDefaultTimeoutMS 未指定时的单账号探测超时。
+	ocProbeDefaultTimeoutMS = 120_000
 	// ocProbeMaxTimeoutMS 单账号探测超时上限。
 	ocProbeMaxTimeoutMS = 120_000
 	// ocProbeClientIP 是账号体检请求在日志流里的客户端标识。
@@ -242,7 +244,7 @@ func ProbeOpencodeAccounts(ctx context.Context, channelID int, keyID string, acc
 		concurrency = ocProbeMaxConcurrency
 	}
 	if timeoutMS <= 0 {
-		timeoutMS = 30_000
+		timeoutMS = ocProbeDefaultTimeoutMS
 	}
 	if timeoutMS > ocProbeMaxTimeoutMS {
 		timeoutMS = ocProbeMaxTimeoutMS

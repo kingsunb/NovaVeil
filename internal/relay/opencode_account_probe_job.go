@@ -73,7 +73,7 @@ func StartOpencodeAccountProbe(ctx context.Context, channelID int, keyID string,
 		concurrency = ocProbeMaxConcurrency
 	}
 	if timeoutMS <= 0 {
-		timeoutMS = 30_000
+		timeoutMS = ocProbeDefaultTimeoutMS
 	}
 	if timeoutMS > ocProbeMaxTimeoutMS {
 		timeoutMS = ocProbeMaxTimeoutMS
