@@ -133,7 +133,7 @@ scripts/build.sh --targets all
 scripts/build.sh --targets linux/arm64 --skip-frontend --skip-licenses --no-archive
 ```
 
-Windows 目标同样走 `build.sh` 的默认发布参数（在 Git Bash 中执行）：`scripts/build.sh --targets windows/amd64`。
+Windows 目标同样走 `build.sh` 的默认发布参数（在 Git Bash 中执行）：`scripts/build.sh --targets windows/amd64`。构建时会从 `cmd/tray_icon.ico` 生成 exe 图标资源；手动 `go build` 不会带图标。
 
 `build.sh` 通过 `-ldflags` 注入版本、提交哈希与构建时间；手动 `go build` 不带这些参数，
 `Version` 会显示为 `dev`。需要准确版本信息时用 `build.sh` 或手动传入：
@@ -164,8 +164,8 @@ go run main.go start
 ### 4.2 Windows 桌面模式（双击启动）
 
 Windows 发行包里的 `novaveil.exe` 不带参数双击时进入桌面模式：控制台窗口启动服务并显示日志，
-默认浏览器自动打开控制台，任务栏通知区出现 NovaVeil 图标。托盘右键菜单提供「打开控制台」与
-「退出」；「退出」和 Ctrl+C 都会走与 `novaveil start` 相同的优雅停机（等待在途请求与后台任务收尾）。
+任务栏通知区出现 NovaVeil 图标。启动后不自动打开浏览器；单击托盘图标打开控制台，右键菜单提供
+「打开控制台」与「退出」；「退出」和 Ctrl+C 都会走与 `novaveil start` 相同的优雅停机（等待在途请求与后台任务收尾）。
 
 - 浏览器地址按监听配置生成：`host` 为空或 `0.0.0.0`/`::` 时访问 `http://127.0.0.1:<port>`，其他 host 原样使用。
 - 桌面模式固定读取默认配置 `data/config.json`；需要 `--config` 等参数时仍用 `novaveil.exe start --config ...`。

@@ -14,6 +14,8 @@ readonly LDFLAGS="-X 'github.com/kingsunb/NovaVeil/internal/conf.Version=${VERSI
                   -X 'github.com/kingsunb/NovaVeil/internal/conf.Author=Kingsun' \
                   -X 'github.com/kingsunb/NovaVeil/internal/conf.Commit=${COMMIT}' \
                   -s -w" # 注入版本信息并缩小发布二进制。
+readonly WINRES_VERSION="v0.3.3" # 固定版本，避免构建工具漂移。
+readonly WINDOWS_ICON="cmd/tray_icon.ico" # 与托盘共用多尺寸图标。
 
 TARGETS=""
 FRONTEND=1
@@ -157,6 +159,11 @@ check_go_toolchain() {
 
 check_go_toolchain
 
+cleanup_windows_resources() {
+    rm -f rsrc_windows_*.syso
+}
+trap cleanup_windows_resources EXIT
+
 validate_target() {
     local target="$1"
     case "${target}" in
@@ -195,6 +202,18 @@ build_frontend() {
         && VITE_APP_VERSION="${VERSION}" VITE_APP_COMMIT="${COMMIT}" pnpm run build)
 }
 
+generate_windows_icon() {
+    local arch="$1"
+    [ -f "${WINDOWS_ICON}" ] || {
+        echo "missing ${WINDOWS_ICON}" >&2
+        exit 1
+    }
+    echo "Generating Windows icon resource for ${arch}"
+    GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)" \
+        go run "github.com/tc-hib/go-winres@${WINRES_VERSION}" simply \
+        --arch "${arch}" --manifest none --icon "${WINDOWS_ICON}" --out rsrc
+}
+
 build_standard() {
     local target="$1"
     validate_target "${target}"
@@ -204,6 +223,10 @@ build_standard() {
     local build_env=(GOOS="${os}" GOARCH="${arch}" CGO_ENABLED=0)
     if [ "${arch}" = "arm" ]; then
         build_env+=(GOARM=7)
+    fi
+
+    if [ "${os}" = "windows" ]; then
+        generate_windows_icon "${arch}"
     fi
 
     echo "Building ${os}/${arch}"

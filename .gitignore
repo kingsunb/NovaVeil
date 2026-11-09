@@ -9,6 +9,7 @@ static/out/*
 novaveil
 novaveil.exe
 /novaveil
+rsrc_windows_*.syso
 .zcode/
 
 # pnpm content-addressable store (local cache; never commit)
