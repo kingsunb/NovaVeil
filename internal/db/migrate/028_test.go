@@ -91,7 +91,7 @@ func TestDeleteRetiredOpencodeFreeLegacyChannels(t *testing.T) {
 			"INSERT INTO channel_models(id, channel_id, name) VALUES(?, ?, 'm')",
 			channelModel[0], channelModel[1])
 	}
-	for _, group := range [][2]int{{1, 102}, {2, 1001}, {3, 1201}} {
+	for _, group := range [][2]int{{1, 1002}, {2, 1003}, {3, 1004}} {
 		execMigration028(t, database,
 			"INSERT INTO groups(id, active_item_id) VALUES(?, ?)", group[0], group[1])
 	}
@@ -143,7 +143,7 @@ func TestDeleteRetiredOpencodeFreeLegacyChannels(t *testing.T) {
 	if got, want := pluckMigration028Ints(t, database, "SELECT id FROM group_items ORDER BY id"), []int{1003, 1004}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("group_items = %v, want %v", got, want)
 	}
-	if got, want := pluckMigration028Ints(t, database, "SELECT active_item_id FROM groups ORDER BY id"), []int{0, 1001, 1201}; !reflect.DeepEqual(got, want) {
+	if got, want := pluckMigration028Ints(t, database, "SELECT active_item_id FROM groups ORDER BY id"), []int{0, 1003, 1004}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("active_item_id = %v, want %v", got, want)
 	}
 	if got, want := pluckMigration028Ints(t, database, "SELECT id FROM model_eval_ranks ORDER BY id"), []int{2003, 2004, 2005}; !reflect.DeepEqual(got, want) {
@@ -168,8 +168,8 @@ func TestDeleteRetiredOpencodeFreeLegacyChannelsWithoutTarget(t *testing.T) {
 	execMigration028(t, database, "INSERT INTO channels(id, name, builtin) VALUES(12, 'OpenCode Free', 0)")
 	execMigration028(t, database, "INSERT INTO channel_models(id, channel_id, name) VALUES(101, 1, 'm')")
 	execMigration028(t, database, "INSERT INTO channel_models(id, channel_id, name) VALUES(1201, 12, 'm')")
-	execMigration028(t, database, "INSERT INTO groups(id, active_item_id) VALUES(1, 101)")
-	execMigration028(t, database, "INSERT INTO groups(id, active_item_id) VALUES(2, 1201)")
+	execMigration028(t, database, "INSERT INTO groups(id, active_item_id) VALUES(1, 1001)")
+	execMigration028(t, database, "INSERT INTO groups(id, active_item_id) VALUES(2, 1002)")
 	execMigration028(t, database, "INSERT INTO group_items(id, group_id, channel_model_id) VALUES(1001, 1, 101)")
 	execMigration028(t, database, "INSERT INTO group_items(id, group_id, channel_model_id) VALUES(1002, 2, 1201)")
 	execMigration028(t, database, "INSERT INTO model_eval_ranks(id, channel_id, channel_model_id) VALUES(2001, 1, 101)")
@@ -196,7 +196,7 @@ func TestDeleteRetiredOpencodeFreeLegacyChannelsWithoutTarget(t *testing.T) {
 	if got, want := pluckMigration028Ints(t, database, "SELECT id FROM group_items ORDER BY id"), []int{1002}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("group_items = %v, want %v", got, want)
 	}
-	if got, want := pluckMigration028Ints(t, database, "SELECT active_item_id FROM groups ORDER BY id"), []int{0, 1201}; !reflect.DeepEqual(got, want) {
+	if got, want := pluckMigration028Ints(t, database, "SELECT active_item_id FROM groups ORDER BY id"), []int{0, 1002}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("active_item_id = %v, want %v", got, want)
 	}
 	if got, want := pluckMigration028Ints(t, database, "SELECT id FROM model_eval_ranks ORDER BY id"), []int{2002}; !reflect.DeepEqual(got, want) {
