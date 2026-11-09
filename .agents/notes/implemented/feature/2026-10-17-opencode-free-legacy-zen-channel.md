@@ -52,3 +52,7 @@ opencode2api 在 2026-10-16（commit `076451f` + `a9470df`）将 legacy `/zen/v1
 ## 验证
 
 `go build ./...`、`go vet ./...`、`go test ./internal/builtin/ ./internal/relay/` 均通过。`TestBuiltinFreeChannelsDefinitions` 的 Name 唯一性检查覆盖新条目。`OpenCodeTier("https://opencode.ai/zen")` 返回 `"zen"`，`isOpencodeFreeModel` 对 `IsFree = true` 的 `"OpenCode Free Old"` 渠道返回 `true`，免费档改写路径生效。
+
+## 相关
+
+- [下线 OpenCode Free / OpenCode Free Old 旧名内置渠道](../simplification/2026-11-09-remove-opencode-free-legacy-names.md)：本篇新增的旧渠道已从内置清单删除，代理账号迁到 `OpenCode Free V1`。

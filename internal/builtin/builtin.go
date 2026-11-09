@@ -54,8 +54,6 @@ func init() {
 //
 //   - OpenCode Free V2：公开免费端点，OpenAI Compatible；需要 OpenCode 会话头，
 //     后端 OpencodeCompat 机制负责注入 x-opencode-session。
-//   - OpenCode Free / OpenCode Free Old：V2/V1 的旧名兼容条目，复用线上存量
-//     渠道与代理账号池，新库会与 V2/V1 并存。
 //   - OpenCode Free V1 备用1 / 备用2：V1 的同构副本，默认停用，供实例单独挂
 //     resin/WARP 代理做出出口隔离与容灾。
 //   - OpenCode Free V1 账号池：密钥型免费渠道，无 public Key、默认无代理，
@@ -142,43 +140,6 @@ var BuiltinFreeChannels = []model.Channel{
 		Type:           model.ChannelProviderOpenAI,
 		BaseURL:        "https://opencode.ai/inference",
 		Keyed:          true,
-		OpencodeCompat: true,
-		OpencodeLane:   "v1",
-		Models: []model.ChannelModel{
-			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
-			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
-		},
-	},
-	// 旧名兼容: 复用线上存量渠道与账号池。
-	{
-		Name:           "OpenCode Free",
-		Type:           model.ChannelProviderOpenAI,
-		BaseURL:        "https://opencode.ai/inference",
-		Key:            "public",
-		OpencodeCompat: true,
-		OpencodeLane:   "v2",
-		Models: []model.ChannelModel{
-			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
-			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
-		},
-	},
-	{
-		Name:           "OpenCode Free Old",
-		Type:           model.ChannelProviderOpenAI,
-		BaseURL:        "https://opencode.ai/inference",
-		Key:            "public",
 		OpencodeCompat: true,
 		OpencodeLane:   "v1",
 		Models: []model.ChannelModel{
@@ -433,7 +394,7 @@ var BuiltinOfficialChannels = []model.Channel{
 		OpencodeCompat: true,
 		CustomHeader: []model.CustomHeader{
 			{HeaderKey: "x-opencode-client", HeaderValue: "desktop"},
-			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.2.1/desktop"},
+			{HeaderKey: "User-Agent", HeaderValue: "opencode/latest/2.2.6/desktop"},
 		},
 	},
 	{

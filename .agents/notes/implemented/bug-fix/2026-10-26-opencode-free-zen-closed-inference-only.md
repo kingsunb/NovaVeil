@@ -53,3 +53,4 @@ go test ./internal/relay/ ./internal/model/ ./internal/builtin/
 - 取代 [opencode2api 兼容全面跟进](../architecture/2026-10-19-opencode2api-compat-followup.md) 中「v1 档 = /zen 动态头」的端点前提（头集合与 UA 结论仍有效）。
 - 与 [OpenCode 免费档头集合对齐](../bug-fix/2026-10-20-opencode-free-lane-header-parity.md)、[v2 免费档整形](../feature/2026-10-21-opencode-v2-free-tier-shaping.md) 正交：那两篇管头与正文，本篇管端点与形态来源。
 - v2 档长期 429 的调查结论见 [v2 档风控调查](./2026-10-25-opencode-v2-lane-investigation.md)；本篇纠正了其中「v1 为唯一主通道」的运营判断——`/zen` 关闭后 v1 通道本身已无效。
+- [下线 OpenCode Free / OpenCode Free Old 旧名内置渠道](../simplification/2026-11-09-remove-opencode-free-legacy-names.md)：两条旧名渠道已删除，代理账号在迁移 028 中迁到 V2/V1；本篇的 `/inference` 端点与 `OpencodeLane` 结论仍有效。

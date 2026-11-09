@@ -1,6 +1,7 @@
 # Agent Note: 恢复 OpenCode Free / OpenCode Free Old 旧名内置渠道
 
 Status: implemented
+Archived: 2026-11-09
 
 ## Problem
 

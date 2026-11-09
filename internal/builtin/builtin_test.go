@@ -178,7 +178,7 @@ func TestEnsureFreeBuiltinChannelsClearsCustomFreeFlag(t *testing.T) {
 }
 
 func TestBuiltinFreeChannelsDefinitions(t *testing.T) {
-	if got, want := len(BuiltinFreeChannels), 20; got != want {
+	if got, want := len(BuiltinFreeChannels), 18; got != want {
 		t.Fatalf("BuiltinFreeChannels count = %d, want %d", got, want)
 	}
 	seen := make(map[string]bool, len(BuiltinFreeChannels))
@@ -213,18 +213,23 @@ func TestBuiltinFreeChannelsDefinitions(t *testing.T) {
 	}
 }
 
-func TestBuiltinFreeChannelsKeepLegacyOpencodeNames(t *testing.T) {
+func TestBuiltinFreeChannelsOpencodeLaneMapping(t *testing.T) {
+	retired := map[string]bool{
+		"OpenCode Free":     true,
+		"OpenCode Free Old": true,
+	}
 	byName := make(map[string]model.Channel)
 	for _, def := range BuiltinFreeChannels {
+		if retired[def.Name] {
+			t.Fatalf("retired OpenCode channel %q must not be registered", def.Name)
+		}
 		if def.OpencodeCompat {
 			byName[def.Name] = def
 		}
 	}
 	want := map[string]string{
-		"OpenCode Free":     "v2",
-		"OpenCode Free Old": "v1",
-		"OpenCode Free V2":  "v2",
-		"OpenCode Free V1":  "v1",
+		"OpenCode Free V2": "v2",
+		"OpenCode Free V1": "v1",
 	}
 	for name, lane := range want {
 		def, ok := byName[name]
