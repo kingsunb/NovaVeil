@@ -233,7 +233,7 @@ func opencodeFreeLaneAccept(channel model.Channel) string {
 //   - v1 档(/zen): User-Agent 用协议相关的 opencode/1.19.5 ai-sdk/provider-utils/<ver>
 //     runtime/bun/1.4.4(<ver> 按出站协议), Accept 用 */*, 并发送 x-opencode-request
 //     (msg_ 升序 id);
-//   - v2 档(/inference): User-Agent 动态覆盖为 opencode/latest/2.2.1/cli,
+//   - v2 档(/inference): User-Agent 动态覆盖为 opencode/latest/2.2.6/cli,
 //     Accept 用 */*, 同样发送 x-opencode-request(官方 v2 客户端实抓两个头都发);
 //     Anthropic 出站补 beta=true。
 //
