@@ -1,0 +1,31 @@
+name: ghcr-cleanup
+
+# 每周清理 GHCR 旧镜像，只保留最近 20 个版本；:latest 永不删除。
+# 生产环境若 pin 了较早的 digest，升级窗口内需跟进，避免 digest 被清理。
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ghcr-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Delete old GHCR versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Delete old versions
+        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+        with:
+          package-name: novaveil
+          package-type: container
+          min-versions-to-keep: 20
+          ignore-versions: "^latest$"

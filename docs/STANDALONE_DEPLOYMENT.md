@@ -103,8 +103,14 @@ pnpm run build                     # tsc -b && vite build
 cd ..
 
 # 2) 后端：嵌入 static/out 后编译单文件二进制
-go build -o novaveil main.go       # 产出 ./novaveil（约 60MB，含前端）
+# -trimpath 去掉本机路径；-s -w 去掉符号表与调试信息；jsoniter 与发布构建一致
+go build -trimpath -tags=jsoniter -ldflags="-s -w" -o novaveil main.go
+# 产出 ./novaveil（约 46MB，含前端）
 ```
+
+> Windows 本机把输出名换成 `novaveil.exe` 即可；交叉编译时先设
+> `GOOS=windows GOARCH=amd64 CGO_ENABLED=0`。不要省略 `-ldflags="-s -w"`，
+> 否则 Windows 产物会多出约 20MB 的 DWARF 与符号表。
 
 > `web-next/vite.config.ts` 中 `build.outDir` 指向 `../static/out`，
 > `static/static.go` 用 `//go:embed all:out` 嵌入该目录，二者约定一致。
@@ -127,13 +133,15 @@ scripts/build.sh --targets all
 scripts/build.sh --targets linux/arm64 --skip-frontend --skip-licenses --no-archive
 ```
 
+Windows 目标同样走 `build.sh` 的默认发布参数（在 Git Bash 中执行）：`scripts/build.sh --targets windows/amd64`。
+
 `build.sh` 通过 `-ldflags` 注入版本、提交哈希与构建时间；手动 `go build` 不带这些参数，
 `Version` 会显示为 `dev`。需要准确版本信息时用 `build.sh` 或手动传入：
 
 ```bash
 VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)
 COMMIT=$(git rev-parse --short HEAD)
-go build -trimpath -o novaveil \
+go build -trimpath -tags=jsoniter -o novaveil \
   -ldflags="-X 'github.com/kingsunb/NovaVeil/internal/conf.Version=${VERSION}' \
             -X 'github.com/kingsunb/NovaVeil/internal/conf.Commit=${COMMIT}' \
             -s -w" main.go
@@ -231,7 +239,7 @@ pnpm 11.23.0）实测通过的项目：
 
 - [x] `pnpm install --frozen-lockfile` —— 依赖与 lockfile 一致
 - [x] `pnpm run build` —— 前端产物写入 `static/out/`，含 `.gz` 预压缩
-- [x] `go build -o novaveil main.go` —— 产出 60MB 单文件二进制
+- [x] `go build -o novaveil main.go` —— 产出 60MB 单文件二进制（当次实测；当前推荐命令见 §3.2，约 46MB）
 - [x] `./novaveil start` —— 监听 8080，SQLite 自动建库建表
 - [x] `GET /` —— 返回前端控制台 HTML（HTTP 200）
 - [x] `POST /api/v1/user/login` —— 初始密码登录成功（HTTP 200，`must_change_password: true`）

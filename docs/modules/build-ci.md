@@ -18,13 +18,14 @@
 - Compose 生产模板：`NOVAVEIL_IMAGE` 必填且建议 pin `@sha256:<digest>`；非 root 10001:10001、只读 rootfs + /tmp tmpfs、`cap_drop: ALL` + no-new-privileges、pids/mem/cpus 限额、宿主仅绑 `127.0.0.1:8888`、外部卷预置 0700@10001。
 - Dockerfile：Alpine 按 digest pin、二进制 0555 root 所有、entrypoint umask 0077、wget healthcheck；另从 `oven/bun:1.4.4-alpine`（digest pin）复制 Bun 到 `/usr/local/bin/bun`，供 OpenCode 免费档 sidecar 使用。
 
-### CI（7 个 workflow）
+### CI（8 个 workflow）
 
 | workflow | 触发 | 职责 |
 |---|---|---|
-| test | push / PR | 先 `pnpm build` 再 `go test`（go:embed 依赖） |
+| test | push / PR（纯文档跳过） | 先 `pnpm build` 再 `go test`（go:embed 依赖） |
 | web-next-ci | web-next 变更 | typecheck + lint + vitest（覆盖率阈值）+ size-limit + Playwright E2E/a11y |
-| docker-publish | push main | test-gate → 构建多架构 → 推 GHCR `:latest` / `:sha-<short>` |
+| docker-publish | push main（纯文档跳过） | test-gate → 构建多架构 → 推 GHCR `:latest` / `:sha-<short>` |
+| ghcr-cleanup | 周一 cron / 手动 | 保留 GHCR 最近 20 个版本，删除更旧镜像（`:latest` 除外） |
 | verify-notes | push main / PR | Agent Note 门禁三连（树 + 格式 + 归档封印），tsx 固定版本 |
 | security-scan | 周一 cron / 手动 | go vet + gosec（high，排除 G115）+ govulncheck + pnpm audit |
 | build | 仅手动 | 80+ 分钟全审计：Trivy secret 扫 → 多平台构建 → 漏洞门禁 + SBOM + 镜像校验 + smoke → artifact |
@@ -47,6 +48,7 @@ Go 1.27.3 / Node 22.19 / pnpm 11.21 在 CI 硬编码；本地开发用 `GOTOOLCH
 
 - CI 的 `go test` 未开 `-race`（`-count=1 -timeout=10m`）：涉及并发的改动须本地 `go test -race` 自查，不要依赖 CI 兜底。
 - `docker-publish` 推 `:latest` / `:sha-<short>` 可变 tag 且 `provenance:false`（无构建出处证明）；生产必须 pin digest。
+- `ghcr-cleanup` 每周只保留最近 20 个 GHCR 版本（`:latest` 除外）；生产 pin 的 digest 若早于该窗口会被删除，升级窗口内需跟进。
 - 协议转换核心依赖 `looplj/axonhub/llm` 未打 tag 的 pseudo-version（go.sum 锁哈希，防篡改不防上游策略变化）；`tmaxmax/go-sse` 经 replace 指向 looplj fork（上游缺 Stream API），供应链集中度偏高。
 - `web-router` 的 nginx 基础镜像已按 digest 固定；升级时须与 `web-next/Dockerfile` 的 runtime 阶段同步并核对 digest。
 - `.gitignore` 的 `pnpm-lock.yaml` 规则实际命中已跟踪的 `web-next/pnpm-lock.yaml`（对已跟踪文件无效）——这是一个潜在陷阱：若 lockfile 一旦脱离跟踪会被静默忽略。

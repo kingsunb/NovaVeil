@@ -67,7 +67,7 @@ jobs:
         with:
           name: web-next-coverage-${{ github.sha }}
           path: web-next/coverage/
-          retention-days: 14
+          retention-days: 7
 
   bundle:
     name: Bundle size check
@@ -91,12 +91,6 @@ jobs:
       - name: Size limit
         working-directory: web-next
         run: pnpm size
-      - name: Upload dist
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: web-next-dist-${{ github.sha }}
-          path: static/out/
-          retention-days: 7
 
   e2e-a11y:
     name: Playwright E2E + a11y
@@ -126,9 +120,9 @@ jobs:
           CI: "1"
         run: pnpm exec playwright test
       - name: Upload report
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: web-next-playwright-${{ github.sha }}
           path: web-next/playwright-report/
-          retention-days: 14
+          retention-days: 7
