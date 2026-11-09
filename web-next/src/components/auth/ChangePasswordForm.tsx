@@ -34,7 +34,7 @@ export function ChangePasswordForm() {
   return (
     <div className="space-y-2">
       <p className="text-xs font-medium text-ink-muted">修改密码</p>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 gap-2">
         <Input
           type="password"
           value={old}
