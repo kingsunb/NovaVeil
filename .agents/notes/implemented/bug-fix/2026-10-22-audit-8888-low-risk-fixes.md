@@ -11,7 +11,7 @@ Status: implemented
 - 新增匿名只读 `GET /healthz`。它复用现有 GORM 句柄，在 2 秒超时内执行 `SELECT 1`；成功返回 `{"status":"ok"}`，失败返回 503 与 `{"status":"unavailable"}`，不返回错误正文、版本、DSN 或配置。生产 Compose、镜像级 `HEALTHCHECK` 与 `docker-compose.local.yml` 的 healthcheck 都探 `/healthz`，镜像 smoke 的外部就绪轮询也探同一端点；`GET /` 继续服务 SPA。
 - 静态中间件先放行 `/healthz`、`/api` 与 `/v1`，其余路径只接受 GET 与 HEAD；其它方法返回 405 和 `Allow: GET, HEAD`。CORS 预检仍由既有全局 CORS 中间件处理。
 - `SyncModelsTask` 的并发拒绝改为哨兵错误 `ErrSyncInProgress`。启动异步入口与定时任务入口都在 `errors.Is` 判定后静默跳过；其它真实错误继续 WARN。保留两个启动入口，避免改变启动同步的触发时机。
-- 横幅在 `NO_COLOR` 非空或 stdout 非 TTY 时关闭 ANSI；移除火箭表情。颜色判定与写出函数拆开，便于不重定向真实 stdout 的情况下做契约测试。
+- 横幅在 `NO_COLOR` 非空或 stdout 非 TTY 时关闭 ANSI；移除火箭表情。颜色判定与写出函数拆开，便于不重定向真实 stdout 的情况下做契约测试。Windows 传统控制台未开 VT 时的显示乱码另由 [Windows 控制台横幅不再输出裸 ANSI](2026-11-11-windows-console-ansi-fallback.md) 处理。
 - 独立部署文档改为“首次成功登录后该引导文件即自动删除”，与登录处理器在签发 JWT 前调用清理函数的实际顺序一致。
 
 ## 备选方案

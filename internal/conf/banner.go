@@ -47,7 +47,12 @@ func printInfo(w io.Writer, label, value, printColor string, color bool) {
 
 // PrintBanner writes the NovaVeil wordmark and build metadata to stdout.
 func PrintBanner() {
-	printBanner(os.Stdout, bannerColorEnabled(isTerminal(os.Stdout.Fd())))
+	fd := os.Stdout.Fd()
+	printBanner(os.Stdout, bannerColor(fd, isTerminal(fd)))
+}
+
+func bannerColor(fd uintptr, stdoutIsTTY bool) bool {
+	return bannerColorEnabled(stdoutIsTTY) && ansiSupported(fd)
 }
 
 func bannerColorEnabled(stdoutIsTTY bool) bool {

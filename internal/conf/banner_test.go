@@ -2,6 +2,7 @@ package conf
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
@@ -32,6 +33,25 @@ func TestBannerColorRequiresTTY(t *testing.T) {
 	printBanner(&buf, bannerColorEnabled(true))
 	if !strings.Contains(buf.String(), "\x1b[") {
 		t.Fatal("colored banner should contain ANSI")
+	}
+}
+
+func TestBannerColorRequiresANSISupport(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	original := ansiSupported
+	t.Cleanup(func() { ansiSupported = original })
+
+	ansiSupported = func(uintptr) bool { return false }
+	if bannerColor(os.Stdout.Fd(), true) {
+		t.Fatal("ANSI-unsupported terminal must not use colors")
+	}
+
+	ansiSupported = func(uintptr) bool { return true }
+	if !bannerColor(os.Stdout.Fd(), true) {
+		t.Fatal("ANSI-capable terminal without NO_COLOR should use colors")
+	}
+	if bannerColor(os.Stdout.Fd(), false) {
+		t.Fatal("non-TTY stdout must not use colors")
 	}
 }
 
