@@ -169,22 +169,6 @@ func finishTestRequest(request *RequestState, responseBody string, usage *llm.Us
 			ErrBrief:      request.Error,
 		})
 	}
-	// 账号体检按实时请求计账: 上游真实上报的用量进用量分桶(与真实转发同口径),
-	// 估算值只留在日志展示不进分桶, 避免虚高。
-	if request.AccountProbe && sanitized != nil && !estimated {
-		var reasoning, cached int64
-		var cost float64
-		if sanitized.CompletionTokensDetails != nil {
-			reasoning = sanitized.CompletionTokensDetails.ReasoningTokens
-		}
-		if sanitized.PromptTokensDetails != nil {
-			cached = sanitized.PromptTokensDetails.CachedTokens
-		}
-		if sanitized.Cost != nil {
-			cost = *sanitized.Cost
-		}
-		op.RecordUsageBucket(request.TargetModel, sanitized.PromptTokens, sanitized.CompletionTokens, reasoning, cached, cost, time.Since(request.StartedAt).Milliseconds())
-	}
 	publishRequestLocked(request)
 	finishedRequestQueue = append(finishedRequestQueue, request.ID)
 	trimFinishedRequestsLocked()

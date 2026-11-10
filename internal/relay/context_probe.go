@@ -256,7 +256,7 @@ func probeOnceWithAccount(ctx context.Context, channel model.Channel, modelName,
 	// 探测也进请求日志面板, 便于与真实请求对照排查。
 	logRequest := startTestRequest(modelName, raw.Body, target, nil)
 	if account != "" {
-		// 账号体检按实时请求口径记账: 客户端标记区分于面板测试, 用量进分桶。
+		// 账号体检仅日志展示, 不计入用量分桶与客户端统计。
 		mu.Lock()
 		logRequest.AccountProbe = true
 		logRequest.ClientIP = ocProbeClientIP
