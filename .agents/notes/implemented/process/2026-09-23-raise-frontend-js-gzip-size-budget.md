@@ -21,6 +21,7 @@ Status: implemented
 - **收益**：main 推送恢复；预算与当前功能面对齐。
 - **代价**：上限放宽 6 KB，报「意外膨胀」的提前量略降，仍属整块量级、远小于真实泄漏风险。
 - **重访信号**：下次逼近 256 KB 时，先做路由级 code-splitting 或按页拆 chunk，停止单纯抬数值；2026-09-18 全量审计的「余量不足」为同源提醒。
+- 2026-11-10 起 size-limit 插件由 `@size-limit/preset-app` 换为 `@size-limit/file`，仍按 gzip 计算；见 [依赖升级批次 3 与安全扫描恢复](2026-11-10-deps-upgrade-batch-3-and-security-scan-recovery.md)。
 
 ## 验证
 

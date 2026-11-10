@@ -418,6 +418,7 @@ func buildContextProbeText(tokens int) string {
 	var builder strings.Builder
 	builder.Grow(target + 16)
 	for builder.Len() < target {
+		// #nosec G404 -- 填充文本随机化，不用于安全。
 		builder.WriteString(contextProbeWords[rand.Intn(len(contextProbeWords))])
 		builder.WriteByte(' ')
 	}

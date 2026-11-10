@@ -66,8 +66,10 @@ var ocProbeQuestions = []string{
 
 // ocProbeRandomQuestion 返回随机体检问题, 含 %d 占位的以 1-1000 填充。
 func ocProbeRandomQuestion() string {
+	// #nosec G404 -- 探测问题随机化，不用于安全。
 	question := ocProbeQuestions[rand.Intn(len(ocProbeQuestions))]
 	if strings.Contains(question, "%d") {
+		// #nosec G404 -- 探测问题随机化，不用于安全。
 		question = fmt.Sprintf(question, 1+rand.Intn(1000))
 	}
 	return question
