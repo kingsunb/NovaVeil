@@ -12,6 +12,8 @@ Status: implemented
 
 同时，前端与 Go 直接依赖存在一批 patch/minor 升级；`go get` 还提示间接依赖 `github.com/gabriel-vasile/mimetype@v1.4.15` 已被撤回（retracted），原因是处理特制 CDF 文件时呈二次时间复杂度。
 
+修复工具链后，gosec v2.30.0 首次运行报 4 条 high：3 条 G404（体检问题池与上下文填充使用 math/rand）和 1 条 G101（中文错误文案含“密码”）。前两者只用于非安全随机化，后者不是凭据，均为误报。
+
 ## 决定
 
 - `security-scan.yaml` 固定 gosec v2.30.0、govulncheck v1.9.0；两者使用的 `golang.org/x/tools v0.52.0` 能解析 Go 1.27.3 的 export data。
@@ -23,6 +25,7 @@ Status: implemented
 - happy-dom 升 ^21.0.4，修 2 条 high。
 - 保持 TypeScript ~6.0.3、`@types/node` ^22.20.5、minimatch moderate 不强制 overrides；理由分别是 TS 7 跨大版本、`@types/node` 要匹配 CI Node 22.19.0、minimatch 跨 11.x 且 high 门禁不拦。
 - 保持 `go-sse` 的 replace 指向 `looplj/go-sse` fork；上游 v0.12.0 仍缺 `Stream`/`NewStreamWithConfig`，且改了 EOF 截断语义，不能只凭版本号切换。
+- 对上述 4 条 gosec 误报按仓库既有风格就地加 `#nosec G404`/`#nosec G101` 并写明原因，不在 workflow 全局排除规则。
 
 ## 备选方案
 
@@ -32,12 +35,13 @@ Status: implemented
 - **一次性升级 TypeScript 7 与 `@types/node` 26**：跨大版本且与本轮补丁无关，容易混入构建回归；暂缓。
 - **继续让 template-check 关闭 Dependabot PR**：依赖更新通道被堵死，即使安全扫描恢复也没有自动升级；未选。
 - **继续用 gosec v2.29.0 等待上游修 x/tools**：CI 已红 8 周，等待没有确定日期；未选。
+- **在 workflow 全局 `-exclude=G404,G101`**：会掩盖其他位置的真实随机数/凭据问题；未选。
 
 ## 后果
 
 - **收益**：开发链 high 从 9 降到 0（仍余 1 条 moderate minimatch）；生产依赖保持 0；安全扫描恢复可执行；Dependabot PR 不再被模板机器人误杀；`pnpm size` 仍保留 gzip 预算。
 - **代价与边界**：`@size-limit/file` 不再提供运行时间/加载时间指标；原配置本来就是 `running: false`，没有实际指标损失。happy-dom 21、vitest 5.1 与 ESLint 10.14 需要实际构建与测试验证。Go 间接依赖未全量升级；TypeScript 7、`@types/node` 26、minimatch moderate 仍待跟进。
-- **重访信号**：`@size-limit/time` 上游修复 estimo 链后可重新评估；CI Node 升到 24 时同步 `@types/node`；typescript-eslint 明确支持 TS 7 后再升级。
+- **重访信号**：`@size-limit/time` 上游修复 estimo 链后可重新评估；CI Node 升到 24 时同步 `@types/node`；typescript-eslint 明确支持 TS 7 后再升级。gosec 结果依赖 4 处带理由的 `#nosec`；新增同类代码需重新评估，不能默认照抄。
 
 ## 验证
 

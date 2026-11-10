@@ -1,15 +1,16 @@
 package resp
 
 const (
-	ErrBadRequest           = "请求参数无效"
-	ErrInvalidJSON          = "JSON 格式错误"
-	ErrInvalidParam         = "参数无效"
-	ErrValidation           = "输入校验失败"
-	ErrDuplicateResource    = "资源已存在"
-	ErrResourceNotFound     = "资源不存在"
-	ErrInternalServer       = "服务器内部错误"
-	ErrDatabase             = "数据库操作失败"
-	ErrUnauthorized         = "认证失败"
+	ErrBadRequest        = "请求参数无效"
+	ErrInvalidJSON       = "JSON 格式错误"
+	ErrInvalidParam      = "参数无效"
+	ErrValidation        = "输入校验失败"
+	ErrDuplicateResource = "资源已存在"
+	ErrResourceNotFound  = "资源不存在"
+	ErrInternalServer    = "服务器内部错误"
+	ErrDatabase          = "数据库操作失败"
+	ErrUnauthorized      = "认证失败"
+	// #nosec G101 -- 错误文案中的 "密码" 不是硬编码凭据。
 	ErrMustChangePassword   = "请先修改初始密码，再执行该操作"
 	ErrTooManyLoginAttempts = "登录失败次数过多，请稍后再试"
 	// 密钥级限速(internal/keylimit)的 429 文案, fail-fast 语义下客户端按
