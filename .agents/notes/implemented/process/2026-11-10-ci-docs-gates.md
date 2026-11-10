@@ -32,6 +32,7 @@ Status: implemented
 
 - 收益：main 发布只推送已验证归档，per-arch 标签、`PUBLISH.sha256` 与 SBOM artifact 可追溯；flaky 不再被重试掩盖；无 Note 的非平凡 PR 在 `verify-notes` 处失败并输出可操作清单。
 - 代价与已知上限：main 发布预计升至 80 分钟量级（与手动 build 的全矩阵审计同量级）；多架构 manifest 由 `docker manifest` 手工组装，未生成 buildx provenance，生产仍需 pin digest；386/armv7 镜像不含 Bun sidecar，免费档不可用，且它们不进入发布 manifest；`skip-agent-note` 标签可被滥用（保留 GitHub 审计日志）；Note 门禁是启发式路径匹配，新增顶层目录需同步维护规则；`security-scan` 的 PR 触发只覆盖依赖清单，不覆盖全部代码变更。
+- 运行时镜像在构建时执行 `apk upgrade` 拉取 Alpine v3.21 安全补丁；基础 rootfs 仍按 digest 固定，但包版本随 Alpine 仓库滚动，同一 digest 不保证字节级可复现，Trivy 扫描的是升级后的最终归档。
 
 ## 验证
 

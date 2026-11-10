@@ -48,6 +48,7 @@ Go 1.27.3 / Node 22.19 / pnpm 11.21 在 CI 硬编码；本地开发用 `GOTOOLCH
 
 - CI 的 `go test` 未开 `-race`（`-count=1 -timeout=10m`）：涉及并发的改动须本地 `go test -race` 自查，不要依赖 CI 兜底。
 - `docker-publish` 推 `:latest` / `:sha-<short>` 多架构 manifest，并保留 per-arch `:sha-<short>-<arch>` 标签；manifest 由 `docker manifest` 手工组装，未生成 buildx provenance（无构建出处证明）；生产必须 pin digest。
+- 运行时镜像在构建时执行 `apk upgrade` 拉取 Alpine v3.21 安全补丁；基础 rootfs 仍按 digest 固定，但包版本随仓库滚动，不保证字节级可复现。
 - `ghcr-cleanup` 每周只保留最近 20 个 GHCR 版本（`:latest` 除外）；生产 pin 的 digest 若早于该窗口会被删除，升级窗口内需跟进。
 - 协议转换核心依赖 `looplj/axonhub/llm` 未打 tag 的 pseudo-version（go.sum 锁哈希，防篡改不防上游策略变化）；`tmaxmax/go-sse` 经 replace 指向 looplj fork（上游缺 Stream API），供应链集中度偏高。
 - `web-router` 的 nginx 基础镜像已按 digest 固定；升级时须与 `web-next/Dockerfile` 的 runtime 阶段同步并核对 digest。

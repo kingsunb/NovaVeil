@@ -22,7 +22,9 @@ ENV TZ=Asia/Shanghai \
 #   - tzdata:          配合 ENV TZ 提供时区数据库。
 #   - libstdc++/libgcc: Bun 动态依赖。
 # BusyBox 自带 wget, HEALTHCHECK 不额外安装 curl。
-RUN apk add --no-cache ca-certificates tzdata libstdc++ libgcc \
+# 基础镜像固定，仅拉取 v3.21 安全补丁。
+RUN apk upgrade --no-cache \
+ && apk add --no-cache ca-certificates tzdata libstdc++ libgcc \
  && rm -rf /var/cache/apk/* \
  && addgroup -g "${APP_GID}" -S novaveil \
  && adduser -u "${APP_UID}" -S -D -H -h /app -s /sbin/nologin -G novaveil novaveil \
