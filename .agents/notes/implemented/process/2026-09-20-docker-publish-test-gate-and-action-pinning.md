@@ -37,3 +37,5 @@ Status: implemented
 - `git ls-remote` 复核 `docker/build-push-action` 的 `v6.10.0` tag SHA 为 `48aba3b46d1b1fec4febb7c5d0c644b249a11355`。
 - `cd /workspace/NovaVeil && go build ./...` 复核：失败点仅在前置脏工作区的 `internal/op/apikey.go`/`channel.go`（`undefined: seal`/`err`，来自早前审计修复对 `internal/seal` 包的未完成接线），与本批 `.github/.gitignore/docs` 变更无关，本批未因此追加改动。
 - `cd /workspace/NovaVeil && pnpm verify-notes` 通过。
+
+> 后续：2026-11-10 的 [CI 发布门禁、Note diff 门禁与文档事实修正](2026-11-10-ci-docs-gates.md) 把 `build-and-publish` 改为验证归档后再推送，并推翻了本文“test-gate 不跑完整前端单测”的取舍。

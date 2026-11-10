@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -88,6 +87,7 @@ func startService() error {
 		log.Errorf("cache init error: %v", err)
 		return fmt.Errorf("缓存初始化失败: %w", err)
 	}
+	op.StartUsageBucketWriter()
 	// 重建缓存后, 把已经不在数据库里的 channel ID 从 relay 状态中清掉:
 	// 否则用同一 ID 重建的渠道会带旧 401 冷却 / RPM 窗口 / 并发槽位, 污染新渠道。
 	// 依赖放在 cmd 层而不是 op 内, 避免 op ↔ relay 循环依赖。
@@ -106,13 +106,6 @@ func startService() error {
 		log.Errorf("eval scheduler start error: %v", err)
 		return fmt.Errorf("评估调度器启动失败: %w", err)
 	}
-
-	// 内置免费渠道出厂开启 AutoSync: 启动后异步同步一次, 让模型跟随上游而非内定列表。
-	go func() {
-		if syncErr := task.SyncModelsTask(); syncErr != nil && !errors.Is(syncErr, task.ErrSyncInProgress) {
-			log.Warnf("builtin channel model sync skipped: %v", syncErr)
-		}
-	}()
 
 	if err := server.Start(); err != nil {
 		log.Errorf("server start error: %v", err)
@@ -143,6 +136,11 @@ func startService() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		return op.APIKeyTouchLastUsedFlush(ctx)
+	})
+	shutdown.Register(func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		return op.StopUsageBucketWriter(ctx)
 	})
 	// 任务泵与评估 worker 允许在停机时处理较长的收尾(如跑完当前 10 分钟 eval),
 	// 但不能无限悬挂: 给 5 分钟有界超时。注册顺序上 server shutdown 在它们之后,

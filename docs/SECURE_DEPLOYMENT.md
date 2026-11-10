@@ -5,7 +5,7 @@ operator runbook, not a replacement for application configuration documentation.
 
 ## Container identity and data ownership
 
-The image runs as the fixed numeric identity `10001:10001`. The image does not
+The backend image runs as the fixed numeric identity `10001:10001`. The image does not
 change ownership recursively at startup. Only `/app/data` is writable; the binary,
 licenses, and root filesystem are read-only in the supplied Compose files.
 
@@ -39,8 +39,8 @@ same `/app/data` volume.
 
 > No versioned tag has been published yet: pushes to `main` auto-publish
 > `ghcr.io/kingsunb/novaveil:latest` and `:sha-<short>` via the `docker-publish`
-> workflow. The manual `build` workflow runs the full multi-arch archive/image audit
-> (Trivy + SBOM + smoke tests). Pin the reviewed digest rather than a version string
+> workflow only after the 4-platform archive build, Trivy scan, CycloneDX SBOM, and
+> runtime smoke tests pass. Pin the reviewed digest rather than a version string
 > until a tag is released.
 
 Prefer a digest-qualified reference:
@@ -68,7 +68,7 @@ known fixed standard-library CVEs.
 
 ## Runtime restrictions
 
-The supplied Compose files enforce:
+The production `novaveil` service enforces:
 
 - fixed non-root UID/GID `10001:10001`;
 - read-only root filesystem;
@@ -79,6 +79,13 @@ The supplied Compose files enforce:
 - bounded `json-file` log rotation;
 - a 90-second container stop grace period for the sequential HTTP/task/conversation/stat/log/database shutdown hooks;
 - an HTTP healthcheck using the image's BusyBox `wget`.
+
+The optional `web-next` and `web-router` nginx profiles are not covered by that
+identity contract: both run the stock nginx master process as root, and the
+`web-next` service has no CPU/memory/PID limits or log rotation. They are
+read-only and drop all capabilities (the router adds only `NET_BIND_SERVICE`), so
+keep them on loopback or a trusted network and do not treat them as hardened
+public entry points.
 
 The production Compose and image-level Dockerfile healthchecks call the
 unauthenticated, side-effect free `/healthz` endpoint, which runs `SELECT 1` with
@@ -94,8 +101,10 @@ host firewall rules. The two supplied Compose files name this host-bind variable
 differently: the production template uses `NOVAVEIL_BIND_ADDRESS`, while
 `docker-compose.local.yml` uses `NOVAVEIL_BIND`.
 
-Terminate TLS at a reverse proxy, preserve the original `Host` header, and set the
-application cookie flag when TLS terminates at the proxy:
+Loopback-only HTTP is acceptable for local or single-host use; TLS is not required
+while the management port stays bound to `127.0.0.1`. Before binding beyond
+loopback or exposing the console to another host, terminate TLS at a reverse proxy,
+preserve the original `Host` header, and set the application cookie flag:
 
 ```bash
 export NOVAVEIL_SECURITY_COOKIE_SECURE=true
@@ -173,9 +182,10 @@ Release archives and images include `THIRD_PARTY_LICENSES.csv` (Go) and
 `THIRD_PARTY_LICENSES.frontend.json` (frontend production dependencies). The Go
 inventory has one fail-closed generation path based on `go list` module metadata;
 missing files, unknown/custom classifications, insecure URLs, or duplicate rows fail
-the build. The default publish pipeline (`docker-publish`) rebuilds and pushes the
-image directly after a tests/vet/typecheck gate. The manual `build` workflow produces
-the full multi-arch archive audit (per-platform vulnerability scan, CycloneDX SBOM,
-runtime smoke tests) as artifacts but does not publish them. The frontend license
-JSON remains because the tested CycloneDX npm generator
-could not correctly resolve this repository's pnpm virtual store.
+the build. The manual `build` workflow produces the full multi-arch archive audit
+(per-platform vulnerability scan, CycloneDX SBOM, runtime smoke tests) as artifacts
+but does not publish them. The default `docker-publish` pipeline builds the same
+per-platform archives first, runs the scanner/SBOM/smoke gate, and only then pushes
+the verified amd64/arm64 bytes. The frontend license JSON remains because the tested
+CycloneDX npm generator could not correctly resolve this repository's pnpm virtual
+store.

@@ -12,6 +12,8 @@ Status: implemented
 
 不调 `seal.Configure`：密码是 bcrypt 哈希非 seal 密文，无需加密密钥。一次性初始密码文件的删除语义不变，见 [凭据加密与导出脱敏](../bug-fix/2026-09-21-credential-at-rest-encryption-and-export-redaction.md)。
 
+本决定的「不调 seal.Configure / 仅校验非空 / 不轮换 JWT / 不删初始文件」已被 [初始管理员密码恢复与离线改密语义对齐](../bug-fix/2026-11-10-initial-admin-recovery.md) 部分取代；当前行为以新笔记为准。
+
 ## 备选方案
 
 - **裸 SQL UPDATE 配预算的 bcrypt 哈希** — 最强论据是零代码改动；否掉因为要运维手算 bcrypt 哈希、找 DB 路径与表结构、易写错列名，且绕过 `model.User.HashPassword` 的哈希逻辑（将来换哈希算法会漏改）。

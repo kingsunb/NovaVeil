@@ -212,3 +212,20 @@ func TestRedactRequestBodyNeverReturnsRawOnInvalidJSON(t *testing.T) {
 		t.Fatalf("安全失败后仍泄漏 secret: %s", got)
 	}
 }
+
+// TestSanitizeErrorLogKeepsRawErrorText 后台日志保留原始错误文本，仅请求体脱敏。
+func TestSanitizeErrorLogKeepsRawErrorText(t *testing.T) {
+	const secret = "PLACEHOLDER_ADMIN_VISIBLE_SECRET"
+	entry := model.ErrorLog{
+		ErrBrief:    "Authorization: Bearer " + secret,
+		ErrDetail:   `upstream 401: {"api_key":"` + secret + `"}`,
+		RequestBody: `{"api_key":"` + secret + `"}`,
+	}
+	got := sanitizeErrorLog(entry)
+	if !strings.Contains(got.ErrBrief, secret) || !strings.Contains(got.ErrDetail, secret) {
+		t.Fatalf("后台错误文本应保留原文: brief=%q detail=%q", got.ErrBrief, got.ErrDetail)
+	}
+	if strings.Contains(got.RequestBody, secret) {
+		t.Fatalf("请求体仍应脱敏: %s", got.RequestBody)
+	}
+}

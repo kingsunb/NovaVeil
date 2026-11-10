@@ -21,7 +21,7 @@ type GroupRelayConfig struct {
 	MemberCooldownSeconds                 int     `json:"member_cooldown_seconds" binding:"omitempty,min=1"`                    // 单个成员耗尽尝试后被跳过的秒数，仅在故障转移模式生效。
 	MemberAffinitySeconds                 int     `json:"member_affinity_seconds" binding:"omitempty,min=0"`                    // 成员亲和时间:故障切换成功后继续保持当前成员的秒数;当前成员失败会立即结束亲和,0 表示不保持。
 	MaxRequestRounds                      int     `json:"max_request_rounds" binding:"omitempty,min=1"`                         // 单个请求允许消耗的最大尝试轮次(含引用链结构性跳过),超过后请求以失败收尾,防止异常配置把请求钉成无限循环。
-	MaxRequestSeconds                     int     `json:"max_request_seconds" binding:"omitempty,min=0"`                        // 单个请求的整体时长上限秒数,超过后不再发起新一轮尝试;0 表示不限时。
+	MaxRequestSeconds                     int     `json:"max_request_seconds" binding:"omitempty,min=0"`                        // 单个请求的整体时长上限秒数,超过后不再发起新一轮尝试;默认 1 小时,0 表示不限时。
 
 	SessionStickyEnabled           bool    `json:"session_sticky_enabled"`                                      // 是否启用会话粘合:同一会话的请求在粘合有效期内固定使用同一成员。
 	SessionStickySeconds           int     `json:"session_sticky_seconds" binding:"omitempty,min=1"`            // 会话粘合时长秒数,粘合成员每次业务成功后滑动续期。
@@ -40,6 +40,9 @@ type GroupRelayConfig struct {
 	RejectTitleRequests            bool    `json:"reject_title_requests"`                                       // 默认关闭; 命中标题类轻请求直接拒绝, 不消耗上游额度。
 }
 
+// defaultMaxRequestSeconds 新分组的请求总时长默认上限。
+const defaultMaxRequestSeconds = 60 * 60
+
 // DefaultGroupRelayConfig 返回新分组使用的 Relay 默认配置。
 func DefaultGroupRelayConfig() GroupRelayConfig {
 	return GroupRelayConfig{
@@ -54,7 +57,7 @@ func DefaultGroupRelayConfig() GroupRelayConfig {
 		MemberCooldownSeconds:                 60,
 		MemberAffinitySeconds:                 300,
 		MaxRequestRounds:                      600,
-		MaxRequestSeconds:                     0,
+		MaxRequestSeconds:                     defaultMaxRequestSeconds,
 
 		SessionStickyEnabled:           true,
 		SessionStickySeconds:           300,

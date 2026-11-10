@@ -326,6 +326,45 @@ describe("<KeysPage /> 搜索按名称与密钥值", () => {
   });
 });
 
+describe("<KeysPage /> 列表加载失败", () => {
+  it("显示错误横幅并可重试回空态", async () => {
+    const user = userEvent.setup();
+    let fail = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("/apikey/list")) {
+          if (fail) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ code: 500, message: "boom" }), {
+                status: 500,
+                headers: { "content-type": "application/json" },
+              }),
+            );
+          }
+          return Promise.resolve(
+            new Response(JSON.stringify({ code: 200, message: "success", data: [] }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+          );
+        }
+        return mockFetchJson(null)();
+      }),
+    );
+
+    render(<KeysPage />, { wrapper: Wrapper });
+    expect(
+      await screen.findByText("加载失败，请检查网络后重试"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("还没有密钥")).not.toBeInTheDocument();
+
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText("还没有密钥")).toBeInTheDocument();
+  });
+});
+
 describe("<KeysPage /> 创建时间与最后使用时间", () => {
   it("显示创建时间和最后使用时间", async () => {
     const keys = [

@@ -1037,6 +1037,7 @@ function ConversationSection() {
               checked={enabled}
               onCheckedChange={setEnabled}
               disabled={saveEnabled.isPending}
+              aria-label="启用对话留存"
             />
             <Button
               variant="secondary"
@@ -1181,6 +1182,7 @@ function ConvTraceSection() {
               checked={enabled}
               onCheckedChange={setEnabled}
               disabled={saveEnabled.isPending}
+              aria-label="启用转换追踪"
             />
             <Button
               variant="secondary"

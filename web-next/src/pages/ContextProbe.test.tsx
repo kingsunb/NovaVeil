@@ -284,6 +284,8 @@ describe("<ContextProbePage /> 精度与批量语义", () => {
     const clearButton = screen.getByRole("button", { name: "批量清除" });
     await waitFor(() => expect(clearButton).toBeEnabled());
     await user.click(clearButton);
+    expect(applyBodies).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "确认批量清除" }));
 
     await waitFor(() => expect(applyBodies).toHaveLength(1));
     expect(applyBodies[0]).toEqual({
@@ -320,6 +322,7 @@ describe("<ContextProbePage /> 精度与批量语义", () => {
     await user.click(screen.getByLabelText("展开渠道"));
     await user.click(screen.getByLabelText("选择 model-a"));
     await user.click(screen.getByRole("button", { name: "批量清除" }));
+    await user.click(screen.getByRole("button", { name: "确认批量清除" }));
 
     expect(applyBodies).toHaveLength(0);
   });

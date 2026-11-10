@@ -21,6 +21,7 @@ func init() {
 		Use(middleware.RequireJSON()).
 		AddRoute(
 			router.NewRoute("/login", http.MethodPost).
+				Use(middleware.LoginBodyLimit()).
 				Handle(login),
 		)
 	router.NewGroupRouter("/api/v1/user").
@@ -54,6 +55,7 @@ func login(c *gin.Context) {
 	}
 	var user model.UserLogin
 	if err := c.ShouldBindJSON(&user); err != nil {
+		loginLimiter.recordFailure(c.Request.Context(), ip)
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
 	}

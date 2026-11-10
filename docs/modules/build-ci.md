@@ -6,8 +6,8 @@
 
 ### 构建（scripts/build.sh）
 
-- **顺序硬约束**：`rm -rf static/out` → `web-next pnpm install --frozen-lockfile && pnpm build`（vite outDir 指向 `../static/out`）→ `go build`。`static/static.go` 用 `//go:embed all:out` 在编译期抓产物——**不先构建前端，连 `go test` 都过不了**（`static/out/.gitkeep` 保证干净克隆可编译）。
-- Go 构建参数：`-trimpath -ldflags "-X conf.Version/... -s -w" -tags=jsoniter`，`CGO_ENABLED=0`；go.mod 的 go 指令（1.27.3）让旧工具链在构建期即报错拦截。
+- **顺序硬约束**：`rm -rf static/out` → `web-next pnpm install --frozen-lockfile && pnpm build`（vite outDir 指向 `../static/out`）→ `go build`。`static/static.go` 用 `//go:embed all:out` 在编译期抓产物——不先构建前端，嵌进二进制的就是只有 `.gitkeep` 的空目录；`.gitkeep` 只保证干净克隆能通过 `go test` 编译，不提供可用前端资产。
+- Go 构建参数：`-trimpath -ldflags "-X conf.Version/... -s -w" -tags=jsoniter`，`CGO_ENABLED=0`；go.mod 的 go 指令要求 1.27.3：`GOTOOLCHAIN=auto` 会自动下载，显式关闭时旧工具链在构建期直接报错。
 - 参数矩阵：`--local`（本机架构，跳过许可证与 zip）、`--targets all`（7 个非 cgo 平台）、`--include-android`（需 NDK r28c，仅正式发布）。
 - 发布归档 = 改名二进制 + README + LICENSE + 两份许可证清单（go list -deps 取 linux 与 windows 依赖并集，pnpm licenses 归一化，fail-closed 校验）+ SHA256SUMS；linux 产物另存 `build/docker/<platform>/` 供 Dockerfile 按 TARGETPLATFORM COPY。
 - 版本注入靠 ldflags，手动 `go build` 的产物显示 dev。
@@ -24,10 +24,10 @@
 |---|---|---|
 | test | push / PR（纯文档跳过） | 先 `pnpm build` 再 `go test`（go:embed 依赖） |
 | web-next-ci | web-next 变更 | typecheck + lint + vitest（覆盖率阈值）+ size-limit + Playwright E2E/a11y |
-| docker-publish | push main（纯文档跳过） | test-gate → 构建多架构 → 推 GHCR `:latest` / `:sha-<short>` |
+| docker-publish | push main（纯文档跳过） | test-gate（含前端单测）→ 构建 4 平台归档 → Trivy/SBOM/镜像校验/smoke → 仅把已验证的 amd64/arm64 归档推 GHCR |
 | ghcr-cleanup | 周一 cron / 手动 | 保留 GHCR 最近 20 个版本，删除更旧镜像（`:latest` 除外） |
-| verify-notes | push main / PR | Agent Note 门禁三连（树 + 格式 + 归档封印），tsx 固定版本 |
-| security-scan | 周一 cron / 手动 | go vet + gosec（high，排除 G115）+ govulncheck + pnpm audit |
+| verify-notes | push main / PR | 树 + 格式 + 归档封印；PR 额外要求非平凡 diff 新增/更新 Agent Note（可加 `skip-agent-note` 豁免），tsx 固定版本 |
+| security-scan | 周一 cron / 手动 / 依赖清单变更的 push main 或 PR | go vet + gosec（high，排除 G115）+ govulncheck + pnpm audit |
 | build | 仅手动 | 80+ 分钟全审计：Trivy secret 扫 → 多平台构建 → 漏洞门禁 + SBOM + 镜像校验 + smoke → artifact |
 | template-check | issue / PR | 模板合规自动关闭 |
 
@@ -40,18 +40,18 @@ Go 1.27.3 / Node 22.19 / pnpm 11.21 在 CI 硬编码；本地开发用 `GOTOOLCH
 
 ## 设计想法
 
-- **发布绝不重新 build，只 docker load 已验证归档**：被漏洞扫描 / SBOM / smoke 验证过的字节必须与发布字节一致——供应链可审计；`PUBLISH.sha256` 为正式 release job 预留。
+- **发布阶段绝不重新 build，只 docker load 已验证归档**：先构建 4 平台镜像归档，漏洞扫描 / SBOM / smoke 全部通过后，才把已验证的 amd64/arm64 字节组成多架构 manifest 推送——供应链可审计；`PUBLISH.sha256` 同时用于发布前完整性自校验。
 - **测试要跑就得先构建前端**：`//go:embed all:out` 在编译期抓产物，CI 的 test workflow 专门先跑 `pnpm build`——这个"怪"顺序是 embed 机制的直接后果。
 - **许可证 fail-closed**：归档必须含真实许可证报告，`--skip-licenses` 强制搭配 `--no-archive`——发布物不带许可证清单就不允许出货。
 
 ## 已知边界
 
 - CI 的 `go test` 未开 `-race`（`-count=1 -timeout=10m`）：涉及并发的改动须本地 `go test -race` 自查，不要依赖 CI 兜底。
-- `docker-publish` 推 `:latest` / `:sha-<short>` 可变 tag 且 `provenance:false`（无构建出处证明）；生产必须 pin digest。
+- `docker-publish` 推 `:latest` / `:sha-<short>` 多架构 manifest，并保留 per-arch `:sha-<short>-<arch>` 标签；manifest 由 `docker manifest` 手工组装，未生成 buildx provenance（无构建出处证明）；生产必须 pin digest。
 - `ghcr-cleanup` 每周只保留最近 20 个 GHCR 版本（`:latest` 除外）；生产 pin 的 digest 若早于该窗口会被删除，升级窗口内需跟进。
 - 协议转换核心依赖 `looplj/axonhub/llm` 未打 tag 的 pseudo-version（go.sum 锁哈希，防篡改不防上游策略变化）；`tmaxmax/go-sse` 经 replace 指向 looplj fork（上游缺 Stream API），供应链集中度偏高。
 - `web-router` 的 nginx 基础镜像已按 digest 固定；升级时须与 `web-next/Dockerfile` 的 runtime 阶段同步并核对 digest。
-- `.gitignore` 的 `pnpm-lock.yaml` 规则实际命中已跟踪的 `web-next/pnpm-lock.yaml`（对已跟踪文件无效）——这是一个潜在陷阱：若 lockfile 一旦脱离跟踪会被静默忽略。
+- `.gitignore` 的 `/pnpm-lock.yaml` 是根锚定规则，只忽略根目录 agent-notes 工具的 lock；`web-next/pnpm-lock.yaml` 一直被跟踪，必须继续提交。
 - web-next 的 Dockerfile 内 pnpm 版本与 CI 需对齐时以 CI（11.21+）为准。
 
 ## 深入阅读

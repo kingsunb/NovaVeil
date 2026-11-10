@@ -241,6 +241,227 @@ func TestUserChangePasswordRemovesBootstrapFileAfterRestart(t *testing.T) {
 	}
 }
 
+func seedPasswordFromFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read seed file: %v", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "password: ") {
+			return strings.TrimPrefix(line, "password: ")
+		}
+	}
+	t.Fatalf("password line missing in %q", data)
+	return ""
+}
+
+func TestUserInitRegeneratesMissingPasswordFile(t *testing.T) {
+	resetTestUser(t, "old-password", true)
+	oldPath := initialPasswordFilePath
+	t.Cleanup(func() { initialPasswordFilePath = oldPath })
+
+	dir := t.TempDir()
+	if err := UserInit(dir); err != nil {
+		t.Fatalf("UserInit: %v", err)
+	}
+	path := filepath.Join(dir, initialPasswordFilename)
+	password := seedPasswordFromFile(t, path)
+	if password == "" {
+		t.Fatal("regenerated password must not be empty")
+	}
+
+	user := UserGet()
+	if !user.MustChangePassword {
+		t.Fatal("recovery must keep must_change_password")
+	}
+	if err := user.ComparePassword("old-password"); err == nil {
+		t.Fatal("old password must be invalid after recovery")
+	}
+	if err := user.ComparePassword(password); err != nil {
+		t.Fatalf("seed password does not verify: %v", err)
+	}
+
+	hashBefore := user.Password
+	if err := UserInit(dir); err != nil {
+		t.Fatalf("second UserInit: %v", err)
+	}
+	if UserGet().Password != hashBefore {
+		t.Fatal("existing seed file must not trigger another password reset")
+	}
+}
+
+func TestUserInitRollsBackUserWhenPasswordFileWriteFails(t *testing.T) {
+	resetTestUser(t, "seed-password", false)
+	if err := db.GetDB().Exec("DELETE FROM users").Error; err != nil {
+		t.Fatalf("clear users: %v", err)
+	}
+	userCache = model.User{}
+	oldPath := initialPasswordFilePath
+	t.Cleanup(func() { initialPasswordFilePath = oldPath })
+
+	dir := t.TempDir()
+	blocking := filepath.Join(dir, initialPasswordFilename)
+	if err := os.Mkdir(blocking, 0o700); err != nil {
+		t.Fatalf("make blocking directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(blocking, "keep"), []byte("keep"), 0o600); err != nil {
+		t.Fatalf("make blocking directory non-empty: %v", err)
+	}
+	if err := UserInit(dir); err == nil {
+		t.Fatal("expected error when final password path is a non-empty directory")
+	}
+	var count int64
+	if err := db.GetDB().Model(&model.User{}).Count(&count).Error; err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("write failure must rollback user, got %d rows", count)
+	}
+}
+
+func TestUserInitReplacesExistingPasswordFile(t *testing.T) {
+	resetTestUser(t, "seed-password", false)
+	if err := db.GetDB().Exec("DELETE FROM users").Error; err != nil {
+		t.Fatalf("clear users: %v", err)
+	}
+	userCache = model.User{}
+	oldPath := initialPasswordFilePath
+	t.Cleanup(func() { initialPasswordFilePath = oldPath })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, initialPasswordFilename)
+	if err := os.WriteFile(path, []byte("username: admin\npassword: stale\n"), 0o600); err != nil {
+		t.Fatalf("write stale seed file: %v", err)
+	}
+	if err := UserInit(dir); err != nil {
+		t.Fatalf("UserInit with stale seed file: %v", err)
+	}
+	if got := seedPasswordFromFile(t, path); got == "stale" {
+		t.Fatal("stale seed password must be replaced")
+	}
+	var count int64
+	if err := db.GetDB().Model(&model.User{}).Count(&count).Error; err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one user, got %d", count)
+	}
+}
+
+func TestUserInitPropagatesDatabaseErrors(t *testing.T) {
+	resetTestUser(t, "seed-password", false)
+	oldPath := initialPasswordFilePath
+	t.Cleanup(func() { initialPasswordFilePath = oldPath })
+
+	queryCB := db.GetDB().Callback().Query()
+	const cbName = "test_fail_user_query"
+	if err := queryCB.Before("gorm:query").Register(cbName, func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == "users" {
+			tx.Error = errInjectedDBFailure
+		}
+	}); err != nil {
+		t.Fatalf("register failing query callback: %v", err)
+	}
+	defer func() {
+		if err := queryCB.Remove(cbName); err != nil {
+			t.Errorf("remove failing query callback: %v", err)
+		}
+	}()
+
+	err := UserInit(t.TempDir())
+	if err == nil {
+		t.Fatal("expected database error")
+	}
+	if !errors.Is(err, errInjectedDBFailure) {
+		t.Fatalf("database error must be propagated, got %v", err)
+	}
+	var count int64
+	if err := db.GetDB().Model(&model.User{}).Count(&count).Error; err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("database error must not seed a user, got %d rows", count)
+	}
+}
+
+func TestUserResetPasswordRotatesSecretAndClearsFlag(t *testing.T) {
+	resetTestUser(t, "offline-old", true)
+	oldPath := initialPasswordFilePath
+	t.Cleanup(func() { initialPasswordFilePath = oldPath })
+
+	dir := t.TempDir()
+	seedPath := filepath.Join(dir, initialPasswordFilename)
+	if err := os.WriteFile(seedPath, []byte("seed"), 0o600); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	secretBefore, err := AuthJWTSecretGet()
+	if err != nil {
+		t.Fatalf("ensure secret: %v", err)
+	}
+
+	if err := UserResetPassword("offline-new-1", dir); err != nil {
+		t.Fatalf("UserResetPassword: %v", err)
+	}
+	user := UserGet()
+	if user.MustChangePassword {
+		t.Fatal("must_change_password must be cleared")
+	}
+	if err := user.ComparePassword("offline-new-1"); err != nil {
+		t.Fatalf("new password does not verify: %v", err)
+	}
+	if err := user.ComparePassword("offline-old"); err == nil {
+		t.Fatal("old password must be invalid")
+	}
+	secretAfter, err := settingGetInternal(model.SettingKeyAuthJWTSecret)
+	if err != nil {
+		t.Fatalf("read rotated secret: %v", err)
+	}
+	if secretAfter == secretBefore {
+		t.Fatal("offline reset must rotate jwt secret")
+	}
+	if _, err := os.Stat(seedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("seed file must be removed, err=%v", err)
+	}
+	if initialPasswordFilePath != "" {
+		t.Fatalf("initialPasswordFilePath = %q, want empty", initialPasswordFilePath)
+	}
+}
+
+func TestUserResetPasswordRejectsShortPassword(t *testing.T) {
+	resetTestUser(t, "offline-old", true)
+	oldPath := initialPasswordFilePath
+	t.Cleanup(func() { initialPasswordFilePath = oldPath })
+
+	dir := t.TempDir()
+	seedPath := filepath.Join(dir, initialPasswordFilename)
+	if err := os.WriteFile(seedPath, []byte("seed"), 0o600); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	hashBefore := UserGet().Password
+	secretBefore, err := AuthJWTSecretGet()
+	if err != nil {
+		t.Fatalf("ensure secret: %v", err)
+	}
+
+	if err := UserResetPassword("short", dir); !errors.Is(err, ErrPasswordValidation) {
+		t.Fatalf("expected ErrPasswordValidation, got %v", err)
+	}
+	if UserGet().Password != hashBefore {
+		t.Fatal("short password must not change hash")
+	}
+	secretAfter, err := settingGetInternal(model.SettingKeyAuthJWTSecret)
+	if err != nil {
+		t.Fatalf("read secret: %v", err)
+	}
+	if secretAfter != secretBefore {
+		t.Fatal("short password must not rotate jwt secret")
+	}
+	if _, err := os.Stat(seedPath); err != nil {
+		t.Fatalf("seed file must remain on validation failure: %v", err)
+	}
+}
+
 func TestSettingListHidesJWTSecret(t *testing.T) {
 	if _, err := AuthJWTSecretGet(); err != nil {
 		t.Fatalf("ensure secret: %v", err)

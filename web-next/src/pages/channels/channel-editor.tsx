@@ -1618,7 +1618,7 @@ function ModelsTab({
         ) : (
           <>
             {/* 批量操作工具行：全选 + 清空选择 / 删除所选 / 测试所选 */}
-            <li className="flex items-center gap-2 bg-surface-subtle/40 px-3 py-1.5">
+            <li className="flex flex-wrap items-center gap-2 bg-surface-subtle/40 px-3 py-1.5">
               <label className="flex items-center gap-1.5 text-xs text-ink-muted">
                 <input
                   type="checkbox"
@@ -1698,7 +1698,7 @@ function ModelsTab({
               const limit = draft.model_limits[m.name];
               return (
               <li key={m.id || `new-${i}`} className="px-3">
-                <div className="flex items-center gap-3 py-2">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
                   <input
                     type="checkbox"
                     checked={checkedTestModels.has(m.name)}
@@ -1792,7 +1792,7 @@ function ModelsTab({
                     ) : null}
                   </div>
 
-                  <div className="flex shrink-0 items-center gap-0.5">
+                  <div className="ml-auto flex shrink-0 items-center gap-0.5">
                     <Button
                       variant="ghost"
                       size="icon"
@@ -1903,7 +1903,7 @@ function ModelsTab({
                 {expanded && (
                   <div
                     id={`model-cfg-${m.name}`}
-                    className="grid grid-cols-2 gap-3 rounded-md border border-border bg-surface-subtle/40 p-3"
+                    className="grid grid-cols-1 gap-3 rounded-md border border-border bg-surface-subtle/40 p-3 sm:grid-cols-2"
                   >
                     <Field
                       label="上下文窗口"

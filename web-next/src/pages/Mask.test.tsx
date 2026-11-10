@@ -153,6 +153,39 @@ describe("<MaskPage /> 写前重取", () => {
   });
 });
 
+describe("<MaskPage /> 开关可访问名与新增校验", () => {
+  it("全局与内置规则开关有可读名称", async () => {
+    setupMaskFetch(() => maskConfig());
+    render(<MaskPage />, { wrapper: Wrapper });
+
+    expect(
+      await screen.findByRole("switch", { name: "全局脱敏总开关" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("switch", { name: "启用内置规则 phone" }),
+    ).toBeInTheDocument();
+  });
+
+  it("新增弹窗打开时不报错，输入后清空并失焦才提示", async () => {
+    const user = userEvent.setup();
+    setupMaskFetch(() => maskConfig());
+    render(<MaskPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("全局总开关"));
+
+    await user.click(screen.getByRole("button", { name: "新增" }));
+    await waitFor(() => screen.getByRole("dialog"));
+    expect(screen.queryByText("敏感词不能为空")).not.toBeInTheDocument();
+
+    const input = screen.getByLabelText(/^敏感词/);
+    await user.type(input, "张");
+    await user.clear(input);
+    await user.tab();
+
+    expect(screen.getByText("敏感词不能为空")).toBeInTheDocument();
+    expect(input).toHaveAttribute("aria-invalid", "true");
+  });
+});
+
 describe("<MaskPage /> 删除拦截词", () => {
   it("删除按词匹配新快照，不误删别处新增的条目", async () => {
     const user = userEvent.setup();

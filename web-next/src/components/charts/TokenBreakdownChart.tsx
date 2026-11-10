@@ -1,4 +1,5 @@
 import { formatNumber } from "@/lib/utils";
+import { TOKEN_IN_COLOR, TOKEN_OUT_COLOR } from "./token-colors";
 
 /**
  * TokenBreakdownChart —— Token 构成环形图。
@@ -14,8 +15,8 @@ export function TokenBreakdownChart({
   const normalizeTokenCount = (value: number) =>
     Number.isFinite(value) ? Math.max(0, value) : 0;
   const segments = [
-    { label: "输入", value: normalizeTokenCount(input), color: "#6D5AE6" },
-    { label: "输出", value: normalizeTokenCount(output), color: "#2FAE86" },
+    { label: "输入", value: normalizeTokenCount(input), color: TOKEN_IN_COLOR },
+    { label: "输出", value: normalizeTokenCount(output), color: TOKEN_OUT_COLOR },
   ];
 
   const total = segments.reduce((sum, s) => sum + s.value, 0);
@@ -63,7 +64,7 @@ export function TokenBreakdownChart({
   };
 
   return (
-    <div className="flex items-center gap-6">
+    <div className="flex flex-col items-center gap-6 sm:flex-row">
       {/* 环形图 */}
       <div className="relative shrink-0">
         <svg width={size} height={size} role="img" aria-label="Token 构成图">

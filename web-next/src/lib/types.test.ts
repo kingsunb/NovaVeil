@@ -21,7 +21,7 @@ describe("DEFAULT_GROUP_RELAY_CONFIG", () => {
     expect(DEFAULT_GROUP_RELAY_CONFIG.member_cooldown_seconds).toBe(60);
     expect(DEFAULT_GROUP_RELAY_CONFIG.member_affinity_seconds).toBe(300);
     expect(DEFAULT_GROUP_RELAY_CONFIG.max_request_rounds).toBe(600);
-    expect(DEFAULT_GROUP_RELAY_CONFIG.max_request_seconds).toBe(0);
+    expect(DEFAULT_GROUP_RELAY_CONFIG.max_request_seconds).toBe(3600);
     expect(DEFAULT_GROUP_RELAY_CONFIG.session_sticky_enabled).toBe(true);
     expect(DEFAULT_GROUP_RELAY_CONFIG.session_sticky_seconds).toBe(300);
     expect(DEFAULT_GROUP_RELAY_CONFIG.cooldown_backoff_multiplier).toBe(2);

@@ -5,6 +5,7 @@ on:
     branches:
       - main
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -35,3 +36,11 @@ jobs:
           npx --yes tsx@4.23.15 scripts/agent-notes/verify-agent-note-tree.ts
           npx --yes tsx@4.23.15 scripts/agent-notes/verify-agent-note-format.ts
           npx --yes tsx@4.23.15 scripts/agent-notes/verify-archived-agent-notes.ts
+
+      - name: Require an Agent Note for non-trivial PR changes
+        if: github.event_name == 'pull_request'
+        env:
+          AGENT_NOTE_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          AGENT_NOTE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          AGENT_NOTE_PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: npx --yes tsx@4.23.15 scripts/agent-notes/verify-pr-note.ts

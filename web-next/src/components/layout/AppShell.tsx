@@ -29,11 +29,17 @@ export function AppShell({ children }: { children: ReactNode }) {
   const mainRef = useRef<HTMLElement>(null);
   const drawerRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
+  const previousPathnameRef = useRef(pathname);
   const trap = mobileNavOpen && drawerMode;
 
   // 在新路由绘制前即时复位主区；查询参数、hash 和壳层状态更新不影响滚动。
   useLayoutEffect(() => {
-    if (mainRef.current) mainRef.current.scrollTop = 0;
+    const main = mainRef.current;
+    if (!main) return;
+    main.scrollTop = 0;
+    if (previousPathnameRef.current === pathname) return;
+    previousPathnameRef.current = pathname;
+    main.focus({ preventScroll: true });
   }, [pathname]);
 
   useEffect(() => {
@@ -117,6 +123,12 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="bg-gradient-subtle flex h-full min-h-0 bg-background text-foreground">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-[60] focus:rounded-control focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:text-ink focus:shadow-overlay"
+      >
+        跳到主内容
+      </a>
       <div
         aria-hidden={!mobileNavOpen}
         className={mobileNavOpen ? "fixed inset-0 z-40 bg-ink/35 backdrop-blur-[2px] md:hidden" : "hidden"}
@@ -138,7 +150,12 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
       <div className="flex min-w-0 flex-1 flex-col" inert={trap ? true : undefined}>
         <Topbar onOpenNavigation={openNavigation} />
-        <main ref={mainRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
+        <main
+          ref={mainRef}
+          id="main-content"
+          tabIndex={-1}
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-5 focus:outline-none sm:px-6 sm:py-6 lg:px-8"
+        >
           <div className="mx-auto h-full w-full max-w-[1440px]">{children}</div>
         </main>
       </div>

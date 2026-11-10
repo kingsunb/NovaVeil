@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -132,6 +133,7 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 
 	var allModels []string
 	var afterID string
+	truncated := true
 	baseURL := transformer.NormalizeBaseURL(request.BaseURL, "v1")
 	for page := 0; page < maxModelListPages; page++ {
 
@@ -179,10 +181,14 @@ func fetchAnthropicModels(client *http.Client, ctx context.Context, request mode
 		}
 
 		if !result.HasMore {
+			truncated = false
 			break
 		}
 
 		afterID = result.LastID
+	}
+	if truncated {
+		return nil, fmt.Errorf("%w: 已读取 %d 页", ErrModelListTruncated, maxModelListPages)
 	}
 	if len(allModels) == 0 {
 		return fetchOpenAIModels(client, ctx, request)
@@ -197,6 +203,9 @@ const (
 	maxModelListBytes = 16 << 20
 	maxModelListPages = 32
 )
+
+// 上游分页超过上限。
+var ErrModelListTruncated = errors.New("模型列表分页超过上限")
 
 func decodeModelList(r io.Reader, dst any) error {
 	buf, err := io.ReadAll(io.LimitReader(r, maxModelListBytes+1))

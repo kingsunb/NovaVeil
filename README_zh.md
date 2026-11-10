@@ -9,7 +9,7 @@
 简体中文 | [English](README.md)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.27.3+-00ADD8?logo=go)](https://go.dev/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)](https://react.dev/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
@@ -139,7 +139,7 @@ http://localhost:5174
 | `security.cookie_secure` | 认证 Cookie 是否带 `Secure` | `false` |
 | `server.trusted_proxies` | 允许提供 `X-Forwarded-For` 的反向代理 | 空（不信任任何代理） |
 
-> **说明**：直接运行的二进制默认监听 `127.0.0.1:8080`。这不是容器里的监听地址。加固 Compose 在容器内设置 `NOVAVEIL_SERVER_HOST=0.0.0.0`，并在宿主发布为 `127.0.0.1:8888`。`scripts/run-local.sh` 默认 `0.0.0.0`，方便局域网访问。需要时显式设置 `server.host`。
+> **说明**：直接运行的二进制默认监听 `127.0.0.1:8080`。这不是容器里的监听地址。加固 Compose 在容器内设置 `NOVAVEIL_SERVER_HOST=0.0.0.0`，并在宿主发布为 `127.0.0.1:8888`。`scripts/run-local.sh` 默认 `127.0.0.1`；需要局域网访问时显式设置 `NOVAVEIL_SERVER_HOST=0.0.0.0`。
 
 > **代理与 Cookie**：`server.trusted_proxies` 为空时忽略 `X-Forwarded-For`，登录限速看到的是直连对端。放在反向代理后面时，把这项设成代理的 CIDR 或 IP，不要改应用代码。`security.cookie_secure` 默认 false；请求本身是 TLS，或入站 `X-Forwarded-Proto` 为 `https` 时，Cookie 也会带 `Secure`。这个头只会把 Cookie 设得更严，不会因此采信 `X-Forwarded-For`。反代终止 TLS 后，进程看到的是明文 HTTP，这时要把它设为 true。直接走 HTTP 时保持 false，否则浏览器不会带回 Cookie。
 

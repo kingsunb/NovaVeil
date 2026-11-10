@@ -3,7 +3,7 @@
  * 探测走与真实转发一致的出站构造（含出口 IP 池），并写入请求日志与探测历史。
  * 同一张列表还支持按「渠道 × 模型」直接定义/清除人工上下文窗口，无需先探测。
  */
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ChevronDown, ChevronRight } from "lucide-react";
@@ -63,8 +63,15 @@ export default function ContextProbePage() {
   const [windowDrafts, setWindowDrafts] = useState<Record<string, string>>({});
   const [batchWindow, setBatchWindow] = useState("");
   const [savingWindows, setSavingWindows] = useState(false);
+  const [confirmBatchClear, setConfirmBatchClear] = useState(false);
   const [historyChannel, setHistoryChannel] = useState<number | "">("");
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!confirmBatchClear) return;
+    const timer = window.setTimeout(() => setConfirmBatchClear(false), 2200);
+    return () => window.clearTimeout(timer);
+  }, [confirmBatchClear]);
 
   const historyQuery = useQuery({
     queryKey: ["probe-history", historyChannel],
@@ -416,7 +423,7 @@ export default function ContextProbePage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Field label="目标规模（可多选，可自定义）">
+          <Field label="目标规模（可多选，可自定义）" group>
             <div className="flex flex-wrap items-center gap-2">
               {PROBE_SIZES.map((option) => (
                 <Button
@@ -449,6 +456,7 @@ export default function ContextProbePage() {
                     if (e.key === "Enter") addCustomSize();
                   }}
                   placeholder="自定义 token 数"
+                  aria-label="自定义 token 数"
                   className="w-32"
                 />
                 <Button size="sm" variant="ghost" onClick={addCustomSize}>
@@ -506,11 +514,20 @@ export default function ContextProbePage() {
             </Button>
             <Button
               size="sm"
-              variant="ghost"
+              variant={confirmBatchClear ? "destructive" : "ghost"}
+              className="h-9 sm:h-7"
               disabled={savingWindows || selectedCount === 0}
-              onClick={() => void applyBatch(0)}
+              aria-label={confirmBatchClear ? "确认批量清除" : "批量清除"}
+              onClick={() => {
+                if (!confirmBatchClear) {
+                  setConfirmBatchClear(true);
+                  return;
+                }
+                setConfirmBatchClear(false);
+                void applyBatch(0);
+              }}
             >
-              批量清除
+              {confirmBatchClear ? "确认清除" : "批量清除"}
             </Button>
             <span className="text-xs text-ink-muted">
               {zhCN.contextProbe.windowRoutingHint}

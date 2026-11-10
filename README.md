@@ -9,7 +9,7 @@
  English | [简体中文](README_zh.md)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.27.3+-00ADD8?logo=go)](https://go.dev/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)](https://react.dev/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
@@ -140,7 +140,7 @@ The configuration file is located at `data/config.json` by default and is automa
 | `security.cookie_secure` | Mark the auth cookie `Secure` | `false` |
 | `server.trusted_proxies` | Reverse proxies allowed to supply `X-Forwarded-For` | empty (trust none) |
 
-> **Note:** a direct binary listens on `127.0.0.1:8080`. That is not the container listen address. The hardened Compose template sets `NOVAVEIL_SERVER_HOST=0.0.0.0` inside the container and publishes it as `127.0.0.1:8888` on the host. `scripts/run-local.sh` also defaults to `0.0.0.0` for LAN access. Set `server.host` explicitly to change it.
+> **Note:** a direct binary listens on `127.0.0.1:8080`. That is not the container listen address. The hardened Compose template sets `NOVAVEIL_SERVER_HOST=0.0.0.0` inside the container and publishes it as `127.0.0.1:8888` on the host. `scripts/run-local.sh` also defaults to `127.0.0.1`; set `NOVAVEIL_SERVER_HOST=0.0.0.0` explicitly to expose it on the LAN.
 
 > **Proxies and cookies:** an empty `server.trusted_proxies` ignores `X-Forwarded-For`, so login rate limits see the immediate peer. Behind a reverse proxy, set that list to the proxy CIDR or IP — do not patch application code. `security.cookie_secure` defaults to false. The cookie is also marked `Secure` when the request itself is TLS, or when `X-Forwarded-Proto` is `https`. That header only makes the cookie stricter; it does not make `X-Forwarded-For` trusted. A proxy that terminates TLS presents plain HTTP to NovaVeil, so set `security.cookie_secure` to true there; leave it false for direct HTTP or the browser will not send the cookie.
 

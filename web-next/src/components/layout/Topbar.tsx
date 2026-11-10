@@ -57,7 +57,7 @@ export function Topbar({ onOpenNavigation }: TopbarProps) {
         <Menu className="h-4 w-4" aria-hidden />
       </Button>
       <div className="min-w-0">
-        <h2 className="truncate text-[15px] font-semibold tracking-tight text-ink">{title}</h2>
+        <h1 className="truncate text-[15px] font-semibold tracking-tight text-ink">{title}</h1>
         {hint && (
           <p className="hidden truncate text-[11px] text-ink-subtle sm:block">{hint}</p>
         )}

@@ -23,6 +23,10 @@ import {
 import { Pill } from "@/components/ui/pill";
 import { TokenTrendChart } from "@/components/charts/TokenTrendChart";
 import { TokenBreakdownChart } from "@/components/charts/TokenBreakdownChart";
+import {
+  TOKEN_IN_COLOR,
+  TOKEN_OUT_COLOR,
+} from "@/components/charts/token-colors";
 import { UsageHeatmap } from "@/components/charts/UsageHeatmap";
 import { Button } from "@/components/ui/button";
 import { QueryErrorBanner } from "@/components/ui/query-error";
@@ -40,7 +44,7 @@ const RANGE_LABELS: Record<Range, string> = {
   "3y": "3 年",
 };
 
-// 各档位对应的 KPI hint 文案; KPI 卡片共享同一窗口口径, hint 随档位联动。
+// 各档位统计窗口文案; 只展示一次。
 const RANGE_HINTS: Record<Range, string> = {
   "24h": "近 24 小时",
   "7d": "近 7 天",
@@ -106,7 +110,7 @@ export default function DashboardPage() {
 
   const statsUnavailable = now?.stats_available === false;
   const statsUnresolved = nowError || statsUnavailable;
-  const kpis = buildKpis(now, range, nowError);
+  const kpis = buildKpis(now, nowError);
   const top = (now?.tokens_by_model ?? [])
     .map((model) => ({
       ...model,
@@ -127,16 +131,19 @@ export default function DashboardPage() {
       ) : null}
 
       {/* ── KPI 卡片: 总请求 / 客户端 IP / 错误数 / Token 用量 / 输入 Token / 输出 Token ── */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
-        {kpis.map((k) => (
-          <KpiCard key={k.label} {...k} loading={loadingNow} />
-        ))}
+      <div className="space-y-2">
+        <p className="text-xs text-ink-muted">统计窗口：{RANGE_HINTS[range]}</p>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+          {kpis.map((k) => (
+            <KpiCard key={k.label} {...k} loading={loadingNow} />
+          ))}
+        </div>
       </div>
 
       {/* ── Token 趋势 + Token 构成 ── */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <Card className="xl:col-span-2">
-          <CardHeader>
+          <CardHeader className="flex-wrap">
             <div>
               <CardTitle>Token 用量趋势</CardTitle>
               <CardDescription>
@@ -147,28 +154,36 @@ export default function DashboardPage() {
                     : `输入 ${formatNumber(now?.total_tokens_input ?? 0)} · 输出 ${formatNumber(now?.total_tokens_output ?? 0)}`}
               </CardDescription>
             </div>
-            <SegmentedControl
-              aria-label="趋势时间范围"
-              value={range}
-              onChange={setRange}
-              options={
-                (["24h", "7d", "30d", "1y", "3y"] as Range[]).map(
-                  (r) => ({
-                    value: r,
-                    label: RANGE_LABELS[r],
-                  }),
-                )
-              }
-            />
+            <div className="max-w-full overflow-x-auto">
+              <SegmentedControl
+                aria-label="趋势时间范围"
+                value={range}
+                onChange={setRange}
+                options={
+                  (["24h", "7d", "30d", "1y", "3y"] as Range[]).map(
+                    (r) => ({
+                      value: r,
+                      label: RANGE_LABELS[r],
+                    }),
+                  )
+                }
+              />
+            </div>
           </CardHeader>
           <CardContent>
             <div className="mb-2 flex items-center gap-3 text-xs text-ink-muted">
               <span className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-[#60A5FA]" />
+                <span
+                  className="h-1.5 w-1.5 rounded-full"
+                  style={{ backgroundColor: TOKEN_IN_COLOR }}
+                />
                 输入 tokens
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-[#34D399]" />
+                <span
+                  className="h-1.5 w-1.5 rounded-full"
+                  style={{ backgroundColor: TOKEN_OUT_COLOR }}
+                />
                 输出 tokens
               </span>
             </div>
@@ -359,40 +374,33 @@ interface Kpi {
   label: string;
   value: string;
   icon: React.ReactNode;
-  hint?: string;
   tone?: "neutral" | "success" | "warning" | "danger" | "info";
   unavailable?: boolean;
 }
 
 function buildKpis(
   latest: Awaited<ReturnType<typeof api.getNowVersion>> | undefined,
-  range: Range,
   failed = false,
 ): Kpi[] {
   const unavailable = failed || latest?.stats_available === false;
-  // KPI 共享同一时间窗口口径，hint 随档位联动。
-  const hint = RANGE_HINTS[range];
 
   const kpis: Kpi[] = [
     {
       label: "总请求",
       value: latest ? formatNumber(latest.total_requests) : "—",
       icon: <Sigma className="h-4 w-4" aria-hidden />,
-      hint,
       tone: "neutral",
     },
     {
       label: "客户端 IP",
       value: latest ? formatNumber(latest.client_ip_count) : "—",
       icon: <KeyRound className="h-4 w-4" aria-hidden />,
-      hint,
       tone: "success",
     },
     {
       label: "错误数",
       value: latest ? formatNumber(latest.error_count) : "—",
       icon: <AlertTriangle className="h-4 w-4" aria-hidden />,
-      hint,
       tone: latest && latest.error_count > 0 ? "warning" : "neutral",
     },
     {
@@ -404,7 +412,6 @@ function buildKpis(
           )
         : "—",
       icon: <GaugeCircle className="h-4 w-4" aria-hidden />,
-      hint,
       tone: "info",
     },
     {
@@ -413,7 +420,6 @@ function buildKpis(
         ? formatNumber(latest.total_tokens_input, { notation: "compact" })
         : "—",
       icon: <ArrowDownToLine className="h-4 w-4" aria-hidden />,
-      hint,
       tone: "info",
     },
     {
@@ -422,7 +428,6 @@ function buildKpis(
         ? formatNumber(latest.total_tokens_output, { notation: "compact" })
         : "—",
       icon: <ArrowUpFromLine className="h-4 w-4" aria-hidden />,
-      hint,
       tone: "success",
     },
   ];
@@ -444,7 +449,6 @@ function KpiCard({
   label,
   value,
   icon,
-  hint,
   tone = "neutral",
   loading,
   unavailable,
@@ -472,8 +476,6 @@ function KpiCard({
         </div>
         {unavailable ? (
           <div className="text-[11px] text-amber-700 dark:text-amber-300">暂不可用</div>
-        ) : hint ? (
-          <div className="text-[11px] text-ink-subtle">{hint}</div>
         ) : null}
       </CardContent>
     </Card>

@@ -134,11 +134,11 @@ if [ "${LICENSES}" -eq 0 ] && [ "${ARCHIVE}" -eq 1 ]; then
     exit 2
 fi
 
-# 校验本地 Go 工具链满足 go.mod 的 1.26 要求。旧工具链（如 1.22）要到构建末端才会
+# 校验本地 Go 工具链满足 go.mod 的 1.27.3 要求。旧工具链（如 1.22）要到构建末端才会
 # 报 crypto/sha3、iter 等「is not in std」的误导性错误；这里提前拦截并给可操作提示。
 check_go_toolchain() {
     if ! command -v go >/dev/null 2>&1; then
-        echo "go not found on PATH; go.mod requires Go 1.26+" >&2
+        echo "go not found on PATH; go.mod requires Go 1.27.3+" >&2
         exit 2
     fi
     local version major minor
@@ -148,9 +148,9 @@ check_go_toolchain() {
     minor="${version#*.}"; minor="${minor%%.*}"
     # 非稳定版本（devel 等）交给 go build 自行判断，不在这里阻塞。
     if [[ "${major}" =~ ^[0-9]+$ ]] && [[ "${minor}" =~ ^[0-9]+$ ]]; then
-        if [ "${major}" -lt 1 ] || { [ "${major}" -eq 1 ] && [ "${minor}" -lt 26 ]; }; then
-            echo "go.mod requires Go 1.26+; found \"$(go version)\" (GOROOT=$(go env GOROOT))" >&2
-            echo "Install Go 1.26+ and re-run with PATH/GOROOT pointing at it, e.g.:" >&2
+        if [ "${major}" -lt 1 ] || { [ "${major}" -eq 1 ] && [ "${minor}" -lt 27 ]; }; then
+            echo "go.mod requires Go 1.27.3+; found \"$(go version)\" (GOROOT=$(go env GOROOT))" >&2
+            echo "Install Go 1.27.3+ and re-run with PATH/GOROOT pointing at it, e.g.:" >&2
             echo "  GOROOT=/path/to/go PATH=/path/to/go/bin:\$PATH bash scripts/build.sh" >&2
             exit 2
         fi

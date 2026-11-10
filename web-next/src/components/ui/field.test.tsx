@@ -10,7 +10,7 @@ describe("<Field />", () => {
       </Field>,
     );
     expect(screen.getByText("用户名")).toBeInTheDocument();
-    expect(screen.getByRole("textbox")).toBeInTheDocument();
+    expect(screen.getByLabelText("用户名")).toBeInTheDocument();
   });
 
   it("required=true → 显示 * 标记 + sr-only 必填", () => {
@@ -59,7 +59,29 @@ describe("<Field />", () => {
         <input />
       </Field>,
     );
-    // 唯一 label 文本就是 "x"
     expect(container.querySelectorAll("p")).toHaveLength(0);
+  });
+
+  it("group 模式不生成 label，用 group + aria-labelledby 命名", () => {
+    const { container } = render(
+      <Field label="目标规模" group>
+        <div>
+          <button type="button">1K</button>
+          <button type="button">2K</button>
+        </div>
+      </Field>,
+    );
+    expect(container.querySelector("label")).toBeNull();
+    expect(screen.getByRole("group", { name: "目标规模" })).toBeInTheDocument();
+  });
+
+  it("传 htmlFor 时仍用 label 关联单个输入", () => {
+    const { container } = render(
+      <Field label="用户名" htmlFor="username">
+        <input id="username" />
+      </Field>,
+    );
+    expect(screen.getByLabelText("用户名")).toHaveAttribute("id", "username");
+    expect(container.querySelector("label")).toHaveAttribute("for", "username");
   });
 });

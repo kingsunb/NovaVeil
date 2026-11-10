@@ -30,6 +30,8 @@ var (
 const (
 	// initPasswordLen 首次初始化生成的管理员密码长度
 	initPasswordLen = 16
+	// minPasswordLen 管理员设置新密码的最小长度
+	minPasswordLen = 8
 	// initialPasswordFilename 是首次启动时保存一次性管理员密码的 owner-only 文件名。
 	initialPasswordFilename = "initial-admin-password"
 	// passwordAlphabet 生成随机密码使用的字符集(字母+数字)
@@ -47,41 +49,131 @@ func UserInit(dataDir ...string) error {
 
 	userMu.Lock()
 	defer userMu.Unlock()
-	if err := db.GetDB().First(&userCache).Error; err == nil {
-		if !userCache.MustChangePassword {
-			_ = os.Remove(initialPasswordFilePath)
-			initialPasswordFilePath = ""
+
+	var stored model.User
+	if err := db.GetDB().First(&stored).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("读取管理员失败: %w", err)
 		}
-		return nil
+		return createInitialUserLocked(dir)
+	}
+	userCache = stored
+	return ensureInitialPasswordFileLocked(dir)
+}
+
+// createInitialUserLocked 先建用户再落盘，失败回滚。
+func createInitialUserLocked(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("创建初始密码目录失败: %w", err)
 	}
 	password, err := GenerateRandomPassword(initPasswordLen)
 	if err != nil {
 		return err
 	}
-	userCache = model.User{
+	user := model.User{
 		Username:           "admin",
 		Password:           password,
 		MustChangePassword: true,
 	}
-	if err := userCache.HashPassword(); err != nil {
+	if err := user.HashPassword(); err != nil {
 		return err
 	}
-	if err := db.GetDB().Create(&userCache).Error; err != nil {
+	if err := db.GetDB().Create(&user).Error; err != nil {
+		return fmt.Errorf("创建管理员失败: %w", err)
+	}
+	if err := writeInitialPasswordFile(dir, password); err != nil {
+		if delErr := db.GetDB().Delete(&model.User{}, user.ID).Error; delErr != nil {
+			log.Errorf("initial password file write failed; rollback new user failed: %v", delErr)
+		} else {
+			userCache = model.User{}
+		}
 		return err
 	}
+	userCache = user
+	log.Warnf("initial user created; read the one-time password from %s and change it immediately", initialPasswordFilePath)
+	return nil
+}
 
+// ensureInitialPasswordFileLocked 对已有用户校验一次性密码文件；缺失时重生成密码恢复访问。
+func ensureInitialPasswordFileLocked(dir string) error {
+	path := filepath.Join(dir, initialPasswordFilename)
+	if !userCache.MustChangePassword {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Warnf("failed to remove initial password file %s: %v", path, err)
+		}
+		initialPasswordFilePath = ""
+		return nil
+	}
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("检查初始密码文件失败: %w", err)
+	}
+	return regenerateInitialPasswordLocked(dir)
+}
+
+// regenerateInitialPasswordLocked 为仍处于首次改密状态的用户重生成一次性密码。
+func regenerateInitialPasswordLocked(dir string) error {
+	oldHash := userCache.Password
+	password, err := GenerateRandomPassword(initPasswordLen)
+	if err != nil {
+		return err
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("计算初始密码哈希失败: %w", err)
+	}
+	newHash := string(hashed)
+	if err := db.GetDB().Model(&model.User{}).Where("id = ?", userCache.ID).Update("password", newHash).Error; err != nil {
+		return fmt.Errorf("重置初始管理员密码失败: %w", err)
+	}
+	if err := writeInitialPasswordFile(dir, password); err != nil {
+		if rbErr := db.GetDB().Model(&model.User{}).Where("id = ?", userCache.ID).Update("password", oldHash).Error; rbErr != nil {
+			log.Errorf("initial password recovery failed; revert password failed: %v", rbErr)
+		}
+		return err
+	}
+	userCache.Password = newHash
+	initialPasswordFilePath = filepath.Join(dir, initialPasswordFilename)
+	log.Warnf("initial password file missing; generated a new one at %s", initialPasswordFilePath)
+	return nil
+}
+
+// writeInitialPasswordFile 先写同目录临时文件再重命名，避免半截密码文件。
+func writeInitialPasswordFile(dir, password string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("创建初始密码目录失败: %w", err)
 	}
-	path := initialPasswordFilePath
-	if err := os.WriteFile(path, []byte("username: admin\npassword: "+password+"\n"), 0o600); err != nil {
-		return fmt.Errorf("写入初始密码文件失败: %w", err)
+	tmp, err := os.CreateTemp(dir, "."+initialPasswordFilename+"-*")
+	if err != nil {
+		return fmt.Errorf("创建初始密码临时文件失败: %w", err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	tmpName := tmp.Name()
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
 		return fmt.Errorf("设置初始密码文件权限失败: %w", err)
 	}
-	initialPasswordFilePath = path
-	log.Warnf("initial user created; read the one-time password from %s and change it immediately", path)
+	if _, err := tmp.WriteString("username: admin\npassword: " + password + "\n"); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("写入初始密码文件失败: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("关闭初始密码文件失败: %w", err)
+	}
+	target := filepath.Join(dir, initialPasswordFilename)
+	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("清理旧初始密码文件失败: %w", err)
+	}
+	if err := os.Rename(tmpName, target); err != nil {
+		return fmt.Errorf("写入初始密码文件失败: %w", err)
+	}
+	renamed = true
 	return nil
 }
 
@@ -113,14 +205,21 @@ var ErrPasswordValidation = errors.New("password validation failed")
 // 的文件, 不能让客户端误以为改密未发生。
 var ErrInitialPasswordFileCleanupFailed = errors.New("password changed but initial password file cleanup failed")
 
-func UserChangePassword(oldPassword, newPassword string) error {
+// ValidateNewPassword 校验新密码强度，供在线改密与离线重置共用。
+func ValidateNewPassword(newPassword string) error {
 	// 新密码非空校验: bcrypt 对空串同样可生成/比对通过, 放行等于允许空密码登录。
 	if strings.TrimSpace(newPassword) == "" {
 		return fmt.Errorf("%w: 新密码不能为空", ErrPasswordValidation)
 	}
-	// 密码强度校验: 至少 8 个字符, 防止弱密码被设置。
-	if utf8.RuneCountInString(newPassword) < 8 {
-		return fmt.Errorf("%w: 新密码长度至少为 8 个字符", ErrPasswordValidation)
+	if utf8.RuneCountInString(newPassword) < minPasswordLen {
+		return fmt.Errorf("%w: 新密码长度至少为 %d 个字符", ErrPasswordValidation, minPasswordLen)
+	}
+	return nil
+}
+
+func UserChangePassword(oldPassword, newPassword string) error {
+	if err := ValidateNewPassword(newPassword); err != nil {
+		return err
 	}
 
 	// 快速预校验: RLock 下验证旧密码, 不阻塞并发读热路径。该检查非权威 —— 两个并发
@@ -192,6 +291,65 @@ func UserChangePassword(oldPassword, newPassword string) error {
 			log.Warnf("password changed but failed to remove initial password file %s: %v", path, rmErr)
 			return ErrInitialPasswordFileCleanupFailed
 		}
+	}
+	return nil
+}
+
+// UserResetPassword 离线重置唯一管理员密码，并轮换 JWT 密钥、清除首次改密标记。
+func UserResetPassword(newPassword string, dataDir ...string) error {
+	if err := ValidateNewPassword(newPassword); err != nil {
+		return err
+	}
+	dir := "data"
+	if len(dataDir) > 0 && dataDir[0] != "" {
+		dir = dataDir[0]
+	}
+
+	userMu.Lock()
+	defer userMu.Unlock()
+
+	var user model.User
+	if err := db.GetDB().First(&user).Error; err != nil {
+		return fmt.Errorf("加载管理员失败: %w", err)
+	}
+
+	var newPasswordHash, newSecret string
+	if err := db.GetDB().Transaction(func(tx *gorm.DB) error {
+		hashed, e := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+		if e != nil {
+			return fmt.Errorf("计算新密码哈希失败: %w", e)
+		}
+		newPasswordHash = string(hashed)
+
+		secret, e := randomHexSecret(jwtSecretBytes)
+		if e != nil {
+			return fmt.Errorf("生成 JWT 密钥失败: %w", e)
+		}
+		newSecret = secret
+
+		if e := tx.Model(&model.User{}).Where("id = ?", user.ID).Updates(map[string]interface{}{
+			"password":             newPasswordHash,
+			"must_change_password": false,
+		}).Error; e != nil {
+			return fmt.Errorf("更新密码失败: %w", e)
+		}
+		if e := authJWTSecretSaveTx(tx, newSecret); e != nil {
+			return fmt.Errorf("轮换 JWT 密钥失败: %w", e)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	user.Password = newPasswordHash
+	user.MustChangePassword = false
+	userCache = user
+	settingCache.Set(model.SettingKeyAuthJWTSecret, newSecret)
+
+	initialPasswordFilePath = ""
+	path := filepath.Join(dir, initialPasswordFilename)
+	if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+		log.Warnf("offline password reset but failed to remove initial password file %s: %v", path, rmErr)
 	}
 	return nil
 }

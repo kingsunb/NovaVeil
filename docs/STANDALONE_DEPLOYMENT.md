@@ -158,7 +158,7 @@ go run main.go start
 ```
 
 二进制默认监听 `127.0.0.1:8080`；如需对外（容器/LAN）显式设 `host=0.0.0.0`（容器模板用
-`NOVAVEIL_SERVER_HOST=0.0.0.0`，本地脚本 run-local.sh 默认 `0.0.0.0`）。SQLite 数据库落在
+`NOVAVEIL_SERVER_HOST=0.0.0.0`，本地脚本 run-local.sh 也默认 `127.0.0.1`）。SQLite 数据库落在
 `data/data.db`，配置文件 `data/config.json` 首次启动自动生成。浏览器访问 `http://127.0.0.1:8080`。
 
 ### 4.2 Windows 桌面模式（双击启动）

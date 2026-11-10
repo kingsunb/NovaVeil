@@ -57,4 +57,29 @@ describe("<DialogContent> variants", () => {
     );
     expect(screen.getByText("large dialog")).toBeInTheDocument();
   });
+
+  it("dialog 短视口留边距并限制高度", () => {
+    render(
+      <Dialog open>
+        <DialogContent variant="dialog" data-testid="dialog-box">
+          dialog body
+        </DialogContent>
+      </Dialog>,
+    );
+    const box = screen.getByTestId("dialog-box");
+    expect(box).toHaveClass("w-[calc(100vw-2rem)]");
+    expect(box).toHaveClass("max-h-[min(90dvh,calc(100dvh-2rem))]");
+    expect(box).toHaveClass("overflow-hidden", "flex", "flex-col");
+  });
+
+  it("wide 变体移动端全宽、桌面八成宽", () => {
+    render(
+      <Dialog open>
+        <DialogContent variant="wide" data-testid="wide-box">
+          wide body
+        </DialogContent>
+      </Dialog>,
+    );
+    expect(screen.getByTestId("wide-box")).toHaveClass("w-full", "sm:w-4/5");
+  });
 });

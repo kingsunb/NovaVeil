@@ -142,7 +142,8 @@ func (l *loginRateLimiter) recordFailure(ctx context.Context, ip string) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, loginRateLimitDBTimeout)
+	// 脱离请求取消, 失败计数必须落库。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), loginRateLimitDBTimeout)
 	defer cancel()
 
 	now := l.now()
@@ -158,7 +159,8 @@ func (l *loginRateLimiter) reset(ctx context.Context, ip string) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, loginRateLimitDBTimeout)
+	// 脱离请求取消, 成功清零必须落库。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), loginRateLimitDBTimeout)
 	defer cancel()
 	if err := l.dbConn().WithContext(ctx).Where("ip = ?", ip).Delete(&model.LoginAttempt{}).Error; err != nil {
 		log.Errorf("login rate limit reset error: %v", err)

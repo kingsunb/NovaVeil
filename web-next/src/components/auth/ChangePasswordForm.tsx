@@ -41,6 +41,7 @@ export function ChangePasswordForm() {
           onChange={(e) => setOld(e.target.value)}
           placeholder="当前密码"
           autoComplete="current-password"
+          aria-label="当前密码"
         />
         <Input
           type="password"
@@ -48,6 +49,7 @@ export function ChangePasswordForm() {
           onChange={(e) => setNext(e.target.value)}
           placeholder="新密码（≥8 位）"
           autoComplete="new-password"
+          aria-label="新密码"
         />
         <Input
           type="password"

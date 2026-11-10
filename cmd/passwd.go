@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/kingsunb/NovaVeil/internal/conf"
 	"github.com/kingsunb/NovaVeil/internal/db"
-	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/op"
+	"github.com/kingsunb/NovaVeil/internal/seal"
 	"github.com/spf13/cobra"
 )
 
@@ -31,8 +33,8 @@ var passwdCmd = &cobra.Command{ // 设置现有用户密码的命令。
 			}
 			password = strings.TrimRight(line, "\r\n")
 		}
-		if password == "" {
-			return fmt.Errorf("password must not be empty")
+		if err := op.ValidateNewPassword(password); err != nil {
+			return err
 		}
 		if err := conf.Load(cfgFile); err != nil {
 			return err
@@ -42,16 +44,21 @@ var passwdCmd = &cobra.Command{ // 设置现有用户密码的命令。
 		}
 		defer db.Close()
 
-		var user model.User // 需要设置密码的现有用户。
-		if err := db.GetDB().First(&user).Error; err != nil {
-			return fmt.Errorf("failed to load user: %w", err)
+		dataDir := dataDirectory()
+		keyFile := filepath.Join(dataDir, "novaveil-encryption.key")
+		if conf.AppConfig.Security.EncryptionKey == "" {
+			if _, err := os.Stat(keyFile); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf("encryption key file %s is missing; restore it before resetting the password", keyFile)
+				}
+				return fmt.Errorf("check encryption key file: %w", err)
+			}
 		}
-		user.Password = password
-		if err := user.HashPassword(); err != nil {
+		if err := seal.Configure(conf.AppConfig.Security.EncryptionKey, keyFile); err != nil {
+			return fmt.Errorf("encryption init error: %w", err)
+		}
+		if err := op.UserResetPassword(password, dataDir); err != nil {
 			return err
-		}
-		if err := db.GetDB().Model(&user).Update("password", user.Password).Error; err != nil {
-			return fmt.Errorf("failed to update password: %w", err)
 		}
 
 		cmd.Println("Password updated. Restart the running server to apply the change.")

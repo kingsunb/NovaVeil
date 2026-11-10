@@ -303,7 +303,7 @@ export const DEFAULT_GROUP_RELAY_CONFIG: GroupRelayConfig = {
   member_cooldown_seconds: 60,
   member_affinity_seconds: 300,
   max_request_rounds: 600,
-  max_request_seconds: 0,
+  max_request_seconds: 3600,
   session_sticky_enabled: true,
   session_sticky_seconds: 300,
   cooldown_backoff_multiplier: 2,

@@ -3,6 +3,7 @@ package op
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -121,5 +122,52 @@ func TestChannelEnabledClearsAutoDisable(t *testing.T) {
 	}
 	if cached, _ := ChannelGetCore(channel.ID); !cached.Enabled || cached.AutoDisabledUntil != nil {
 		t.Fatal("缓存应同步人工启用状态")
+	}
+}
+
+func TestChannelConcurrentWritesKeepCacheConsistent(t *testing.T) {
+	ctx := context.Background()
+	channel := model.Channel{
+		Name:    fmt.Sprintf("cache-race-%d", time.Now().UnixNano()),
+		Type:    model.ChannelProviderOpenAI,
+		BaseURL: "https://example.invalid",
+		Enabled: true,
+	}
+	if err := ChannelCreate(&channel, ctx); err != nil {
+		t.Fatalf("ChannelCreate: %v", err)
+	}
+
+	const workers = 6
+	const rounds = 12
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for round := 0; round < rounds; round++ {
+				name := fmt.Sprintf("channel-%d-%d", worker, round)
+				if _, err := ChannelUpdate(&model.ChannelUpdateRequest{ID: channel.ID, Name: &name}, ctx); err != nil {
+					t.Errorf("ChannelUpdate: %v", err)
+					return
+				}
+				if err := ChannelEnabled(channel.ID, round%2 == 0, ctx); err != nil {
+					t.Errorf("ChannelEnabled: %v", err)
+					return
+				}
+			}
+		}(worker)
+	}
+	wg.Wait()
+
+	var stored model.Channel
+	if err := db.GetDB().First(&stored, channel.ID).Error; err != nil {
+		t.Fatalf("load stored channel: %v", err)
+	}
+	cached, err := ChannelGetCore(channel.ID)
+	if err != nil {
+		t.Fatalf("ChannelGetCore: %v", err)
+	}
+	if cached.Name != stored.Name || cached.Enabled != stored.Enabled {
+		t.Fatalf("缓存与数据库应一致, cache=%s/%v db=%s/%v", cached.Name, cached.Enabled, stored.Name, stored.Enabled)
 	}
 }

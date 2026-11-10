@@ -473,23 +473,20 @@ export default function ChannelsPage() {
           {rows.map((c) => (
             <article
               key={c.id}
-              onClick={() => setEditing(c)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  setEditing(c);
-                }
-              }}
-              tabIndex={0}
-              role="button"
-              aria-haspopup="dialog"
-              aria-label={`编辑渠道 ${c.name}`}
-              className="glass-panel glass-inset-highlight flex cursor-pointer flex-col gap-3 rounded-card p-4 transition-all hover:shadow-apple-md focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="glass-panel glass-inset-highlight flex flex-col gap-3 rounded-card p-4 transition-all hover:shadow-apple-md"
             >
               {/* 头部：名称 + 标签 + 开关 */}
               <header className="flex items-start justify-between gap-2">
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-                  <span className="font-semibold text-ink">{c.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setEditing(c)}
+                    aria-label={`编辑渠道 ${c.name}`}
+                    aria-haspopup="dialog"
+                    className="min-w-0 truncate rounded text-left font-semibold text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {c.name}
+                  </button>
                   {c.is_free && <Pill tone="success">免费</Pill>}
                   {c.builtin && <Pill tone="neutral">内置</Pill>}
                   {c.auto_sync ? (
@@ -503,12 +500,10 @@ export default function ChannelsPage() {
                     </Pill>
                   )) ?? null}
                 </div>
-                <div
-                  onClick={(e) => e.stopPropagation()}
-                  className="flex shrink-0 items-center gap-2"
-                >
+                <div className="flex shrink-0 items-center gap-2">
                   <Switch
                     checked={c.enabled}
+                    aria-label={`切换 ${c.name} 启用状态`}
                     onCheckedChange={(v) =>
                       enableMut.mutate({ id: c.id, enabled: v })
                     }
@@ -569,10 +564,7 @@ export default function ChannelsPage() {
                     inputClassName="h-6 w-16 rounded-control border border-border bg-card px-1.5 text-center text-xs text-ink"
                   />
                 </div>
-                <div
-                  onClick={(e) => e.stopPropagation()}
-                  className="flex items-center gap-0.5"
-                >
+                <div className="flex items-center gap-0.5">
                   <Button
                     variant="ghost"
                     size="sm"

@@ -1070,6 +1070,7 @@ function GroupEditor({
               </div>
               <Switch
                 checked={autoMatch}
+                aria-label="自动匹配模型"
                 onCheckedChange={(v) => {
                   setAutoMatch(v);
                   updateRelay("auto_match_models", v);

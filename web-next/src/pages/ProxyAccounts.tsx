@@ -17,6 +17,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Pill } from "@/components/ui/pill";
+import { QueryErrorBanner } from "@/components/ui/query-error";
+import { TableSkeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { zhCN } from "@/locales/zh-CN";
 
@@ -447,9 +449,18 @@ function ChannelSection({ channel }: { channel: Channel }) {
             )}
           </div>
           {ledgerQuery.isLoading ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">{zhCN.proxyAccounts.ledgerLoading}</p>
-          ) : (ledgerQuery.data?.items?.length ?? 0) === 0 ? (
-            <EmptyState icon={<UsersRound className="size-8" />} title={zhCN.proxyAccounts.emptyLedger} />
+            <TableSkeleton rows={5} />
+          ) : ledgerQuery.isError ? (
+            <QueryErrorBanner onRetry={() => ledgerQuery.refetch()} />
+          ) : ledgerItems.length === 0 ? (
+            <EmptyState
+              icon={<UsersRound className="size-8" />}
+              title={
+                ledgerFilter === "all"
+                  ? zhCN.proxyAccounts.emptyLedger
+                  : "当前筛选下没有账号"
+              }
+            />
           ) : (
             <div className="max-h-[32rem] overflow-auto">
               <table className="w-full text-sm">
@@ -615,7 +626,11 @@ export default function ProxyAccountsPage() {
 
   return (
     <div className="space-y-4 p-4">
-      {eligible.length === 0 ? (
+      {channelsQuery.isLoading ? (
+        <TableSkeleton rows={4} />
+      ) : channelsQuery.isError ? (
+        <QueryErrorBanner onRetry={() => channelsQuery.refetch()} />
+      ) : eligible.length === 0 ? (
         <Card>
           <CardContent>
             <EmptyState
@@ -650,6 +665,7 @@ export default function ProxyAccountsPage() {
                   checked={autoProbeQuery.data ?? false}
                   onCheckedChange={(checked) => void toggleAutoProbe(checked)}
                   disabled={autoProbeQuery.isLoading}
+                  aria-label={zhCN.proxyAccounts.autoProbeTitle}
                 />
                 <span className="text-sm">
                   {autoProbeQuery.data

@@ -215,3 +215,30 @@ func TestIPLockSweepsIdleEntries(t *testing.T) {
 		t.Fatal("新建条目不得被清扫")
 	}
 }
+
+func TestCanceledContextStillPersistsFailuresAndReset(t *testing.T) {
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	conn := newTestLimiterDB(t)
+	l := newTestLimiter(conn, 15*time.Minute, 2, &now)
+
+	const ip = "203.0.113.40"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	l.recordFailure(ctx, ip)
+	l.recordFailure(ctx, ip)
+	if got := countAttempts(t, conn); got != 2 {
+		t.Fatalf("canceled ctx failures = %d, want 2", got)
+	}
+	if allowed, _ := l.check(context.Background(), ip); allowed {
+		t.Fatal("canceled ctx failures must still block the IP")
+	}
+
+	l.reset(ctx, ip)
+	if got := countAttempts(t, conn); got != 0 {
+		t.Fatalf("canceled ctx reset left %d rows, want 0", got)
+	}
+	if allowed, _ := l.check(context.Background(), ip); !allowed {
+		t.Fatal("canceled ctx reset must clear the block")
+	}
+}

@@ -32,10 +32,14 @@ describe("<ChangePasswordForm /> 新密码二次确认", () => {
     const user = userEvent.setup();
     render(<ChangePasswordForm />, { wrapper: Wrapper });
 
-    const old = screen.getByPlaceholderText("当前密码");
-    const next = screen.getByPlaceholderText("新密码（≥8 位）");
-    const confirm = screen.getByPlaceholderText("确认新密码");
+    const old = screen.getByLabelText("当前密码");
+    const next = screen.getByLabelText("新密码");
+    const confirm = screen.getByLabelText("确认新密码");
     const submit = screen.getByRole("button", { name: "更新密码" });
+
+    expect(old).toHaveAttribute("placeholder", "当前密码");
+    expect(next).toHaveAttribute("placeholder", "新密码（≥8 位）");
+    expect(confirm).toHaveAttribute("placeholder", "确认新密码");
 
     await user.type(old, "old-password");
     await user.type(next, "new-password-123");

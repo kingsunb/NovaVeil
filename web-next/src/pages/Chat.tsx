@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Eraser, Send, Square, User, Bot, MessageSquare, AlertTriangle } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowDown,
+  Bot,
+  Eraser,
+  MessageSquare,
+  Send,
+  Square,
+  User,
+} from "lucide-react";
 
 import { api, apiUnauthorizedEvent, broadcastStreamAuthFailure } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -18,6 +27,7 @@ interface ChatMessage {
 
 const CHAT_SESSION_KEY = "novaveil:chat:current";
 const CHAT_MASK_SESSION_KEY = "novaveil:chat:mask-session";
+const NEAR_BOTTOM_PX = 80;
 
 interface ChatSession {
   groupName: string | null;
@@ -158,6 +168,8 @@ export default function ChatPage() {
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const sessionIdRef = useRef(maskSessionId());
 
   const { data: groups } = useQuery({ queryKey: ["groups"], queryFn: api.listGroups });
@@ -194,8 +206,35 @@ export default function ChatPage() {
   }, [groupOptions, groupName]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages]);
+    const el = scrollRef.current;
+    if (!el) return;
+    const sync = () => {
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const nearBottom = distance <= NEAR_BOTTOM_PX;
+      stickToBottomRef.current = nearBottom;
+      setShowJumpToBottom(!nearBottom && el.scrollHeight > el.clientHeight);
+    };
+    el.addEventListener("scroll", sync, { passive: true });
+    return () => el.removeEventListener("scroll", sync);
+  }, []);
+
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: "auto",
+    });
+  }, [messages, streaming]);
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottomRef.current = true;
+    setShowJumpToBottom(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+  }, []);
 
   useEffect(() => {
     if (!streaming) {
@@ -210,6 +249,8 @@ export default function ChatPage() {
     const userMsg: ChatMessage = { role: "user", content: text };
     const assistantMsg: ChatMessage = { role: "assistant", content: "", streaming: true };
     const history = [...messages, userMsg];
+    stickToBottomRef.current = true;
+    setShowJumpToBottom(false);
     setMessages([...history, assistantMsg]);
     setInput("");
     setStreaming(true);
@@ -277,6 +318,8 @@ export default function ChatPage() {
   }, []);
 
   const handleClear = useCallback(() => {
+    stickToBottomRef.current = true;
+    setShowJumpToBottom(false);
     setMessages([]);
     clearSession();
     // 清掉粘合 ID 后立即生成新 ID: 本周对话用全新 X-Session-Id, 不继承旧粘合。
@@ -317,7 +360,8 @@ export default function ChatPage() {
         </div>
       </Card>
 
-      <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {groupOptions.length === 0 ? (
           <EmptyState
             className="m-auto"
@@ -336,6 +380,20 @@ export default function ChatPage() {
             {messages.map((msg, i) => (
               <MessageBubble key={i} msg={msg} />
             ))}
+          </div>
+        )}
+        </div>
+        {showJumpToBottom && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+            <Button
+              variant="secondary"
+              size="sm"
+              className="pointer-events-auto gap-1.5 shadow-overlay"
+              onClick={scrollToBottom}
+            >
+              <ArrowDown className="h-3.5 w-3.5" aria-hidden />
+              回到底部
+            </Button>
           </div>
         )}
       </div>

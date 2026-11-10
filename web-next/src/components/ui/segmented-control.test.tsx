@@ -42,4 +42,17 @@ describe("<SegmentedControl />", () => {
     await user.click(screen.getByRole("button", { name: "启用" }));
     expect(onChange).toHaveBeenCalledWith("on");
   });
+
+  it("按钮带 focus-visible ring 类", () => {
+    render(
+      <SegmentedControl
+        value="all"
+        onChange={() => {}}
+        options={[{ value: "all", label: "全部" }]}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "全部" })).toHaveClass(
+      "focus-visible:ring-2",
+    );
+  });
 });

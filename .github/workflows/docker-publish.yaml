@@ -1,7 +1,8 @@
 name: docker-publish
 
-# 默认构建流程：push 到 main 时构建并推送多架构 Docker 镜像到 GHCR。
-# 正式 Release / GitHub Release 暂不启用。
+# 默认发布流程：push 到 main 时先跑测试门禁，再构建 4 平台镜像归档并做
+# Trivy 漏洞扫描 + CycloneDX SBOM + 运行时 smoke；全部通过后才推送
+# 已验证的 amd64/arm64 归档到 GHCR。正式 Release 暂不启用。
 
 on:
   push:
@@ -56,22 +57,23 @@ jobs:
           go-version: '1.27.3'
           cache: true
 
-      - name: Typecheck frontend
+      - name: Typecheck and test frontend
         working-directory: web-next
         run: |
           pnpm install --frozen-lockfile
           pnpm typecheck
+          pnpm run test
 
       - name: Test and vet Go packages
         run: |
           go test -count=1 -timeout=10m ./...
           go vet ./...
 
-  build-and-publish:
-    name: Build & publish Docker image
+  build-verify-publish:
+    name: Build, verify, and publish Docker image
     needs: test-gate
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -79,14 +81,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Determine version and tags
+      - name: Determine version
         id: meta
         shell: bash
         run: |
           set -euo pipefail
           sha_short="${GITHUB_SHA::7}"
           echo "version=dev-${sha_short}" >>"${GITHUB_OUTPUT}"
-          echo "image_tags=${IMAGE}:latest,${IMAGE}:sha-${sha_short}" >>"${GITHUB_OUTPUT}"
+          echo "sha_short=${sha_short}" >>"${GITHUB_OUTPUT}"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
@@ -106,17 +108,41 @@ jobs:
           go-version: '1.27.3'
           cache: true
 
-      - name: Build frontend and Go binaries
+      - name: Setup Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        with:
+          version: v0.74.0
+          cache: true
+
+      - name: Scan repository for secrets
+        run: |
+          trivy fs \
+            --scanners secret \
+            --exit-code 1 \
+            --no-progress \
+            --skip-dirs .git \
+            --skip-dirs web-next/node_modules \
+            --skip-dirs build \
+            --skip-dirs static/out \
+            .
+
+      - name: Build frontend, Go binaries, and license reports
         env:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          bash scripts/build.sh --targets linux/amd64,linux/arm64 --no-archive
+          bash scripts/build.sh --targets linux/amd64,linux/386,linux/arm64,linux/arm --no-archive
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Build exact platform image archives
+        run: scripts/build-image-archives.sh build/image-archives "${GITHUB_SHA}" "${{ steps.meta.outputs.version }}"
+
+      - name: Scan and smoke test exact platform images
+        run: scripts/verify-image-archives.sh build/image-archives
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
@@ -125,20 +151,36 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push multi-arch image
-        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0 (full tag SHA; no mutable @v6)
+      - name: Publish verified image archives
+        env:
+          DOCKER_CLI_EXPERIMENTAL: enabled
+        run: |
+          set -euo pipefail
+          cd build/image-archives
+          sha256sum -c PUBLISH.sha256
+          short="${{ steps.meta.outputs.sha_short }}"
+          for arch in amd64 arm64; do
+            docker load --input "novaveil-linux-${arch}.tar"
+            docker tag "novaveil-candidate:${arch}" "${IMAGE}:sha-${short}-${arch}"
+            docker push "${IMAGE}:sha-${short}-${arch}"
+          done
+          docker manifest create "${IMAGE}:sha-${short}" \
+            "${IMAGE}:sha-${short}-amd64" "${IMAGE}:sha-${short}-arm64"
+          docker manifest push "${IMAGE}:sha-${short}"
+          docker manifest create "${IMAGE}:latest" \
+            "${IMAGE}:sha-${short}-amd64" "${IMAGE}:sha-${short}-arm64"
+          docker manifest push "${IMAGE}:latest"
+          docker buildx imagetools inspect "${IMAGE}:sha-${short}"
+
+      - name: Upload image audit artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          context: .
-          file: scripts/dockerfile/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.image_tags }}
-          labels: |
-            org.opencontainers.image.title=NovaVeil
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=min
-          provenance: false
+          name: novaveil-image-audit-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            build/image-archives/**
+            build/THIRD_PARTY_LICENSES.csv
+            build/THIRD_PARTY_LICENSES.frontend.json
 

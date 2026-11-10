@@ -198,7 +198,7 @@ describe("<ChannelsPage />", () => {
     expect(screen.getByText(/凭据 · 模型 · 限制 · 高级/)).toBeInTheDocument();
   });
 
-  it("点击行打开编辑 Sheet（标题含渠道名）", async () => {
+  it("点击渠道名打开编辑 Sheet（标题含渠道名）", async () => {
     const user = userEvent.setup();
     mockList([sampleChannel]);
     render(<ChannelsPage />, { wrapper: Wrapper });
@@ -208,6 +208,36 @@ describe("<ChannelsPage />", () => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     });
     expect(screen.getByText(/编辑：openai-prod/)).toBeInTheDocument();
+  });
+
+  it("开关与渠道名按钮可分别聚焦，Space 切换不打开编辑器", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mockFetch({ list: [sampleChannel] });
+    render(<ChannelsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("openai-prod"));
+
+    const toggle = screen.getByRole("switch", {
+      name: "切换 openai-prod 启用状态",
+    });
+    const edit = screen.getByRole("button", {
+      name: "编辑渠道 openai-prod",
+    });
+    toggle.focus();
+    expect(toggle).toHaveFocus();
+    edit.focus();
+    expect(edit).toHaveFocus();
+
+    toggle.focus();
+    await user.keyboard(" ");
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.filter(([url]) =>
+          String(url).includes("/channel/enable"),
+        ),
+      ).toHaveLength(1);
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("编辑器凭据区展示优先级，保存时提交 sort", async () => {

@@ -2,11 +2,14 @@ package helper
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/kingsunb/NovaVeil/internal/builtin"
@@ -281,5 +284,59 @@ func TestFetchOpenAIModelsOverridesOpencodeLaneUserAgent(t *testing.T) {
 				t.Fatalf("User-Agent = %q, 期望 %q", ua, tc.want)
 			}
 		})
+	}
+}
+
+func TestFetchAnthropicModelsRejectsTruncatedPagination(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"data":[{"id":"m-%d"}],"has_more":true,"last_id":"m-%d"}`, page, page)
+	}))
+	t.Cleanup(srv.Close)
+
+	models, err := fetchAnthropicModels(&http.Client{}, context.Background(), model.Channel{
+		Type:    model.ChannelProviderAnthropic,
+		BaseURL: srv.URL,
+		Key:     "sk-test",
+	})
+	if !errors.Is(err, ErrModelListTruncated) {
+		t.Fatalf("error = %v, want ErrModelListTruncated", err)
+	}
+	if models != nil {
+		t.Fatalf("models = %v, want nil on incomplete list", models)
+	}
+	if got := calls.Load(); got != int32(maxModelListPages) {
+		t.Fatalf("页数 = %d, want %d", got, maxModelListPages)
+	}
+}
+
+func TestFetchAnthropicModelsStopsWhenHasMoreFalse(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if page == 1 {
+			_, _ = w.Write([]byte(`{"data":[{"id":"first"}],"has_more":true,"last_id":"first"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"second"}],"has_more":false}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	models, err := fetchAnthropicModels(&http.Client{}, context.Background(), model.Channel{
+		Type:    model.ChannelProviderAnthropic,
+		BaseURL: srv.URL,
+		Key:     "sk-test",
+	})
+	if err != nil {
+		t.Fatalf("fetchAnthropicModels: %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("页数 = %d, want 2", got)
+	}
+	if len(models) != 2 || models[0] != "first" || models[1] != "second" {
+		t.Fatalf("models = %v", models)
 	}
 }

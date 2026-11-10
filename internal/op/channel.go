@@ -22,8 +22,9 @@ import (
 )
 
 var (
-	channelCache      = cache.New[int, model.Channel](16)      // 渠道配置的进程内副本。
-	channelModelCache = cache.New[int, model.ChannelModel](16) // 渠道模型的进程内副本。
+	channelCache        = cache.New[int, model.Channel](16)      // 渠道配置的进程内副本。
+	channelModelCache   = cache.New[int, model.ChannelModel](16) // 渠道模型的进程内副本。
+	channelCacheWriteMu sync.Mutex                               // 渠道缓存写串行锁。
 )
 
 // ChannelList 返回缓存中的全部渠道及其模型。
@@ -40,6 +41,8 @@ func ChannelCreate(channel *model.Channel, ctx context.Context) error {
 	if channel == nil {
 		return fmt.Errorf("缺少渠道数据")
 	}
+	channelCacheWriteMu.Lock()
+	defer channelCacheWriteMu.Unlock()
 	channel.ID = 0
 	// 用户/API 创建的渠道一律视为自定义渠道: 免费分类与内置标记只能由代码内置的数据源维护。
 	channel.IsFree = false
@@ -172,6 +175,8 @@ func ChannelImportFromText(ctx context.Context, text string) (success, failed in
 
 // ChannelUpdate 更新渠道配置和模型行，并删除不再提供的模型。
 func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model.Channel, error) {
+	channelCacheWriteMu.Lock()
+	defer channelCacheWriteMu.Unlock()
 	existingChannel, ok := channelCache.Get(req.ID)
 	if !ok {
 		return nil, fmt.Errorf("渠道不存在，请刷新页面后重试")
@@ -452,40 +457,59 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 
 // ChannelEnabled 更新渠道启用状态; 人工启停清除自动停用标记。
 func ChannelEnabled(id int, enabled bool, ctx context.Context) error {
+	channelCacheWriteMu.Lock()
+	defer channelCacheWriteMu.Unlock()
 	if _, ok := channelCache.Get(id); !ok {
 		return fmt.Errorf("渠道不存在，请刷新页面后重试")
 	}
-	if err := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).
-		Updates(map[string]any{"enabled": enabled, "auto_disabled_until": nil}).Error; err != nil {
+	var channel model.Channel
+	err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.Channel{}).Where("id = ?", id).
+			Updates(map[string]any{"enabled": enabled, "auto_disabled_until": nil}).Error; err != nil {
+			return err
+		}
+		return tx.First(&channel, id).Error
+	})
+	if err != nil {
 		return err
 	}
-	if channel, ok := channelCache.Get(id); ok {
-		channel.Enabled = enabled
-		channel.AutoDisabledUntil = nil
-		channelCache.Set(id, cacheableChannel(channel))
+	if err := openChannelForCache(&channel); err != nil {
+		return err
 	}
+	channelCache.Set(id, cacheableChannel(channel))
 	return nil
 }
 
 // ChannelAutoDisable 把渠道停用至下一个 UTC 零点。
 func ChannelAutoDisable(id int, ctx context.Context) error {
-	channel, ok := channelCache.Get(id)
-	if !ok {
+	channelCacheWriteMu.Lock()
+	defer channelCacheWriteMu.Unlock()
+	if _, ok := channelCache.Get(id); !ok {
 		return fmt.Errorf("渠道不存在，请刷新页面后重试")
 	}
 	until := nextUTCZero(time.Now())
-	if err := db.GetDB().WithContext(ctx).Model(&model.Channel{}).Where("id = ?", id).
-		Updates(map[string]any{"enabled": false, "auto_disabled_until": until}).Error; err != nil {
+	var channel model.Channel
+	err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.Channel{}).Where("id = ?", id).
+			Updates(map[string]any{"enabled": false, "auto_disabled_until": until}).Error; err != nil {
+			return err
+		}
+		return tx.First(&channel, id).Error
+	})
+	if err != nil {
 		return err
 	}
-	channel.Enabled = false
-	channel.AutoDisabledUntil = &until
+	if err := openChannelForCache(&channel); err != nil {
+		return err
+	}
 	channelCache.Set(id, cacheableChannel(channel))
 	return nil
 }
 
 // ChannelAutoEnableExpired 恢复已到期的自动停用渠道, 返回恢复条数。
 func ChannelAutoEnableExpired(ctx context.Context) (int, error) {
+	channelCacheWriteMu.Lock()
+	defer channelCacheWriteMu.Unlock()
 	// 统一 UTC 比较, 避免跨时区字典序错。
 	now := time.Now().UTC()
 	var ids []int
@@ -496,22 +520,34 @@ func ChannelAutoEnableExpired(ctx context.Context) (int, error) {
 	}
 	restored := 0
 	for _, id := range ids {
-		// 带条件更新: 期间被人工接管(标记已清)的渠道不再恢复。
-		result := db.GetDB().WithContext(ctx).Model(&model.Channel{}).
-			Where("id = ? AND auto_disabled_until IS NOT NULL AND auto_disabled_until <= ?", id, now).
-			Updates(map[string]any{"enabled": true, "auto_disabled_until": nil})
-		if result.Error != nil {
-			log.Warnf("auto enable channel %d: %v", id, result.Error)
+		var channel model.Channel
+		updated := false
+		err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			// 带条件更新: 期间被人工接管(标记已清)的渠道不再恢复。
+			result := tx.Model(&model.Channel{}).
+				Where("id = ? AND auto_disabled_until IS NOT NULL AND auto_disabled_until <= ?", id, now).
+				Updates(map[string]any{"enabled": true, "auto_disabled_until": nil})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return nil
+			}
+			updated = true
+			return tx.First(&channel, id).Error
+		})
+		if err != nil {
+			log.Warnf("auto enable channel %d: %v", id, err)
 			continue
 		}
-		if result.RowsAffected == 0 {
+		if !updated {
 			continue
 		}
-		if cached, ok := channelCache.Get(id); ok {
-			cached.Enabled = true
-			cached.AutoDisabledUntil = nil
-			channelCache.Set(id, cacheableChannel(cached))
+		if err := openChannelForCache(&channel); err != nil {
+			log.Warnf("auto enable channel %d cache refresh: %v", id, err)
+			continue
 		}
+		channelCache.Set(id, cacheableChannel(channel))
 		restored++
 	}
 	return restored, nil
@@ -525,6 +561,8 @@ func nextUTCZero(now time.Time) time.Time {
 
 // ChannelDel 删除渠道及其模型，关联分组成员与评估排序由应用层级联清理。
 func ChannelDel(id int, ctx context.Context) error {
+	channelCacheWriteMu.Lock()
+	defer channelCacheWriteMu.Unlock()
 	channel, ok := channelCache.Get(id)
 	if !ok {
 		return fmt.Errorf("渠道不存在，请刷新页面后重试")
@@ -596,6 +634,8 @@ func ChannelModelGet(id int) (model.ChannelModel, error) {
 
 // channelRefreshCache 从数据库刷新渠道和渠道模型缓存。
 func channelRefreshCache(ctx context.Context) error {
+	channelCacheWriteMu.Lock()
+	defer channelCacheWriteMu.Unlock()
 	channels := []model.Channel{}
 	if err := db.GetDB().WithContext(ctx).Find(&channels).Error; err != nil {
 		log.Warnf("failed to get channels: %v", err)

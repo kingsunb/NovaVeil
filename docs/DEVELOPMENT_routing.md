@@ -231,7 +231,7 @@
 | `context_fit_enabled` | bool | false | 是否按成员 `model_limits` 的手动上下文窗口跳过装不下当前请求的成员；未填手动窗口的成员照常尝试。全部候选手动窗口都装不下时直接拒绝。 |
 | `reject_title_requests` | bool | false | 命中标题类轻请求时直接拒绝，不发起上游调用。 |
 | `max_request_rounds` | int | 600 | 单个请求的最大选路轮次（含引用跳过与等待重试）。超限后以错误收尾，防止空转。 |
-| `max_request_seconds` | int | 0 | 单个请求的整体时长上限秒数。超时后不再开始新一轮尝试。0 表示不限。 |
+| `max_request_seconds` | int | 3600 | 新分组默认 1 小时的单个请求整体时长上限秒数。超时后不再开始新一轮尝试。显式 0 表示不限；存量分组缺字段时仍按 0 处理。 |
 
 ---
 

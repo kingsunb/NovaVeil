@@ -20,6 +20,7 @@ Status: implemented
 3. **流式实时输出速度 c/s，终态切回 t/s**。
    - 后端 `RequestState` 新增 `OutputChars`（累计已转发输出字符数），流式转发循环每写完一个事件就 `noteOutputChars(utf8.RuneCount(event.Data))` 累加；`noteOutputChars` 持全局锁做 cheap 自增，并按 `outputCharsPublishInterval = 500ms` 节流调用 `publishRequestLocked`——把原先只在 `startRound/finishRound/markCommitted/终态` 这些离散生命周期点发布的状态流，扩展为流式进行中至多 2Hz 的增量发布。
    - `MarshalJSON` 新增 `output_chars`（`omitempty`，为 0 不出现）。前端 `types.ts` 加 `output_chars?`，`DetailTab` 在非终态且已首字时按 `output_chars / (now - first_token_at)` 实时折算，显示「输出 X c/s」；终态沿用原「总 X tok/s · 输出 Y tok/s」，两者互斥。
+   - 实时列表的 Tokens 列在终态追加第二行「输出 X tok/s」，沿用同一口径（`completion_tokens / 首字后耗时`），不打开详情也能读到输出速度；流式进行中仍显示 `—`，避免列表每行再挂计时器。
 
    **字符数的口径**：`OutputChars` 按还原后 SSE payload 的 UTF-8 字符数累计，含结构化帧的 JSON 开销，是「已转发输出量」的近似代理，不是精确的正文字符数。它不是计费数据，只服务实时速率观感。
 
@@ -39,5 +40,5 @@ Status: implemented
 ## 验证
 
 - `internal/relay/state_json_test.go`：`TestRequestStateJSONIncludesOutputChars` 验证 `output_chars` 序列化与为 0 时省略；`TestNoteOutputCharsAccumulates` 验证逐块累加并忽略非正数。
-- `web-next/src/pages/Logs.test.tsx`：缓存命中率「缓存 30 (29.7%)」、无缓存不展示百分比、流式进行中展示 `c/s` 且无 `tok/s`、终态展示 `tok/s` 且无 `c/s`。
+- `web-next/src/pages/Logs.test.tsx`：缓存命中率「缓存 30 (29.7%)」、无缓存不展示百分比、流式进行中展示 `c/s` 且无 `tok/s`、终态展示 `tok/s` 且无 `c/s`、实时列表 Tokens 列展示「输出 87.0 tok/s」。
 - 本地门禁：`go build ./...`、`go test ./...`、`go vet ./...`、`cd web-next && pnpm typecheck && pnpm lint && pnpm test` 全绿。

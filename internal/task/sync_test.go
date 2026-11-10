@@ -278,6 +278,28 @@ func TestSyncCatalogUpdatesModelMetadata(t *testing.T) {
 	}
 }
 
+func TestSyncTruncatedModelListKeepsExistingModels(t *testing.T) {
+	channel := insertSyncChannel(t, "https://opencode.ai/zen", []model.ChannelModel{
+		{Name: "kept", Source: model.ChannelModelSourceAuto},
+	})
+	prevFetch := fetchChannelModels
+	fetchChannelModels = func(context.Context, model.Channel) ([]string, error) {
+		return []string{"kept", "partial"}, helper.ErrModelListTruncated
+	}
+	defer func() { fetchChannelModels = prevFetch }()
+
+	if err := SyncModelsTask(); !errors.Is(err, helper.ErrModelListTruncated) {
+		t.Fatalf("SyncModelsTask error = %v, want ErrModelListTruncated", err)
+	}
+	got := loadChannelModels(t, channel.ID)
+	if len(got) != 1 {
+		t.Fatalf("models = %#v, want existing models unchanged", got)
+	}
+	if _, ok := got["partial"]; ok {
+		t.Fatal("truncated model list must not replace existing models")
+	}
+}
+
 func TestSyncModelsTaskSkipsDisabledChannels(t *testing.T) {
 	channel := insertSyncChannel(t, "https://opencode.ai/zen", []model.ChannelModel{
 		{Name: "kept", Source: model.ChannelModelSourceAuto},

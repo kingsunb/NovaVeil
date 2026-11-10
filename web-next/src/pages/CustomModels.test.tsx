@@ -70,6 +70,34 @@ describe("<CustomModelsPage />", () => {
     expect(screen.getByText("您好，欢迎咨询！")).toBeInTheDocument();
     // 普通渠道被过滤
     expect(screen.queryByText("openai-prod")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("switch", { name: "启用自定义模型 welcome-bot" }),
+    ).toBeInTheDocument();
+  });
+
+  it("新建弹窗初始不报错，点保存后才提示且不发创建请求", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes("/channel/list")) return Promise.resolve(jsonOk([]));
+      return Promise.resolve(jsonOk(null));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<CustomModelsPage />, { wrapper: Wrapper });
+    await user.click(screen.getByRole("button", { name: /新建自定义模型/ }));
+    await waitFor(() => screen.getByRole("dialog"));
+
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts.map((a) => a.textContent)).toEqual(
+      expect.arrayContaining(["必填", "模型名不能为空", "固定回复不能为空"]),
+    );
+    expect(
+      fetchMock.mock.calls.some((c) => String(c[0]).includes("/channel/create")),
+    ).toBe(false);
   });
 
   it("新建：提交 type=custom + fixed_reply + 单模型", async () => {

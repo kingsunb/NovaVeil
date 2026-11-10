@@ -28,7 +28,7 @@ DialogOverlay.displayName = "DialogOverlay";
 export const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
-    /** "dialog" 居中（默认），"sheet" 右侧滑出，"fullscreen" 全屏覆盖，"wide" 占 80% 宽度靠右覆盖 */
+    /** "dialog" 居中（默认），"sheet" 右侧滑出，"fullscreen" 全屏覆盖，"wide" 移动端全宽/桌面 80% 靠右 */
     variant?: "dialog" | "sheet" | "fullscreen" | "wide";
     size?: "sm" | "md" | "lg";
   }
@@ -47,14 +47,14 @@ export const DialogContent = React.forwardRef<
           : "glass-overlay fixed z-50",
         "data-[state=open]:animate-in data-[state=closed]:animate-out duration-200",
         variant === "dialog" &&
-          "left-1/2 top-1/2 max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-card data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+          "left-1/2 top-1/2 flex max-h-[min(90dvh,calc(100dvh-2rem))] w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-card data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
         variant === "sheet" &&
           "right-0 top-0 flex h-full w-full max-w-xl flex-col rounded-l-card data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-xl",
         variant === "fullscreen" &&
           "inset-0 flex h-full w-full flex-col rounded-none data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
-        // wide: 占视口 80% 宽度靠右, 左侧 20% 露出遮罩层供点击关闭。
+        // wide: 移动端全宽, 桌面靠右八成。
         variant === "wide" &&
-          "right-0 top-0 flex h-full w-4/5 flex-col rounded-l-card data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right",
+          "right-0 top-0 flex h-full w-full flex-col rounded-l-card data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:w-4/5",
         size === "sm" && variant === "dialog" && "max-w-sm",
         size === "lg" && variant === "dialog" && "max-w-2xl",
         className,
@@ -129,7 +129,7 @@ export const DialogFooter = ({
 }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
-      "flex items-center justify-end gap-2 border-t border-border/60 px-5 py-4",
+      "flex shrink-0 items-center justify-end gap-2 border-t border-border/60 px-5 py-4",
       className,
     )}
     {...props}

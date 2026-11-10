@@ -205,6 +205,7 @@ export default function CustomModelsPage() {
                         <div className="flex items-center gap-2">
                           <Switch
                             checked={c.enabled}
+                            aria-label={`启用自定义模型 ${c.name}`}
                             onCheckedChange={(v) =>
                               enableMut.mutate({ id: c.id, enabled: v })
                             }
@@ -285,6 +286,7 @@ export default function CustomModelsPage() {
                     <div className="flex shrink-0 items-center gap-2">
                       <Switch
                         checked={c.enabled}
+                        aria-label={`启用自定义模型 ${c.name}`}
                         onCheckedChange={(v) =>
                           enableMut.mutate({ id: c.id, enabled: v })
                         }
@@ -420,7 +422,8 @@ function CustomModelEditor({
   const [name, setName] = useState("");
   const [modelName, setModelName] = useState("");
   const [reply, setReply] = useState("");
-  const [errors, setErrors] = useState<{ name?: string; model?: string; reply?: string }>({});
+  const [touched, setTouched] = useState({ name: false, model: false, reply: false });
+  const [submitted, setSubmitted] = useState(false);
 
   // 切换编辑目标时重置草稿；编辑态锁模型名——改模型名会整体替换渠道模型行,
   // 使分组里按 channel_model_id 引用的成员失效, 需要重建分组成员, 不在编辑器里提供。
@@ -434,7 +437,8 @@ function CustomModelEditor({
       setModelName("");
       setReply("");
     }
-    setErrors({});
+    setTouched({ name: false, model: false, reply: false });
+    setSubmitted(false);
   }, [channel]);
 
   const saveMut = useMutation({
@@ -497,7 +501,9 @@ function CustomModelEditor({
   const nameError = validateField(name, NAME_RULE);
   const modelError = !modelName.trim() ? "模型名不能为空" : undefined;
   const replyError = !reply.trim() ? "固定回复不能为空" : undefined;
-  const isValid = !nameError && !modelError && !replyError;
+  const showNameError = touched.name || submitted;
+  const showModelError = touched.model || submitted;
+  const showReplyError = touched.reply || submitted;
 
   return (
     <Dialog open={!!channel} onOpenChange={(o) => !o && onClose()}>
@@ -548,10 +554,12 @@ function CustomModelEditor({
           {/* ---------- 右栏：表单 ---------- */}
           <section className="flex min-h-0 flex-1 flex-col">
             <div className="flex-1 space-y-3 overflow-y-auto p-4">
-              <Field label="名称" required error={nameError ?? undefined}>
+              <Field label="名称" required error={showNameError ? (nameError ?? undefined) : undefined}>
                 <Input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  onBlur={() => setTouched((t) => ({ ...t, name: true }))}
+                  invalid={showNameError && !!nameError}
                   placeholder="例如：客服欢迎语"
                 />
               </Field>
@@ -559,20 +567,24 @@ function CustomModelEditor({
                 label="模型名"
                 required
                 hint="客户端请求的模型名；创建后不可修改"
-                error={errors.model ?? modelError}
+                error={showModelError ? modelError : undefined}
               >
                 <Input
                   value={modelName}
                   onChange={(e) => setModelName(e.target.value)}
+                  onBlur={() => setTouched((t) => ({ ...t, model: true }))}
+                  invalid={showModelError && !!modelError}
                   disabled={!isNew}
                   placeholder="例如：welcome-bot"
                   className={cn(!isNew && "opacity-70")}
                 />
               </Field>
-              <Field label="固定回复" required error={errors.reply ?? replyError}>
+              <Field label="固定回复" required error={showReplyError ? replyError : undefined}>
                 <Textarea
                   value={reply}
                   onChange={(e) => setReply(e.target.value)}
+                  onBlur={() => setTouched((t) => ({ ...t, reply: true }))}
+                  aria-invalid={(showReplyError && !!replyError) || undefined}
                   rows={8}
                   placeholder="命中该模型时返回的固定文案"
                 />
@@ -591,15 +603,9 @@ function CustomModelEditor({
             variant="primary"
             size="sm"
             loading={saveMut.isPending}
-            disabled={!isValid}
             onClick={() => {
-              const next = {
-                name: validateField(name.trim(), NAME_RULE) ?? undefined,
-                model: !modelName.trim() ? "模型名不能为空" : undefined,
-                reply: !reply.trim() ? "固定回复不能为空" : undefined,
-              };
-              setErrors(next);
-              if (!next.name && !next.model && !next.reply) saveMut.mutate();
+              setSubmitted(true);
+              if (!nameError && !modelError && !replyError) saveMut.mutate();
             }}
           >
             保存

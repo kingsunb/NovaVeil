@@ -1,6 +1,6 @@
 name: security-scan
 
-# 供应链安全基线：周频 + 手动触发。
+# 供应链安全基线：周频 + 手动触发 + 依赖清单变更的 push/PR。
 # - Go: go vet + gosec(高置信度门禁) + govulncheck(官方漏洞库)。
 # - 前端: pnpm audit 审计 web-next 生产依赖。
 # 说明：
@@ -11,6 +11,20 @@ name: security-scan
 # 注意：pnpm audit 需要解析 lockfile；web-next/pnpm-lock.yaml 已跟踪并在 CI 使用。
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - go.mod
+      - go.sum
+      - web-next/package.json
+      - web-next/pnpm-lock.yaml
+  pull_request:
+    paths:
+      - go.mod
+      - go.sum
+      - web-next/package.json
+      - web-next/pnpm-lock.yaml
   schedule:
     # 每周一 06:00 UTC
     - cron: '0 6 * * 1'

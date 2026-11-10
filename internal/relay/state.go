@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"regexp"
@@ -80,16 +81,16 @@ type RequestState struct {
 	Status    Status    `json:"status"`     // 请求当前状态。
 	StartedAt time.Time `json:"started_at"` // 请求到达时间。
 	// 首字时点：首个已交付客户端的事件/整响应提交的时刻，用于展示首字耗时（TTFT）。
-	FirstTokenAt time.Time     `json:"first_token_at,omitempty"`
+	FirstTokenAt time.Time `json:"first_token_at,omitempty"`
 	// OutputChars 累计已转发给客户端的输出字符数(按已转发事件 payload 的 UTF-8 字符数近似, 含结构化帧开销)。
 	// 流式进行中由 noteOutputChars 持续累加并节流发布, 前端据此实时折算输出速度(c/s); 终态为最终累计值。
-	OutputChars  int64         `json:"output_chars,omitempty"`
-	Duration     time.Duration `json:"-"`                  // 内部保存纳秒精度；JSON 通过 MarshalJSON 输出 duration 与 duration_ms。
-	Model        string        `json:"model"`              // 客户端请求的模型名称, 即分组名称。
-	ClientIP     string        `json:"client_ip"`          // 发起请求的客户端 IP 地址。
-	APIKey       string        `json:"-"`                  // 内部可能暂存调用密钥；JSON 只输出脱敏尾缀。
-	KeyName      string        `json:"key_name,omitempty"` // 调用密钥的名称(面板可读)。
-	Usage        llm.Usage     `json:"usage"`              // 请求结束时写入的展示用量。
+	OutputChars int64         `json:"output_chars,omitempty"`
+	Duration    time.Duration `json:"-"`                  // 内部保存纳秒精度；JSON 通过 MarshalJSON 输出 duration 与 duration_ms。
+	Model       string        `json:"model"`              // 客户端请求的模型名称, 即分组名称。
+	ClientIP    string        `json:"client_ip"`          // 发起请求的客户端 IP 地址。
+	APIKey      string        `json:"-"`                  // 内部可能暂存调用密钥；JSON 只输出脱敏尾缀。
+	KeyName     string        `json:"key_name,omitempty"` // 调用密钥的名称(面板可读)。
+	Usage       llm.Usage     `json:"usage"`              // 请求结束时写入的展示用量。
 
 	UsageEstimated bool `json:"usage_estimated,omitempty"` // 终态用量是否因上游上报可疑零输入而经本地估算修复, 面板据此区分真实上报与估算值。
 
@@ -112,13 +113,13 @@ type RequestState struct {
 	Class                ErrClass        `json:"class,omitempty"`    // 终态错误分类, 请求结束后写入。
 	Attempts             []AttemptRecord `json:"attempts,omitempty"` // 每轮尝试轨迹, 按轮次递增追加。
 
-	body           string             // 客户端原始请求体, 体积大故不进状态流, 由独立接口按需拉取。
-	responseBody   string             // 聚合后的完整最终响应体, 同样按需拉取。
-	cancel         context.CancelFunc // 中止最新一轮上游请求, 仅在该轮等待响应期间非空。
-	stopRequested  bool               // 管理端请求整体终止标记: 置位后转发循环在最近的安全点退出, 不再发起任何新尝试。
-	stopCh         chan struct{}      // 管理端整体终止信号: StopRequest 中 close 一次, wait/select 据此立即唤醒而非等定时器到期。
-	roundStartedAt time.Time          // 最新一轮的开始时刻, 用于计算该轮尝试耗时。
-	lastOutputPublish time.Time        // 最近一次输出字符数的节流发布时刻, 把逐块累加收敛为至多 2Hz 的状态推送。
+	body              string             // 客户端原始请求体, 体积大故不进状态流, 由独立接口按需拉取。
+	responseBody      string             // 聚合后的完整最终响应体, 同样按需拉取。
+	cancel            context.CancelFunc // 中止最新一轮上游请求, 仅在该轮等待响应期间非空。
+	stopRequested     bool               // 管理端请求整体终止标记: 置位后转发循环在最近的安全点退出, 不再发起任何新尝试。
+	stopCh            chan struct{}      // 管理端整体终止信号: StopRequest 中 close 一次, wait/select 据此立即唤醒而非等定时器到期。
+	roundStartedAt    time.Time          // 最新一轮的开始时刻, 用于计算该轮尝试耗时。
+	lastOutputPublish time.Time          // 最近一次输出字符数的节流发布时刻, 把逐块累加收敛为至多 2Hz 的状态推送。
 }
 
 // AttemptRecord 一轮上游尝试的轨迹记录, 面板据此渲染请求的时间线。
@@ -150,6 +151,7 @@ const outputCharsPublishInterval = 500 * time.Millisecond
 const errBriefLimit = 256     // 错误摘要的最大保留字节数, 超长按 UTF-8 边界截断。
 const maxAttempts = 200       // 单个请求最多保留的尝试轨迹条数, 超出后丢弃最旧记录。
 const maxFailureRecords = 200 // 失败环形缓冲容量, 仅保留摘要元数据, 不含请求体。
+const retryJitterRatio = 0.2  // 重试等待的正向抖动比例。
 
 // errAdminStopped 管理端对单个请求发起整体终止时的终态原因。
 var errAdminStopped = errors.New("管理端已停止请求")
@@ -487,10 +489,18 @@ func Interrupt(id uint64, round int) bool {
 	return true
 }
 
+// jitteredWaitSeconds 给非零等待加正向抖动, 避免并发请求同时重试。
+func jitteredWaitSeconds(seconds float64) float64 {
+	if seconds <= 0 {
+		return seconds
+	}
+	return seconds * (1 + rand.Float64()*retryJitterRatio)
+}
+
 // wait 在重新选择目标之前退避 seconds 秒, 支持小数秒与 0 秒立即重试;
 // 客户端在退避期间断开或管理端终止请求时以取消终态定稿并返回 false。
 func (r *RequestState) wait(ctx context.Context, seconds float64) bool {
-	timer := time.NewTimer(time.Duration(seconds * float64(time.Second)))
+	timer := time.NewTimer(time.Duration(jitteredWaitSeconds(seconds) * float64(time.Second)))
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():

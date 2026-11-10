@@ -42,7 +42,7 @@ export function SegmentedControl<T extends string>({
             aria-pressed={selected}
             onClick={() => onChange(opt.value)}
             className={cn(
-              "rounded-[6px] font-medium tracking-tight transition-all duration-150",
+              "rounded-[6px] font-medium tracking-tight transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
               size === "sm" ? "px-2.5 py-1 text-xs" : "px-3 py-1.5 text-[13px]",
               selected
                 ? "bg-primary/[0.12] text-primary-text shadow-apple-sm"

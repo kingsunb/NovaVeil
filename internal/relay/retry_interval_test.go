@@ -27,15 +27,23 @@ func TestRetryWaitPreservesFractionalSeconds(t *testing.T) {
 		{5, 5 * time.Second},
 	} {
 		t.Run(fmt.Sprintf("%gs", tc.seconds), func(t *testing.T) {
-			// 使用虚拟时钟验证精确间隔, 不依赖主机调度速度。
+			// 使用虚拟时钟验证抖动后的等待区间, 不依赖主机调度速度。
 			synctest.Test(t, func(t *testing.T) {
 				request := &RequestState{}
 				start := time.Now()
 				if !request.wait(context.Background(), tc.seconds) {
 					t.Fatal("等待不应被取消")
 				}
-				if elapsed := time.Since(start); elapsed != tc.want {
-					t.Fatalf("等待应为 %v, 实际 %v", tc.want, elapsed)
+				elapsed := time.Since(start)
+				if tc.seconds <= 0 {
+					if elapsed != 0 {
+						t.Fatalf("0 秒应立即返回, 实际 %v", elapsed)
+					}
+					return
+				}
+				maxWait := time.Duration(float64(tc.want) * (1 + retryJitterRatio))
+				if elapsed < tc.want || elapsed >= maxWait {
+					t.Fatalf("等待应在 [%v, %v) 内, 实际 %v", tc.want, maxWait, elapsed)
 				}
 			})
 		})

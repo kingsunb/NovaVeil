@@ -5,11 +5,12 @@
   "type": "module",
   "description": "NovaVeil Agent Note 门禁脚本（方法源自 write-notes-like-deepseek / DeepSeek Harness）",
   "scripts": {
-    "verify-agent-note-tree": "npx tsx scripts/agent-notes/verify-agent-note-tree.ts",
-    "verify-agent-note-format": "npx tsx scripts/agent-notes/verify-agent-note-format.ts",
-    "verify-archived": "npx tsx scripts/agent-notes/verify-archived-agent-notes.ts",
-    "verify-notes": "npx tsx scripts/agent-notes/verify-agent-note-tree.ts && npx tsx scripts/agent-notes/verify-agent-note-format.ts && npx tsx scripts/agent-notes/verify-archived-agent-notes.ts",
-    "archive-agent-note": "npx tsx scripts/agent-notes/archive-agent-note.ts",
-    "check-anchors": "npx tsx scripts/agent-notes/check-note-anchors.ts"
+    "verify-agent-note-tree": "npx --yes tsx@4.23.15 scripts/agent-notes/verify-agent-note-tree.ts",
+    "verify-agent-note-format": "npx --yes tsx@4.23.15 scripts/agent-notes/verify-agent-note-format.ts",
+    "verify-archived": "npx --yes tsx@4.23.15 scripts/agent-notes/verify-archived-agent-notes.ts",
+    "verify-pr-note": "npx --yes tsx@4.23.15 scripts/agent-notes/verify-pr-note.ts",
+    "verify-notes": "npx --yes tsx@4.23.15 scripts/agent-notes/verify-agent-note-tree.ts && npx --yes tsx@4.23.15 scripts/agent-notes/verify-agent-note-format.ts && npx --yes tsx@4.23.15 scripts/agent-notes/verify-archived-agent-notes.ts",
+    "archive-agent-note": "npx --yes tsx@4.23.15 scripts/agent-notes/archive-agent-note.ts",
+    "check-anchors": "npx --yes tsx@4.23.15 scripts/agent-notes/check-note-anchors.ts"
   }
 }

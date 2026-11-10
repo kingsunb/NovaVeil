@@ -37,6 +37,13 @@ function jsonResponse(data: unknown) {
   return Promise.resolve(okResponse(data));
 }
 
+function errorResponse(message: string): Response {
+  return new Response(JSON.stringify({ code: 500, message }), {
+    status: 500,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function eligibleChannel(overrides: Partial<Channel>): Channel {
   return {
     ...sampleChannel,
@@ -244,6 +251,9 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     // 默认选第一个渠道, 台账立即展示
     expect(await screen.findByText("opencode0a1b2c3d")).toBeInTheDocument();
     expect(screen.getByText("https://opencode.ai/inference")).toBeInTheDocument();
+    expect(
+      screen.getByRole("switch", { name: "自动体检" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Plain Channel")).not.toBeInTheDocument();
     // 官方付费 OpenCode 不进账号池体检
     expect(screen.queryByRole("option", { name: "OpenCode" })).not.toBeInTheDocument();
@@ -555,6 +565,62 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
 
     expect(await screen.findByText(/没有可体检的渠道/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "开始体检" })).not.toBeInTheDocument();
+  });
+
+  it("渠道列表加载失败显示错误横幅，重试成功后再显示空态", async () => {
+    const user = userEvent.setup();
+    let fail = true;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/channel/list")) {
+        return Promise.resolve(fail ? errorResponse("boom") : okResponse([plainChannel]));
+      }
+      return jsonResponse(null);
+    }));
+
+    render(
+      <Wrapper>
+        <ProxyAccountsPage />
+      </Wrapper>,
+    );
+
+    expect(
+      await screen.findByText("加载失败，请检查网络后重试"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/没有可体检的渠道/)).not.toBeInTheDocument();
+
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText(/没有可体检的渠道/)).toBeInTheDocument();
+  });
+
+  it("台账加载失败显示错误横幅，不显示台账为空", async () => {
+    const user = userEvent.setup();
+    let fail = true;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/channel/list")) return jsonResponse([eligibleChannel({})]);
+      if (url.includes("/channel/proxy-accounts/auto-probe")) return jsonResponse({ enabled: false });
+      if (url.includes("/channel/proxy-accounts?")) {
+        return Promise.resolve(fail ? errorResponse("ledger down") : ledgerFor(url));
+      }
+      return jsonResponse(null);
+    }));
+
+    render(
+      <Wrapper>
+        <ProxyAccountsPage />
+      </Wrapper>,
+    );
+
+    expect(
+      await screen.findByText("加载失败，请检查网络后重试"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/台账为空/)).not.toBeInTheDocument();
+
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText("opencode0a1b2c3d")).toBeInTheDocument();
   });
 
   it("无 eligible 的 keyed 渠道显示空态, 不提供独立逐 Key 体检", async () => {

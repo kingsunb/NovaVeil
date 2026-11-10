@@ -1623,6 +1623,11 @@ func recordErrorLog(request *RequestState) {
 	op.ErrorLogDedupPerClass(string(request.Class), 3)
 }
 
+// downstreamErrorText 仅用于下游响应，后台状态与日志保留原始错误。
+func downstreamErrorText(err error) string {
+	return op.RedactSensitiveText(err.Error())
+}
+
 // rejectRequest 以客户端协议的错误格式返回请求级失败, 用于尚未登记状态因而无需定稿的请求。
 // 管理端「一键停止」属于瞬态不可用, 返回 503(+Retry-After) 让下游 SDK 按可重试处理;
 // 暂无可用渠道保持 400: 这是测试钉死的既有下游契约(客户端按确定性失败自行重试整个请求),
@@ -1645,7 +1650,7 @@ func rejectRequest(c *gin.Context, inbound transformer.Inbound, err error) {
 	}
 	response := inbound.TransformError(c.Request.Context(), &llm.ResponseError{
 		StatusCode: status,
-		Detail:     llm.ErrorDetail{Message: err.Error(), Type: "invalid_request_error"},
+		Detail:     llm.ErrorDetail{Message: downstreamErrorText(err), Type: "invalid_request_error"},
 	})
 	c.Data(status, "application/json", response.Body)
 	c.Abort()

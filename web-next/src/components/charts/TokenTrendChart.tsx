@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { formatNumber } from "@/lib/utils";
 import type { TokenTrendPoint, TokenTrendRange } from "@/lib/types";
+import { TOKEN_IN_COLOR, TOKEN_OUT_COLOR } from "./token-colors";
 
 type Range = TokenTrendRange;
 
@@ -116,7 +117,7 @@ export function TokenTrendChart({
             <path
               d={linePath("in")}
               fill="none"
-              stroke="#6D5AE6"
+              stroke={TOKEN_IN_COLOR}
               strokeWidth={1.5}
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -124,7 +125,7 @@ export function TokenTrendChart({
             <path
               d={linePath("out")}
               fill="none"
-              stroke="#2FAE86"
+              stroke={TOKEN_OUT_COLOR}
               strokeWidth={1.5}
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -143,12 +144,17 @@ export function TokenTrendChart({
               stroke="currentColor"
               strokeOpacity={0.15}
             />
-            <circle cx={x(hover)} cy={y(points[hover].in)} r="3" fill="#6D5AE6" />
+            <circle
+              cx={x(hover)}
+              cy={y(points[hover].in)}
+              r="3"
+              fill={TOKEN_IN_COLOR}
+            />
             <circle
               cx={x(hover)}
               cy={y(points[hover].out)}
               r="3"
-              fill="#2FAE86"
+              fill={TOKEN_OUT_COLOR}
             />
           </g>
         )}
@@ -174,14 +180,20 @@ export function TokenTrendChart({
           <div className="text-ink-muted">{fmtFull(hoverPoint.t, range)}</div>
           <div className="mt-0.5 flex items-center gap-3">
             <span className="flex items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#6D5AE6]" />
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: TOKEN_IN_COLOR }}
+              />
               <span className="text-ink">入</span>
               <span className="num text-ink">
                 {formatNumber(hoverPoint.in)}
               </span>
             </span>
             <span className="flex items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#2FAE86]" />
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: TOKEN_OUT_COLOR }}
+              />
               <span className="text-ink">出</span>
               <span className="num text-ink">
                 {formatNumber(hoverPoint.out)}

@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   isDynamicChunkError,
@@ -83,7 +84,7 @@ export class ErrorBoundary extends Component<Props, State> {
                 aria-hidden
                 className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/15 text-primary-text"
               >
-                ↻
+                <RefreshCw className="h-4 w-4" />
               </span>
               <h2 className="text-base font-semibold text-ink">
                 版本已更新
@@ -117,7 +118,7 @@ export class ErrorBoundary extends Component<Props, State> {
               aria-hidden
               className="flex h-7 w-7 items-center justify-center rounded-full bg-destructive/15 text-destructive"
             >
-              !
+              <AlertTriangle className="h-4 w-4" />
             </span>
             <h2 className="text-base font-semibold text-destructive">
               这块内容出错了

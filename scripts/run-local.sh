@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
 PORT="${NOVAVEIL_SERVER_PORT:-8080}"
-HOST="${NOVAVEIL_SERVER_HOST:-0.0.0.0}"
+HOST="${NOVAVEIL_SERVER_HOST:-127.0.0.1}"
 BIN=""
 LOCAL_OS="$(go env GOOS 2>/dev/null || echo linux)"
 LOCAL_ARCH="$(go env GOARCH 2>/dev/null || echo amd64)"
@@ -30,10 +30,21 @@ LOG="${ROOT}/logs/novaveil.log"
 mkdir -p "${ROOT}/data" "${ROOT}/logs"
 
 stop_old() {
-    local pids
-    pids="$(pgrep -f "${ROOT}/build/bin/novaveil-" 2>/dev/null || true)"
-    if [ -z "${pids}" ]; then
-        pids="$(pgrep -f "${ROOT}/novaveil start" 2>/dev/null || true)"
+    local pids=""
+    if [ -f "${ROOT}/logs/novaveil.pid" ]; then
+        local pid
+        pid="$(cat "${ROOT}/logs/novaveil.pid" 2>/dev/null || true)"
+        if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+            case "$(ps -p "${pid}" -o args= 2>/dev/null || true)" in
+                *novaveil*) pids="${pid}" ;;
+            esac
+        fi
+    fi
+    if [ -z "${pids}" ] && command -v pgrep >/dev/null 2>&1; then
+        pids="$(pgrep -f "${ROOT}/build/bin/novaveil-" 2>/dev/null || true)"
+        if [ -z "${pids}" ]; then
+            pids="$(pgrep -f "${ROOT}/novaveil start" 2>/dev/null || true)"
+        fi
     fi
     if [ -n "${pids}" ]; then
         echo "stopping previous instance: ${pids}"
@@ -45,15 +56,24 @@ stop_old() {
     fi
 }
 
+probe_host="${HOST#[}"
+probe_host="${probe_host%]}"
+case "${probe_host}" in
+    0.0.0.0|"") probe_host="127.0.0.1" ;;
+    ::) probe_host="[::1]" ;;
+    *:*) probe_host="[${probe_host}]" ;;
+esac
+BASE_URL="http://${probe_host}:${PORT}"
+
 wait_listen() {
     local i
-    for i in $(seq 1 20); do
-        if ss -ltn 2>/dev/null | grep -q ":${PORT} "; then
+    for i in $(seq 1 30); do
+        if curl -fsS --max-time 2 -o /dev/null "${BASE_URL}/healthz"; then
             return 0
         fi
         sleep 0.3
     done
-    echo "service did not listen on ${PORT} within timeout" >&2
+    echo "service did not pass /healthz on ${BASE_URL} within timeout" >&2
     tail -n 40 "${LOG}" >&2 || true
     return 1
 }
@@ -65,14 +85,14 @@ NOVAVEIL_SERVER_HOST="${HOST}" NOVAVEIL_SERVER_PORT="${PORT}" \
 echo $! >"${ROOT}/logs/novaveil.pid"
 wait_listen
 
-code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:${PORT}/" || true)"
+code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${BASE_URL}/" || true)"
 if [ "${code}" != "200" ]; then
     echo "smoke failed: GET / returned HTTP ${code:-none}" >&2
     tail -n 40 "${LOG}" >&2 || true
     exit 1
 fi
 
-echo "ok  http://127.0.0.1:${PORT}/  (HTTP ${code})"
+echo "ok  ${BASE_URL}/  (HTTP ${code})"
 echo "log ${LOG}"
 if [ -f "${ROOT}/data/initial-admin-password" ]; then
     echo "bootstrap password: ${ROOT}/data/initial-admin-password"

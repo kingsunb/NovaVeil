@@ -3,6 +3,8 @@ package op
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -22,13 +24,213 @@ const UsageBucketHour = time.Hour
 // usageBucketNow 取桶时钟; 可注入以便测试冻结时间(参照 conversationDiskHasRoom 模式)。
 var usageBucketNow = time.Now
 
-// RecordUsageBucket 把一次请求终态的用量累加到对应 (小时, 模型) 桶。
-// 同步单行 UPSERT: 请求已定稿, 该调用不阻塞其他请求的转发循环。
-// 跳过条件: 数据库未初始化(无 DB 的单测环境)、模型名为空(未路由到的请求)、
-// 双零用量(上游未上报, 不写零行污染聚合)。
-// 负 token 是上游异常上报, 逐项钳为 0, 绝不把负增量 UPSERT 进累计值。
-// reasoning/cached 为推理与缓存命中 token, cost 为预计消耗(USD), durationMs 为请求耗时(毫秒)。
-// 失败仅 warn 降级: 用量统计允许少量丢失, 绝不因落库错误影响请求定稿路径。
+const (
+	usageBucketQueueCapacity = 4096
+	usageBucketBatchSize     = 100
+	usageBucketFlushInterval = 500 * time.Millisecond
+)
+
+type usageBucketKey struct {
+	bucketAt  time.Time
+	modelName string
+}
+
+type usageBucketWriter struct {
+	mu       sync.Mutex
+	stopped  bool
+	queue    chan model.UsageBucket
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	stopOnce sync.Once
+	errMu    sync.Mutex
+	lastErr  error
+}
+
+var (
+	usageWriterMu sync.Mutex
+	usageWriter   *usageBucketWriter
+	usageDropped  atomic.Int64
+)
+
+// StartUsageBucketWriter 启动后台用量写协程, 重复调用无副作用。
+func StartUsageBucketWriter() {
+	usageWriterMu.Lock()
+	defer usageWriterMu.Unlock()
+	if usageWriter != nil {
+		return
+	}
+	writer := &usageBucketWriter{
+		queue:  make(chan model.UsageBucket, usageBucketQueueCapacity),
+		stopCh: make(chan struct{}),
+		doneCh: make(chan struct{}),
+	}
+	usageWriter = writer
+	go writer.run()
+}
+
+// StopUsageBucketWriter 停止写协程并排空队列, 超时返回 ctx 错误。
+func StopUsageBucketWriter(ctx context.Context) error {
+	usageWriterMu.Lock()
+	writer := usageWriter
+	usageWriter = nil
+	usageWriterMu.Unlock()
+	if writer == nil {
+		return nil
+	}
+	return writer.stop(ctx)
+}
+
+// UsageBucketDroppedCount 返回队列满时累计丢弃的用量记录数。
+func UsageBucketDroppedCount() int64 {
+	return usageDropped.Load()
+}
+
+func (w *usageBucketWriter) stop(ctx context.Context) error {
+	w.mu.Lock()
+	w.stopped = true
+	w.mu.Unlock()
+	w.stopOnce.Do(func() { close(w.stopCh) })
+	select {
+	case <-w.doneCh:
+		w.errMu.Lock()
+		defer w.errMu.Unlock()
+		return w.lastErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (w *usageBucketWriter) setLastErr(err error) {
+	w.errMu.Lock()
+	w.lastErr = err
+	w.errMu.Unlock()
+}
+
+func (w *usageBucketWriter) enqueue(bucket model.UsageBucket) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopped {
+		return false
+	}
+	select {
+	case w.queue <- bucket:
+	default:
+		dropped := usageDropped.Add(1)
+		if dropped == 1 || dropped%1000 == 0 {
+			log.Warnf("usage bucket queue full, dropped %d records", dropped)
+		}
+	}
+	return true
+}
+
+func (w *usageBucketWriter) run() {
+	defer close(w.doneCh)
+	ticker := time.NewTicker(usageBucketFlushInterval)
+	defer ticker.Stop()
+	pending := make(map[usageBucketKey]model.UsageBucket)
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		gormDB := db.GetDB()
+		if gormDB == nil {
+			w.setLastErr(fmt.Errorf("usage bucket flush: database not initialized"))
+			return
+		}
+		buckets := make([]model.UsageBucket, 0, len(pending))
+		for _, bucket := range pending {
+			buckets = append(buckets, bucket)
+		}
+		if err := writeUsageBuckets(gormDB, buckets); err != nil {
+			log.Warnf("flush usage buckets failed, will retry: %v", err)
+			w.setLastErr(err)
+			return
+		}
+		clear(pending)
+		w.setLastErr(nil)
+	}
+	for {
+		select {
+		case bucket := <-w.queue:
+			mergeUsageBucket(pending, bucket)
+			if len(pending) >= usageBucketBatchSize {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		case <-w.stopCh:
+			for {
+				select {
+				case bucket := <-w.queue:
+					mergeUsageBucket(pending, bucket)
+				default:
+					flush()
+					return
+				}
+			}
+		}
+	}
+}
+
+func enqueueUsageBucket(bucket model.UsageBucket) bool {
+	usageWriterMu.Lock()
+	writer := usageWriter
+	usageWriterMu.Unlock()
+	if writer == nil {
+		return false
+	}
+	return writer.enqueue(bucket)
+}
+
+func mergeUsageBucket(pending map[usageBucketKey]model.UsageBucket, delta model.UsageBucket) {
+	key := usageBucketKey{bucketAt: delta.BucketAt, modelName: delta.ModelName}
+	current := pending[key]
+	current.BucketAt = delta.BucketAt
+	current.ModelName = delta.ModelName
+	current.InputTokens += delta.InputTokens
+	current.OutputTokens += delta.OutputTokens
+	current.ReasoningTokens += delta.ReasoningTokens
+	current.CachedTokens += delta.CachedTokens
+	current.Cost += delta.Cost
+	current.DurationMs += delta.DurationMs
+	current.RequestCount += delta.RequestCount
+	current.ErrorCount += delta.ErrorCount
+	pending[key] = current
+}
+
+func writeUsageBuckets(gormDB *gorm.DB, buckets []model.UsageBucket) error {
+	return gormDB.Transaction(func(tx *gorm.DB) error {
+		for i := range buckets {
+			if err := upsertUsageBucket(tx, &buckets[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func upsertUsageBucket(gormDB *gorm.DB, bucket *model.UsageBucket) error {
+	return gormDB.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "bucket_at"},
+			{Name: "model_name"},
+		},
+		DoUpdates: clause.Assignments(map[string]any{
+			"input_tokens":     gorm.Expr("input_tokens + ?", bucket.InputTokens),
+			"output_tokens":    gorm.Expr("output_tokens + ?", bucket.OutputTokens),
+			"reasoning_tokens": gorm.Expr("reasoning_tokens + ?", bucket.ReasoningTokens),
+			"cached_tokens":    gorm.Expr("cached_tokens + ?", bucket.CachedTokens),
+			"cost":             gorm.Expr("cost + ?", bucket.Cost),
+			"duration_ms":      gorm.Expr("duration_ms + ?", bucket.DurationMs),
+			"request_count":    gorm.Expr("request_count + ?", bucket.RequestCount),
+			"error_count":      gorm.Expr("error_count + ?", bucket.ErrorCount),
+		}),
+	}).Create(bucket).Error
+}
+
+// RecordUsageBucket 累加一次请求用量到小时桶。
+// 跳过无 DB/空模型/双零; 负值钳零。
+// 写协程启动后入队, 否则同步落库。
 func RecordUsageBucket(targetModel string, input, output, reasoning, cached int64, cost float64, durationMs int64) {
 	gormDB := db.GetDB()
 	if gormDB == nil || targetModel == "" || (input <= 0 && output <= 0) {
@@ -66,24 +268,10 @@ func RecordUsageBucket(targetModel string, input, output, reasoning, cached int6
 		DurationMs:      durationMs,
 		RequestCount:    1,
 	}
-	// ON CONFLICT (bucket_at, model_name) DO UPDATE 累加, 三方言由 GORM 自动适配;
-	// 只累加不覆盖, 并发定稿的多个请求各自 UPSERT 不会互相吞量。
-	err := gormDB.Clauses(clause.OnConflict{
-		Columns: []clause.Column{
-			{Name: "bucket_at"},
-			{Name: "model_name"},
-		},
-		DoUpdates: clause.Assignments(map[string]any{
-			"input_tokens":     gorm.Expr("input_tokens + ?", input),
-			"output_tokens":    gorm.Expr("output_tokens + ?", output),
-			"reasoning_tokens": gorm.Expr("reasoning_tokens + ?", reasoning),
-			"cached_tokens":    gorm.Expr("cached_tokens + ?", cached),
-			"cost":             gorm.Expr("cost + ?", cost),
-			"duration_ms":      gorm.Expr("duration_ms + ?", durationMs),
-			"request_count":    gorm.Expr("request_count + ?", 1),
-		}),
-	}).Create(&bucket).Error
-	if err != nil {
+	if enqueueUsageBucket(bucket) {
+		return
+	}
+	if err := upsertUsageBucket(gormDB, &bucket); err != nil {
 		log.Warnf("record usage bucket failed: %v", err)
 	}
 }
@@ -292,6 +480,7 @@ func UsageTotalsByModel(ctx context.Context) ([]ModelTokenUsage, error) {
 
 // RecordErrorBucket 把一次业务失败累加到 (小时, 模型) 桶的 error_count。
 // 与错误日志表的条数上限解耦, 供仪表盘错误 KPI 按时间窗口统计。
+// 写协程启动后入队, 否则同步落库。
 func RecordErrorBucket(targetModel string) {
 	gormDB := db.GetDB()
 	if gormDB == nil || targetModel == "" {
@@ -302,16 +491,10 @@ func RecordErrorBucket(targetModel string) {
 		ModelName:  targetModel,
 		ErrorCount: 1,
 	}
-	err := gormDB.Clauses(clause.OnConflict{
-		Columns: []clause.Column{
-			{Name: "bucket_at"},
-			{Name: "model_name"},
-		},
-		DoUpdates: clause.Assignments(map[string]any{
-			"error_count": gorm.Expr("error_count + ?", 1),
-		}),
-	}).Create(&bucket).Error
-	if err != nil {
+	if enqueueUsageBucket(bucket) {
+		return
+	}
+	if err := upsertUsageBucket(gormDB, &bucket); err != nil {
 		log.Warnf("record error bucket failed: %v", err)
 	}
 }

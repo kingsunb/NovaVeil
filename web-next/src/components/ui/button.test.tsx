@@ -22,6 +22,13 @@ describe("<Button />", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
+  it("默认 type=button，显式 type 优先", () => {
+    const { rerender } = render(<Button>ok</Button>);
+    expect(screen.getByRole("button")).toHaveAttribute("type", "button");
+    rerender(<Button type="submit">ok</Button>);
+    expect(screen.getByRole("button")).toHaveAttribute("type", "submit");
+  });
+
   it("primary / ghost / destructive 变体带对应类", () => {
     const { container, rerender } = render(
       <Button variant="primary">a</Button>,

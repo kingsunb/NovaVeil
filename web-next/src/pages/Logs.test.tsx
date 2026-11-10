@@ -167,6 +167,10 @@ describe("<LogsPage /> 虚拟化结构", () => {
     // 滚动容器存在（高度 min(480px, 60vh) 由真实浏览器渲染；jsdom 的
     // cssstyle 不接受 min()，无法断言 style 属性）
     expect(grid.querySelector(".overflow-auto")).not.toBeNull();
+    // 表头与虚拟表体共用同一个横向滚动容器，避免列错位
+    const scroller = grid.querySelector(".overflow-auto");
+    const headerRow = grid.querySelector('[role="row"][aria-rowindex="1"]');
+    expect(scroller?.contains(headerRow)).toBe(true);
     // 表头具备 columnheader 语义（审计 4.18）
     expect(
       grid.querySelectorAll('[role="row"][aria-rowindex="1"] > [role="columnheader"]'),
@@ -201,6 +205,37 @@ describe("<LogsPage /> 虚拟化结构", () => {
     await waitFor(() => {
       expect(grid.getAttribute("aria-rowcount")).toBe("6");
     });
+  });
+
+  it("阅读位置不在顶部时，新请求顶插保持阅读位置并提示条数", async () => {
+    setupBasicFetch();
+    const sources = setupEventSource();
+    const { container } = render(<LogsPage />, { wrapper: Wrapper });
+    const grid = await waitFor(() => {
+      const g = container.querySelector('[role="grid"]');
+      if (!g) throw new Error("grid not yet");
+      return g;
+    });
+    await waitFor(() => sources.length > 0 && sources[0]!.readyState !== 0);
+    const es = sources[0]!;
+    await act(async () => {
+      for (let i = 1; i <= 5; i++) es.fireEvent("log", makeLog(i));
+    });
+    await waitFor(() => expect(grid.getAttribute("aria-rowcount")).toBe("6"));
+
+    const scroller = grid.querySelector(".overflow-auto") as HTMLElement;
+    scroller.scrollTop = 88;
+    fireEvent.scroll(scroller);
+
+    await act(async () => {
+      es.fireEvent("log", makeLog(6));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "有 1 条新请求" })).toBeInTheDocument();
+    });
+    // 顶插一行后补偿 44px，锚点行仍在原视口位置。
+    expect(scroller.scrollTop).toBe(132);
   });
 });
 
@@ -308,6 +343,42 @@ describe("<LogsPage /> 实时列表顺序（运行中置顶 + 最新在顶）", 
     expect(within(row1).getByText("代理")).toBeTruthy();
     // 无代理的行应包含「直连」文本
     expect(within(row2).getByText("直连")).toBeTruthy();
+  });
+
+  it("实时列表 Tokens 列展示终态输出速度 tok/s", async () => {
+    setupBasicFetch();
+    const sources = setupEventSource();
+
+    const { container } = render(<LogsPage />, { wrapper: Wrapper });
+    await waitFor(() => {
+      const g = container.querySelector('[role="grid"]');
+      if (!g) throw new Error("grid not yet");
+      return g;
+    });
+    await waitFor(() => sources.length > 0 && sources[0]!.readyState !== 0);
+
+    const base = makeLog(1);
+    await act(async () => {
+      sources[0]!.fireEvent("log", {
+        ...base,
+        first_token_at: new Date(
+          Date.parse(base.started_at) + 1000,
+        ).toISOString(),
+        duration_ms: 2000,
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 87,
+          total_tokens: 187,
+        },
+      });
+    });
+
+    const row = await waitFor(() => {
+      const el = screen.getByLabelText("查看请求 #1 追踪");
+      if (!el) throw new Error("row not yet");
+      return el;
+    });
+    expect(within(row).getByText("输出 87.0 tok/s")).toBeTruthy();
   });
 });
 
@@ -629,5 +700,25 @@ describe("<LogsPage /> 追踪 Sheet 诊断区块与时间线", () => {
     expect(timeline.queryByText(/首字/)).toBeNull();
     // 无代理时显示直连
     expect(timeline.getByText("直连（未走代理）")).toBeTruthy();
+  });
+
+  it("终止请求需二次确认后才调用停止接口", async () => {
+    const dialog = await openTrace({ ...makeLog(2), sending: true });
+    fireEvent.click(within(dialog).getByRole("button", { name: "终止请求" }));
+
+    expect(within(dialog).getByRole("button", { name: "确认终止请求" })).toBeTruthy();
+    const fetchMock = vi.mocked(fetch);
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes("/stop-request")),
+    ).toBe(false);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认终止请求" }));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url]) =>
+          String(url).includes("/log/2/stop-request"),
+        ),
+      ).toBe(true);
+    });
   });
 });

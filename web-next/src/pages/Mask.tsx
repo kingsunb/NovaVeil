@@ -143,6 +143,7 @@ export default function MaskPage() {
                 <Switch
                   checked={config.enabled}
                   disabled={putMut.isPending}
+                  aria-label="全局脱敏总开关"
                   onCheckedChange={(v) => void patch({ enabled: v })}
                 />
                 {config.enabled ? (
@@ -205,6 +206,7 @@ export default function MaskPage() {
                               <Switch
                                 checked={on}
                                 disabled={putMut.isPending}
+                                aria-label={`启用内置规则 ${r.label}`}
                                 onCheckedChange={(v) =>
                                   void patch({
                                     builtin_rule_switch: {
@@ -473,13 +475,13 @@ function AddTermDialog({
 }) {
   const [value, setValue] = useState("");
   const [category, setCategory] = useState("");
+  const [touched, setTouched] = useState(false);
 
-  // 每次打开重置草稿，避免上次输入残留。
+  // 重开时清空草稿与错误态。
   useEffect(() => {
-    if (open) {
-      setValue("");
-      setCategory("");
-    }
+    setValue("");
+    setCategory("");
+    setTouched(false);
   }, [open]);
 
   const trimmed = value.trim();
@@ -502,10 +504,12 @@ function AddTermDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
-          <Field label="敏感词" required error={valueError}>
+          <Field label="敏感词" required error={touched ? valueError : undefined}>
             <Input
               value={value}
               onChange={(e) => setValue(e.target.value)}
+              onBlur={() => setTouched(true)}
+              invalid={touched && !!valueError}
               placeholder="例如：张三"
             />
           </Field>

@@ -156,20 +156,20 @@ func TestCloneRouteStatePostCommitStrikesConcurrentSafe(t *testing.T) {
 // TestGlobalRequestCapsDefaultsAndHelpers 校验新配置字段的默认值、归一化钳制与辅助判定函数。
 func TestGlobalRequestCapsDefaultsAndHelpers(t *testing.T) {
 	defaults := model.DefaultGroupRelayConfig()
-	if defaults.MaxRequestRounds != 600 || defaults.MaxRequestSeconds != 0 {
-		t.Fatalf("默认配置应为 rounds=600 seconds=0(不限时), 实际 %d/%d", defaults.MaxRequestRounds, defaults.MaxRequestSeconds)
+	if defaults.MaxRequestRounds != 600 || defaults.MaxRequestSeconds != 3600 {
+		t.Fatalf("默认配置应为 rounds=600 seconds=3600(1 小时), 实际 %d/%d", defaults.MaxRequestRounds, defaults.MaxRequestSeconds)
 	}
 
 	var zero model.GroupRelayConfig
 	model.NormalizeGroupRelayConfig(&zero)
-	if zero.MaxRequestRounds != 600 || zero.MaxRequestSeconds != 0 {
+	if zero.MaxRequestRounds != 600 || zero.MaxRequestSeconds != 3600 {
 		t.Fatalf("零值配置应补默认值, 实际 %d/%d", zero.MaxRequestRounds, zero.MaxRequestSeconds)
 	}
 
 	negative := model.GroupRelayConfig{MaxRequestRounds: -3, MaxRequestSeconds: -1}
 	model.NormalizeGroupRelayConfig(&negative)
-	if negative.MaxRequestRounds != 600 || negative.MaxRequestSeconds != 0 {
-		t.Fatalf("负值应被钳回默认值(0=不限时), 实际 %d/%d", negative.MaxRequestRounds, negative.MaxRequestSeconds)
+	if negative.MaxRequestRounds != 600 || negative.MaxRequestSeconds != 3600 {
+		t.Fatalf("负值应被钳回默认值(1 小时), 实际 %d/%d", negative.MaxRequestRounds, negative.MaxRequestSeconds)
 	}
 
 	// 显式 0 表示不限时, 归一化不得覆盖; 轮次上限仍补默认。
@@ -197,8 +197,11 @@ func TestGlobalRequestCapsDefaultsAndHelpers(t *testing.T) {
 	if requestDeadlineExceeded(model.GroupRelayConfig{MaxRequestSeconds: 1}, fresh) {
 		t.Fatal("未达上限不应判超限")
 	}
-	if !requestDeadlineExceeded(model.GroupRelayConfig{MaxRequestSeconds: -1}, time.Now().Add(-700*time.Second)) {
-		t.Fatal("负值按非法配置回退默认上限(0=不限时)后不应判超限")
+	if requestDeadlineExceeded(model.GroupRelayConfig{MaxRequestSeconds: -1}, time.Now().Add(-3500*time.Second)) {
+		t.Fatal("负值回退默认 1 小时后, 3500 秒不应判超限")
+	}
+	if !requestDeadlineExceeded(model.GroupRelayConfig{MaxRequestSeconds: -1}, time.Now().Add(-3700*time.Second)) {
+		t.Fatal("负值回退默认 1 小时后, 3700 秒应判超限")
 	}
 }
 

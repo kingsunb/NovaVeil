@@ -91,6 +91,26 @@ describe("AppShell 主区滚动复位", () => {
   });
 });
 
+describe("AppShell 可访问性", () => {
+  it("提供跳到主内容链接，main 可程序化聚焦", () => {
+    render(shell());
+    expect(screen.getByRole("link", { name: "跳到主内容" })).toHaveAttribute(
+      "href",
+      "#main-content",
+    );
+    const main = screen.getByRole("main");
+    expect(main).toHaveAttribute("id", "main-content");
+    expect(main).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("路由切换后聚焦主区", async () => {
+    const user = userEvent.setup();
+    render(shell());
+    await user.click(screen.getByRole("button", { name: "切换页面" }));
+    expect(screen.getByRole("main")).toHaveFocus();
+  });
+});
+
 describe("AppShell 移动抽屉焦点", () => {
   it("圈定 Tab，关闭后焦点回到打开按钮", async () => {
     const user = userEvent.setup();

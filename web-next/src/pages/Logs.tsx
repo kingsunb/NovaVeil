@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Activity,
   ArrowDownToLine,
   ArrowRight,
+  ArrowUp,
   Brain,
   Clock,
   Cpu,
@@ -481,21 +482,72 @@ function LiveTable({
   onPick: (r: RequestState) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const previousRowsRef = useRef(rows);
+  const [headerHeight, setHeaderHeight] = useState(0);
+  const [newRequests, setNewRequests] = useState(0);
+
+  useLayoutEffect(() => {
+    setHeaderHeight(headerRef.current?.offsetHeight ?? 0);
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = parentRef.current;
+    const previous = previousRowsRef.current;
+    previousRowsRef.current = rows;
+    if (!el) return;
+    if (el.scrollTop === 0) {
+      setNewRequests(0);
+      return;
+    }
+    const anchorIndex = Math.floor(
+      Math.max(0, el.scrollTop - headerHeight) / ROW_HEIGHT,
+    );
+    const anchor = previous[anchorIndex];
+    if (!anchor) return;
+    const nextIndex = rows.findIndex((r) => r.id === anchor.id);
+    if (nextIndex < 0) return;
+    const delta = (nextIndex - anchorIndex) * ROW_HEIGHT;
+    if (delta !== 0) el.scrollTop += delta;
+    const previousIds = new Set(previous.map((r) => r.id));
+    const inserted = rows
+      .slice(0, nextIndex)
+      .filter((r) => !previousIds.has(r.id)).length;
+    if (inserted > 0) setNewRequests((count) => count + inserted);
+  }, [rows, headerHeight]);
+
+  const handleScroll = () => {
+    if (parentRef.current?.scrollTop === 0) setNewRequests(0);
+  };
+
+  const jumpToTop = () => {
+    parentRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    setNewRequests(0);
+  };
 
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
+    scrollMargin: headerHeight,
     overscan: 8,
   });
 
   return (
-    <Card className="overflow-hidden p-0">
+    <Card className="relative overflow-hidden p-0">
       {/* grid 语义包裹表头 + 主体，保证 role="row" 都有 role="grid" 祖先 */}
       <div role="grid" aria-rowcount={rows.length + 1} aria-label="实时请求列表">
+      <div
+        ref={parentRef}
+        className="relative overflow-auto"
+        style={{ height: "min(480px, 60vh)" }}
+        onScroll={handleScroll}
+      >
+      <div className="min-w-[1150px]">
       {/* 表头 */}
       <div
-        className="grid border-b border-border bg-card/80 px-4 py-2.5 text-left text-xs text-ink-muted backdrop-blur"
+        ref={headerRef}
+        className="sticky top-0 z-10 grid border-b border-border bg-card/80 px-4 py-2.5 text-left text-xs text-ink-muted backdrop-blur"
         style={{ gridTemplateColumns: COLS }}
         role="row"
         aria-rowindex={1}
@@ -512,11 +564,7 @@ function LiveTable({
       </div>
 
       {/* 虚拟化主体 */}
-      <div
-        ref={parentRef}
-        className="relative overflow-auto"
-        style={{ height: "min(480px, 60vh)" }}
-      >
+      <div>
         {rows.length === 0 ? (
           <EmptyState
             icon={<Activity className="h-5 w-5" aria-hidden />}
@@ -534,6 +582,7 @@ function LiveTable({
             {virtualizer.getVirtualItems().map((vi) => {
               const r = rows[vi.index];
               if (!r) return null;
+              const tps = outputTpsOf(r);
               return (
                 <div
                   key={r.id}
@@ -552,7 +601,7 @@ function LiveTable({
                   aria-label={`查看请求 #${r.id} 追踪`}
                   className="absolute left-0 right-0 grid cursor-pointer items-center border-b border-border/60 px-4 hover:bg-surface-subtle/60 focus:bg-surface-subtle/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   style={{
-                    transform: `translateY(${vi.start}px)`,
+                    transform: `translateY(${vi.start - headerHeight}px)`,
                     height: ROW_HEIGHT,
                     gridTemplateColumns: COLS,
                   }}
@@ -597,10 +646,21 @@ function LiveTable({
                   <div role="gridcell" className="mono truncate text-xs text-ink-muted">
                     {r.client_ip}
                   </div>
-                  <div role="gridcell" className="num text-xs text-ink-muted">
-                    {formatNumber(r.usage.prompt_tokens)} /{" "}
-                    {formatNumber(r.usage.completion_tokens)}
-                    <CacheSuffix r={r} />
+                  <div
+                    role="gridcell"
+                    className="num text-xs leading-tight text-ink-muted"
+                  >
+                    <div>
+                      {formatNumber(r.usage.prompt_tokens)} /{" "}
+                      {formatNumber(r.usage.completion_tokens)}
+                      <CacheSuffix r={r} />
+                    </div>
+                    <div
+                      className="text-[11px] text-ink-subtle"
+                      title="输出速度（完成 token / 首字后耗时）"
+                    >
+                      {tps != null ? `输出 ${formatTps(tps)} tok/s` : "—"}
+                    </div>
                   </div>
                   <div role="gridcell" className="num text-xs text-ink-muted">
                     <ElapsedCell r={r} />
@@ -612,6 +672,22 @@ function LiveTable({
         )}
       </div>
       </div>
+      </div>
+      </div>
+
+      {newRequests > 0 && (
+        <div className="pointer-events-none absolute inset-x-0 top-12 z-20 flex justify-center">
+          <Button
+            variant="secondary"
+            size="sm"
+            className="pointer-events-auto h-8 gap-1.5 shadow-overlay"
+            onClick={jumpToTop}
+          >
+            <ArrowUp className="h-3.5 w-3.5" aria-hidden />
+            有 {newRequests} 条新请求
+          </Button>
+        </div>
+      )}
 
       {rows.length > 0 && (
         <div className="border-t border-border bg-card/40 px-4 py-1.5 text-[11px] text-ink-muted">
@@ -627,19 +703,7 @@ function ErrorRow({ e }: { e: ErrorLog }) {
   const hasDetail = !!(e.err_detail || e.request_body || e.mask_matches?.length);
   return (
     <div className="px-4 py-2.5">
-      <div
-        className="flex items-center gap-2 text-xs cursor-pointer"
-        onClick={() => setOpen((o) => !o)}
-        role="button"
-        tabIndex={0}
-        aria-expanded={open}
-        onKeyDown={(ev) => {
-          if (ev.key === "Enter" || ev.key === " ") {
-            ev.preventDefault();
-            setOpen((o) => !o);
-          }
-        }}
-      >
+      <div className="flex items-center gap-2 text-xs">
         <Pill tone="danger">{e.err_class}</Pill>
         {e.model && <span className="mono text-ink-muted">{e.model}</span>}
         {e.channel_name && (
@@ -656,10 +720,7 @@ function ErrorRow({ e }: { e: ErrorLog }) {
           size="sm"
           className="h-6 px-2 text-[11px]"
           aria-expanded={open}
-          onClick={(ev) => {
-            ev.stopPropagation();
-            setOpen((o) => !o);
-          }}
+          onClick={() => setOpen((o) => !o)}
         >
           {open ? "收起" : "展开"}
         </Button>
@@ -728,6 +789,7 @@ function TraceSheet({
 }) {
   // 双列布局：左列切「请求体 / 分组路由 / 脱敏命中 / 详情」，右列时间线 + 响应始终可见。
   const [leftTab, setLeftTab] = useState<"body" | "route" | "mask" | "detail">("body");
+  const [stopArmed, setStopArmed] = useState(false);
   const [body, setBody] = useState<string>("");
   const [response, setResponse] = useState<string>("");
   const [bodyLoading, setBodyLoading] = useState(false);
@@ -745,7 +807,14 @@ function TraceSheet({
     setResponse("");
     setBodyLoading(false);
     setResponseLoading(false);
+    setStopArmed(false);
   }, [req?.id]);
+
+  useEffect(() => {
+    if (!stopArmed) return;
+    const timer = window.setTimeout(() => setStopArmed(false), 2200);
+    return () => window.clearTimeout(timer);
+  }, [stopArmed]);
 
   const stopMut = useMutation({
     // 后端成功返回字符串 data；请求已结束/不存在走 404，而非 {stopped:false}。
@@ -975,7 +1044,7 @@ function TraceSheet({
                             })
                           }
                           title="仅中止当前一轮次；不终止整个请求"
-                          className="flex items-center gap-1.5 rounded-control px-2 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
+                          className="flex min-h-9 items-center gap-1.5 rounded-control px-2 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50 sm:min-h-0"
                         >
                           {interruptMut.isPending ? (
                             <Loader2 className="size-3.5 animate-spin" />
@@ -988,15 +1057,26 @@ function TraceSheet({
                     <button
                       type="button"
                       disabled={stopMut.isPending}
-                      onClick={() => stopMut.mutate(req.id)}
-                      className="flex items-center gap-1.5 rounded-control px-2 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50"
+                      onClick={() => {
+                        if (!stopArmed) {
+                          setStopArmed(true);
+                          return;
+                        }
+                        setStopArmed(false);
+                        stopMut.mutate(req.id);
+                      }}
+                      aria-label={stopArmed ? "确认终止请求" : "终止请求"}
+                      className={cn(
+                        "flex min-h-9 items-center gap-1.5 rounded-control px-2 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50 sm:min-h-0",
+                        stopArmed && "bg-destructive/10",
+                      )}
                     >
                       {stopMut.isPending ? (
                         <Loader2 className="size-3.5 animate-spin" />
                       ) : (
                         <Square className="size-3.5 fill-destructive" />
                       )}
-                      终止请求
+                      {stopArmed ? "确认终止" : "终止请求"}
                     </button>
                   </div>
                 )}
@@ -1075,6 +1155,31 @@ function MaskTab({ req }: { req: RequestState }) {
 function formatTps(value: number) {
   if (!Number.isFinite(value)) return "—";
   return value >= 100 ? value.toFixed(0) : value.toFixed(1);
+}
+
+/** 终态输出速度：完成 token / 首字后耗时，与详情同口径。 */
+function outputTpsOf(r: RequestState) {
+  if (r.status === "running" || r.status === "committed") return null;
+  const fullMs =
+    r.duration_ms ?? (r.duration != null ? r.duration / 1_000_000 : null);
+  if (fullMs == null || fullMs <= 0 || r.usage.completion_tokens <= 0) {
+    return null;
+  }
+  const startedMs = new Date(r.started_at).getTime();
+  const firstAtMs = r.first_token_at
+    ? new Date(r.first_token_at).getTime()
+    : null;
+  if (
+    !Number.isFinite(startedMs) ||
+    firstAtMs == null ||
+    !Number.isFinite(firstAtMs) ||
+    firstAtMs < startedMs
+  ) {
+    return null;
+  }
+  const responseMs = Math.max(0, fullMs - (firstAtMs - startedMs));
+  if (responseMs <= 0) return null;
+  return r.usage.completion_tokens / (responseMs / 1000);
 }
 
 /**

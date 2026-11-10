@@ -411,3 +411,21 @@ describe("<SettingsPage /> SyncSection 自动同步间隔", () => {
     });
   });
 });
+
+describe("<SettingsPage /> 开关可访问名", () => {
+  it("对话留存与转换追踪开关有可读名称", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(jsonOk(null))));
+    render(<SettingsPage />, { wrapper: Wrapper });
+
+    await user.click(screen.getByRole("button", { name: "对话留存" }));
+    expect(
+      await screen.findByRole("switch", { name: "启用对话留存" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "转换追踪" }));
+    expect(
+      await screen.findByRole("switch", { name: "启用转换追踪" }),
+    ).toBeInTheDocument();
+  });
+});

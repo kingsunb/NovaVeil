@@ -1,9 +1,13 @@
 package client
 
 import (
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // TestBunRequestHeadOfficialClientWire 用 2026-11-09 官方 2.2.6 客户端实抓的完整头序
@@ -85,5 +89,106 @@ func TestBunRequestHeadDefaults(t *testing.T) {
 	}, "\r\n")
 	if string(head) != want {
 		t.Fatalf("默认头序不符:\n--- got ---\n%s\n--- want ---\n%s", head, want)
+	}
+}
+
+func newDroppedReuseServer(t *testing.T, calls *atomic.Int32) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 2 {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func newDroppedReuseClient(t *testing.T) *http.Client {
+	t.Helper()
+	transport, err := NewBunTransport(BunOptions{ConnectTimeout: time.Second, ResponseHeaderTimeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewBunTransport: %v", err)
+	}
+	return &http.Client{Transport: transport}
+}
+
+func warmBunConnection(t *testing.T, client *http.Client, url string) {
+	t.Helper()
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("预热连接: %v", err)
+	}
+	_ = resp.Body.Close()
+}
+
+func TestBunTransportReplaysNonIdempotentOnce(t *testing.T) {
+	var calls atomic.Int32
+	srv := newDroppedReuseServer(t, &calls)
+	client := newDroppedReuseClient(t)
+	warmBunConnection(t, client, srv.URL+"/v1/models")
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions", strings.NewReader(`{"model":"x"}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST 应重放一次后成功: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("POST 请求次数 = %d, 期望 3 (预热 + 断开 + 重放)", got)
+	}
+}
+
+func TestBunTransportReplaysIdempotentOnce(t *testing.T) {
+	var calls atomic.Int32
+	srv := newDroppedReuseServer(t, &calls)
+	client := newDroppedReuseClient(t)
+	warmBunConnection(t, client, srv.URL+"/v1/models")
+
+	resp, err := client.Get(srv.URL + "/v1/models")
+	if err != nil {
+		t.Fatalf("GET 应重放一次后成功: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("GET 请求次数 = %d, 期望 3 (首次 + 断开 + 重放)", got)
+	}
+}
+
+func TestBunClientCacheEvictsAtLimit(t *testing.T) {
+	bunClients.Range(func(key, _ any) bool {
+		bunClients.Delete(key)
+		return true
+	})
+	t.Cleanup(func() {
+		bunClients.Range(func(key, _ any) bool {
+			bunClients.Delete(key)
+			return true
+		})
+	})
+
+	for i := 0; i < maxCustomProxyClients; i++ {
+		bunClients.Store(fmt.Sprintf("proxy-%d", i), &http.Client{})
+	}
+	got := cacheBunClient("fresh", &http.Client{})
+	if got == nil {
+		t.Fatal("fresh client was not cached")
+	}
+	if size := bunClientsApproxSize(); size != 1 {
+		t.Fatalf("缓存条目 = %d, 期望软上限后清空并只保留新条目", size)
 	}
 }

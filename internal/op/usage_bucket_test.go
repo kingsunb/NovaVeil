@@ -3,6 +3,7 @@ package op
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -353,5 +354,75 @@ func TestUsageReadsReturnErrorOnQueryFailure(t *testing.T) {
 	// 即便查询失败, 仍应返回按档位填好的零值时间轴(保留 X 轴连续)。
 	if len(points) != 24 {
 		t.Fatalf("UsageTrendPoints 查询失败时仍应返回 24 个零值点, 实际 %d", len(points))
+	}
+}
+
+func stopUsageWriterForTest(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := StopUsageBucketWriter(ctx); err != nil {
+		t.Fatalf("StopUsageBucketWriter: %v", err)
+	}
+}
+
+func TestUsageBucketWriterFlushesQueueOnStop(t *testing.T) {
+	clearUsageBuckets(t)
+	StartUsageBucketWriter()
+	t.Cleanup(func() { stopUsageWriterForTest(t) })
+
+	RecordUsageBucket("queue-model", 10, 4, 2, 1, 0.5, 300)
+	RecordUsageBucket("queue-model", 5, 6, 1, 0, 0.25, 200)
+	RecordErrorBucket("queue-model")
+	stopUsageWriterForTest(t)
+
+	var row model.UsageBucket
+	if err := db.GetDB().Where("model_name = ?", "queue-model").First(&row).Error; err != nil {
+		t.Fatalf("queued usage should be flushed: %v", err)
+	}
+	if row.InputTokens != 15 || row.OutputTokens != 10 || row.ReasoningTokens != 3 ||
+		row.CachedTokens != 1 || row.RequestCount != 2 || row.ErrorCount != 1 {
+		t.Fatalf("flushed bucket mismatch: %+v", row)
+	}
+}
+
+func TestUsageBucketWriterFlushesAtBatchSize(t *testing.T) {
+	clearUsageBuckets(t)
+	StartUsageBucketWriter()
+	t.Cleanup(func() { stopUsageWriterForTest(t) })
+
+	for i := 0; i < usageBucketBatchSize; i++ {
+		RecordUsageBucket(fmt.Sprintf("batch-model-%03d", i), 1, 1, 0, 0, 0, 10)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var count int64
+		if err := db.GetDB().Model(&model.UsageBucket{}).Count(&count).Error; err != nil {
+			t.Fatalf("count usage buckets: %v", err)
+		}
+		if count == usageBucketBatchSize {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected %d rows, got %d", usageBucketBatchSize, count)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestUsageBucketWriterQueueOverflowCountsDrops(t *testing.T) {
+	usageDropped.Store(0)
+	t.Cleanup(func() { usageDropped.Store(0) })
+
+	writer := &usageBucketWriter{queue: make(chan model.UsageBucket, 1)}
+	bucket := model.UsageBucket{ModelName: "overflow"}
+	if !writer.enqueue(bucket) {
+		t.Fatal("first enqueue should be accepted")
+	}
+	if !writer.enqueue(bucket) {
+		t.Fatal("full queue should drop without blocking")
+	}
+	if got := UsageBucketDroppedCount(); got != 1 {
+		t.Fatalf("dropped count = %d, want 1", got)
 	}
 }

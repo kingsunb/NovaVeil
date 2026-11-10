@@ -23,7 +23,7 @@ React 19 + Vite 8 + TypeScript 6 的管理台，React Query 5 管服务端状态
 
 ### 测试体系
 
-- Vitest 5 + happy-dom：用例覆盖全部页面与 lib / ui / charts；覆盖率门禁覆盖 lib / ui / charts；Playwright E2E：侧栏导航 10 场景冒烟 + axe 无障碍扫描；size-limit 体积预算门禁。
+- Vitest 5 + happy-dom：13 个页面测试文件（含 Chat）与 lib / ui / charts 用例；覆盖率门禁覆盖 lib / ui / charts；Playwright E2E：10 个冒烟场景 + 7 个关键页明暗双主题 axe 扫描；size-limit 体积预算门禁。
 
 ### 渠道测试反馈
 
@@ -39,10 +39,10 @@ React 19 + Vite 8 + TypeScript 6 的管理台，React Query 5 管服务端状态
 
 ## 已知边界
 
-- Chat（手写 SSE 解析）、Mask（脱敏配置）仍缺页面单测，Chat 也无 e2e——Chat SSE 解析器单测列为 ROADMAP 未来项。channel-editor 有针对测试结果与异步隔离的回归测试，不代表完整页面覆盖。
+- Chat（手写 SSE 解析）已有页面滚动跟随单测，但仍无 e2e——Chat SSE 解析器单测列为 ROADMAP 未来项。channel-editor 有针对测试结果与异步隔离的回归测试，不代表完整页面覆盖。
 - 无完整 i18n 体系，多数文案硬编码中文；渠道测试的新提示使用 locale 常量。其余文案与 AGENTS.md「UI 文案走 locale」的约定仍有差距。
 - SSE「连上即断」场景 onopen 会重置退避为固定 1s 重连。
-- 巨型组件：channel-editor 2409 行、Settings 2108、Groups 1984、Logs 1680，回归保护靠手写用例密度。
+- 巨型组件：channel-editor 约 2300 行、Settings 约 2000、Groups 约 1900、Logs 约 1700，回归保护靠手写用例密度。
 
 ## 深入阅读
 

@@ -12,8 +12,8 @@ OpenCode 免费档的额度按出口身份在 UTC 日窗口内结算，429 表�
 
 1. **模型字段**：`model.Channel` 增加 `AutoDisabledUntil *time.Time`（列 `auto_disabled_until`，无默认值）。非空表示该渠道由 429 自动停用，值即恢复时刻；`Enabled` 同时为 false。字段随渠道接口返回，前端可据此展示原因，不必改接口契约。
 2. **触发条件**：只在转发主循环的真实失败分支判定，要求 `outcome == AttemptFailed`、渠道满足 `isOpencodeFreeLane`（`OpencodeCompat && OpenCodeTier=="zen"`）、`Proxy == false`，且错误状态码为 429。keyed 免费渠道默认不带代理，同样适用；走 `{account}` 代理账号池的渠道不适用，它们仍按账号退避处理。判定放在多 Key 轮换之前：命中即整渠道停用，不冷却单把 Key，避免换 Key 继续打同一出口。
-3. **停用动作**：`op.ChannelAutoDisable` 用一次 UPDATE 写入 `enabled=false` 与下一个 UTC 零点的 `auto_disabled_until`，随后更新渠道缓存。转发侧把当前成员放入 `exclude` 后继续故障转移，不等同成员重试；Key 冷却与限流状态不做额外清理，与人工停用口径一致。
-4. **自动恢复**：任务 `channel_auto_enable` 每分钟执行一次并在启动时先跑一遍，`op.ChannelAutoEnableExpired` 查出 `enabled=false` 且截止时刻已到的渠道，逐条置回 `enabled=true`、清空标记并同步缓存。停机期间到期的渠道由启动那一轮补上。
+3. **停用动作**：`op.ChannelAutoDisable` 用一次事务写入 `enabled=false` 与下一个 UTC 零点的 `auto_disabled_until`，提交后在渠道写锁内从库读回并发布渠道缓存。转发侧把当前成员放入 `exclude` 后继续故障转移，不等同成员重试；Key 冷却与限流状态不做额外清理，与人工停用口径一致。
+4. **自动恢复**：任务 `channel_auto_enable` 每分钟执行一次并在启动时先跑一遍，`op.ChannelAutoEnableExpired` 查出 `enabled=false` 且截止时刻已到的渠道，逐条置回 `enabled=true`、清空标记，并在同一把渠道写锁内从库读回后发布缓存。停机期间到期的渠道由启动那一轮补上。
 5. **人工接管**：`ChannelEnabled` 无论启用还是停用都清空标记；`ChannelUpdate` 只在提交的 `enabled` 与原值不同时清空，避免全量编辑器原样保存就把自动停用状态带走。清空后渠道完全由人工状态决定，不再被定时任务触碰。
 6. **不改既有 WARP 停用**：`warp_block.go` 的内存停用继续服务 WARP 代理渠道，两条规则按渠道类型互斥；本轮不合并，避免改变已在生产验证的 WARP 语义。
 

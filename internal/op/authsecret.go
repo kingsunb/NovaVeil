@@ -3,6 +3,7 @@ package op
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -26,10 +27,14 @@ func AuthJWTSecretGet() (string, error) {
 
 	// 走内部 helper, 跳过 SettingGetString 对外的 JWT 密钥读取守卫, 防止
 	// 自身签名路径被自己拦截。
-	if secret, err := settingGetInternal(model.SettingKeyAuthJWTSecret); err == nil && secret != "" {
+	secret, err := settingGetInternal(model.SettingKeyAuthJWTSecret)
+	if err == nil && secret != "" {
 		return secret, nil
 	}
-	secret, err := randomHexSecret(jwtSecretBytes)
+	if err != nil && !errors.Is(err, errSettingNotFound) {
+		return "", fmt.Errorf("读取 JWT 密钥失败: %w", err)
+	}
+	secret, err = randomHexSecret(jwtSecretBytes)
 	if err != nil {
 		return "", fmt.Errorf("生成 JWT 密钥失败: %w", err)
 	}

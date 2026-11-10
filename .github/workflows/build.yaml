@@ -89,11 +89,7 @@ jobs:
         run: bash scripts/build.sh --targets linux/amd64,linux/386,linux/arm64,linux/arm
 
       - name: Test Go packages
-        # relay 集成测试在 CI 偶发 flaky（httptest 进程内服务器 + SQLite，
-        # 非外部网络依赖，疑似 CI 资源约束下的并发竞争）。加一次重试兜底。
-        run: |
-          go test -count=1 -timeout=10m ./... || \
-          (echo "::warning::Go tests failed on first attempt, retrying..." && go test -count=1 -timeout=10m ./...)
+        run: go test -count=1 -timeout=10m ./...
 
       - name: Verify release archive checksums
         run: |

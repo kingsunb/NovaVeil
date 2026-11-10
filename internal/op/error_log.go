@@ -381,11 +381,12 @@ var (
 	fieldSecretPattern = regexp.MustCompile(`(?i)\b(authorization|proxy[-_ ]?authorization|x[-_ ]?api[-_ ]?key|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|auth[-_ ]?token|token|password|passwd|client[-_ ]?secret|secret)\b(\s*"?[:=]\s*)(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s,;&}\]]+)`)
 )
 
-// sanitizeErrorLog 是所有错误日志写入与读取的统一安全边界。
+// sanitizeErrorLog 统一处理错误日志的截断、Key 尾缀与请求体脱敏；
+// 错误文本保留原文，供后台排查，仅下游响应使用 RedactSensitiveText。
 func sanitizeErrorLog(entry model.ErrorLog) model.ErrorLog {
 	entry.APIKeySuffix = apiKeyTail(entry.APIKeySuffix)
-	entry.ErrBrief = truncateErrorBrief(redactSensitiveText(entry.ErrBrief))
-	entry.ErrDetail = truncateErrorDetail(redactSensitiveText(entry.ErrDetail))
+	entry.ErrBrief = truncateErrorBrief(entry.ErrBrief)
+	entry.ErrDetail = truncateErrorDetail(entry.ErrDetail)
 	entry.RequestBody = truncateRequestBodyJSON(redactRequestBody(entry.RequestBody), model.MaxRequestBodyLogBytes)
 	entry.MaskMatches = normalizeMaskMatches(entry.MaskMatches)
 	return entry
@@ -548,6 +549,11 @@ func isSensitiveField(key string) bool {
 		strings.HasSuffix(normalized, "apikey") || strings.HasSuffix(normalized, "token") ||
 		strings.HasSuffix(normalized, "password") || strings.HasSuffix(normalized, "passwd") ||
 		strings.HasSuffix(normalized, "secret")
+}
+
+// RedactSensitiveText 复用错误日志的脱敏规则。
+func RedactSensitiveText(text string) string {
+	return redactSensitiveText(text)
 }
 
 func redactSensitiveText(text string) string {

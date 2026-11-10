@@ -2,6 +2,7 @@ package op
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -9,7 +10,11 @@ import (
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/seal"
 	"github.com/kingsunb/NovaVeil/internal/utils/cache"
+	"gorm.io/gorm"
 )
+
+// errSettingNotFound 表示设置项确实不存在，区别于数据库读取失败。
+var errSettingNotFound = errors.New("setting not found")
 
 // settingAtRest 报告该设置项的值是否以 nv1: 密文落库。
 // 缓存与对外读取仍是明文; 无前缀的存量行按明文兼容读取。
@@ -79,7 +84,7 @@ func SettingGetString(key model.SettingKey) (string, error) {
 		settingCache.Set(key, value)
 		return value, nil
 	}
-	return "", fmt.Errorf("setting not found")
+	return "", errSettingNotFound
 }
 
 // settingGetInternal 提供给进程内部使用 (例如 JWT 签名密钥读取), 不走
@@ -94,7 +99,7 @@ func settingGetInternal(key model.SettingKey) (string, error) {
 		settingCache.Set(key, value)
 		return value, nil
 	}
-	return "", fmt.Errorf("setting not found")
+	return "", errSettingNotFound
 }
 
 // loadSettingFromDB 走一次裸 SELECT, 命中返回 value; cache miss 兜底路径专用,
@@ -102,8 +107,8 @@ func settingGetInternal(key model.SettingKey) (string, error) {
 func loadSettingFromDB(key model.SettingKey) (string, error) {
 	row := model.Setting{}
 	if err := db.GetDB().Where("key = ?", key).First(&row).Error; err != nil {
-		if err.Error() == "record not found" {
-			return "", fmt.Errorf("setting not found")
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", errSettingNotFound
 		}
 		return "", fmt.Errorf("failed to read setting %q: %w", key, err)
 	}

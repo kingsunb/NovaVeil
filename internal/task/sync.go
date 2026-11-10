@@ -64,7 +64,11 @@ func SyncModelsTask() error {
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, 3*time.Minute)
 		fetchModels, err := fetchChannelModels(fetchCtx, channel)
 		if err != nil {
-			log.Warnf("failed to sync models for channel %s: %v", channel.Name, err)
+			if errors.Is(err, helper.ErrModelListTruncated) {
+				log.Warnf("model list truncated for channel %s, keeping existing models: %v", channel.Name, err)
+			} else {
+				log.Warnf("failed to sync models for channel %s: %v", channel.Name, err)
+			}
 			if syncErr == nil {
 				syncErr = fmt.Errorf("获取渠道 %s 的模型列表失败: %w", channel.Name, err)
 			}

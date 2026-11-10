@@ -598,7 +598,47 @@ func validHeaderField(name, value string) bool {
 // bunClients 缓存按代理地址复用连接池的 Bun 传输 http.Client, 与 customProxyClients 同口径。
 // key 为代理 URL 字符串; "direct" 表示无代理直连。Bun 传输的连接池按 host 复用, 故按代理
 // 地址缓存而非每请求新建, 避免握手开销与连接池碎片化。
-var bunClients sync.Map // string → *http.Client
+var (
+	bunClients   sync.Map // string → *http.Client
+	bunClientsMu sync.Mutex
+)
+
+// 复用客户端并限制缓存规模。
+func cacheBunClient(key string, c *http.Client) *http.Client {
+	bunClientsMu.Lock()
+	defer bunClientsMu.Unlock()
+	if bunClientsApproxSize() >= maxCustomProxyClients {
+		bunClients.Range(func(k, value any) bool {
+			if client, ok := value.(*http.Client); ok {
+				closeBunClientIdle(client)
+			}
+			bunClients.Delete(k)
+			return true
+		})
+	}
+	actual, loaded := bunClients.LoadOrStore(key, c)
+	if loaded {
+		closeBunClientIdle(c)
+	}
+	return actual.(*http.Client)
+}
+
+// sidecar 共用连接池，跳过。
+func closeBunClientIdle(c *http.Client) {
+	if _, ok := c.Transport.(*bunSidecarTransport); ok {
+		return
+	}
+	c.CloseIdleConnections()
+}
+
+func bunClientsApproxSize() int {
+	size := 0
+	bunClients.Range(func(_, _ any) bool {
+		size++
+		return true
+	})
+	return size
+}
 
 // GetBunClient 返回 OpenCode 免费档的 HTTP 客户端: 配置了 Bun 时由常驻 sidecar 用真
 // BoringSSL 发送并保持流式响应, 未配置时回退 uTLS ClientHello 伪装。proxyURL 为 nil 时直连。
@@ -615,8 +655,7 @@ func GetBunClient(proxyURL *url.URL) (*http.Client, error) {
 		return nil, err
 	} else if sidecar != nil {
 		c := &http.Client{Transport: sidecar, CheckRedirect: upstreamCheckRedirect}
-		actual, _ := bunClients.LoadOrStore(key, c)
-		return actual.(*http.Client), nil
+		return cacheBunClient(key, c), nil
 	}
 	transport, err := NewBunTransport(BunOptions{
 		Proxy:                 proxyURL,
@@ -629,6 +668,5 @@ func GetBunClient(proxyURL *url.URL) (*http.Client, error) {
 		return nil, err
 	}
 	c := &http.Client{Transport: transport, CheckRedirect: upstreamCheckRedirect}
-	actual, _ := bunClients.LoadOrStore(key, c)
-	return actual.(*http.Client), nil
+	return cacheBunClient(key, c), nil
 }

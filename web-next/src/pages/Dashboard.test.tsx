@@ -3,6 +3,16 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import DashboardPage from "./Dashboard";
+import {
+  TOKEN_IN_COLOR,
+  TOKEN_OUT_COLOR,
+} from "@/components/charts/token-colors";
+
+// 十六进制色转 jsdom 的 rgb 串。
+function toRgb(hex: string) {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return `rgb(${(value >> 16) & 0xff}, ${(value >> 8) & 0xff}, ${value & 0xff})`;
+}
 
 // 把 useQuery 用的 queryClient 单独创建，避免测试间缓存污染
 function makeWrapper() {
@@ -98,6 +108,20 @@ describe("<DashboardPage /> KPI tone", () => {
     });
     expect(screen.queryByText("预计消耗")).toBeNull();
     expect(screen.queryByText("使用时长")).toBeNull();
+  });
+
+  it("KPI 档位提示只出现一次，不重复进卡片", async () => {
+    const Wrapper = makeWrapper();
+    render(<DashboardPage />, { wrapper: Wrapper });
+    await waitFor(() => {
+      expect(screen.getByText(/统计窗口/)).toHaveTextContent("近 24 小时");
+    });
+    expect(screen.getAllByText(/统计窗口/)).toHaveLength(1);
+    const cards = Array.from(document.querySelectorAll(".kpi-card"));
+    expect(cards).toHaveLength(6);
+    expect(
+      cards.filter((card) => card.textContent?.includes("近 24 小时")),
+    ).toHaveLength(0);
   });
 
   it("统计不可用时 KPI、Token 构成和模型 Top 不显示零或空数据", async () => {
@@ -270,6 +294,33 @@ describe("<DashboardPage /> Token 趋势", () => {
     expect(screen.queryByText("预览曲线")).toBeNull();
     expect(screen.queryByText(/暂无历史分桶数据/)).toBeNull();
     expect(screen.queryByText(/仅作界面预览/)).toBeNull();
+  });
+
+  it("趋势图例与折线共用入/出配色", async () => {
+    const Wrapper = makeWrapper();
+    render(<DashboardPage />, { wrapper: Wrapper });
+    await waitFor(() => {
+      expect(
+        document.querySelectorAll(
+          'svg[aria-label="Token 用量趋势图"] path[stroke]',
+        ),
+      ).toHaveLength(2);
+    });
+    const strokes = Array.from(
+      document.querySelectorAll(
+        'svg[aria-label="Token 用量趋势图"] path[stroke]',
+      ),
+    ).map((path) => path.getAttribute("stroke"));
+    expect(strokes).toEqual([TOKEN_IN_COLOR, TOKEN_OUT_COLOR]);
+
+    const inDot = screen
+      .getByText("输入 tokens")
+      .querySelector("span") as HTMLElement;
+    const outDot = screen
+      .getByText("输出 tokens")
+      .querySelector("span") as HTMLElement;
+    expect(inDot.style.backgroundColor).toBe(toRgb(TOKEN_IN_COLOR));
+    expect(outDot.style.backgroundColor).toBe(toRgb(TOKEN_OUT_COLOR));
   });
 
   it("趋势接口返回空点位时显示暂无用量数据占位", async () => {
