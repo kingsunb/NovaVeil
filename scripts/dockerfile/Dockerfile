@@ -12,10 +12,12 @@ ARG APP_UID=10001
 ARG APP_GID=10001
 ARG TARGETPLATFORM
 
+# 容器内监听所有接口, 否则端口映射不可达。
 ENV TZ=Asia/Shanghai \
     APP_NAME=novaveil \
     NO_COLOR=1 \
-    NOVEIL_BUN_BIN=/usr/local/bin/bun
+    NOVEIL_BUN_BIN=/usr/local/bin/bun \
+    NOVAVEIL_SERVER_HOST=0.0.0.0
 
 # 仅安装运行时必须的工具:
 #   - ca-certificates: 访问 HTTPS 上游。

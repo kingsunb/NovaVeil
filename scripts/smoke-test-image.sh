@@ -20,6 +20,7 @@ trap cleanup EXIT INT TERM
 cleanup
 
 docker volume create "${VOLUME}" >/dev/null
+echo "smoke: starting ${IMAGE} (${PLATFORM:-native})"
 set -- docker run -d
 if [ -n "${PLATFORM}" ]; then
     set -- "$@" --platform "${PLATFORM}"
@@ -40,6 +41,7 @@ binding="$(docker port "${NAME}" 8080/tcp | head -n1)"
 port="${binding##*:}"
 [ -n "${port}" ] || { echo "failed to resolve mapped port" >&2; exit 1; }
 
+echo "smoke: waiting for HTTP readiness"
 ready=0
 i=0
 while [ "${i}" -lt 60 ]; do
@@ -49,7 +51,12 @@ while [ "${i}" -lt 60 ]; do
         echo "container stopped during smoke test: ${state}" >&2
         exit 1
     }
-    if wget -q -T 3 -O /dev/null "http://127.0.0.1:${port}/healthz"; then
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fs --max-time 3 -o /dev/null "http://127.0.0.1:${port}/healthz"; then
+            ready=1
+            break
+        fi
+    elif wget -q -T 3 -O /dev/null "http://127.0.0.1:${port}/healthz"; then
         ready=1
         break
     fi
@@ -57,11 +64,13 @@ while [ "${i}" -lt 60 ]; do
     sleep 1
 done
 [ "${ready}" -eq 1 ] || { docker logs "${NAME}" >&2 || true; echo "HTTP readiness timed out" >&2; exit 1; }
+echo "smoke: HTTP ready"
 
 [ "$(docker inspect "${NAME}" --format '{{.Config.User}}')" = "10001:10001" ]
 [ "$(docker inspect "${NAME}" --format '{{.HostConfig.ReadonlyRootfs}}')" = "true" ]
 [ "$(docker inspect "${NAME}" --format '{{json .HostConfig.CapDrop}}')" = '["ALL"]' ]
 [ "$(docker inspect "${NAME}" --format '{{json .HostConfig.SecurityOpt}}')" = '["no-new-privileges:true"]' ]
+echo "smoke: checking container hardening"
 docker exec "${NAME}" sh -eu -c '
     test -x /entrypoint.sh
     test -x /app/novaveil
@@ -72,6 +81,7 @@ docker exec "${NAME}" sh -eu -c '
 '
 
 # Wait for Docker's own image healthcheck, not only the external HTTP request.
+echo "smoke: waiting for image healthcheck"
 i=0
 while [ "${i}" -lt 45 ]; do
     health="$(docker inspect "${NAME}" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}')"
@@ -81,6 +91,7 @@ while [ "${i}" -lt 45 ]; do
     sleep 1
 done
 [ "${health}" = "healthy" ] || { echo "image healthcheck did not become healthy: ${health}" >&2; exit 1; }
+echo "smoke: image healthcheck healthy"
 
 # ---------------------------------------------------------------------------
 # Smoke: real login, database read/write, and mock forwarding.
@@ -93,10 +104,12 @@ if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
     rm -f "${cookie_jar}"
 
     # Read the one-time initial admin password written by UserInit.
+    echo "smoke: reading initial admin password"
     admin_pw="$(docker exec "${NAME}" sh -c 'sed -n "s/^password: //p" /app/data/initial-admin-password 2>/dev/null')"
     [ -n "${admin_pw}" ] || { echo "smoke: failed to read initial admin password" >&2; exit 1; }
 
     # --- Real login: POST /api/v1/user/login with real credentials ---
+    echo "smoke: logging in"
     login_body="$(curl -s --max-time 10 -c "${cookie_jar}" -X POST "http://127.0.0.1:${port}/api/v1/user/login" \
         -H 'Content-Type: application/json' \
         -d "{\"username\":\"admin\",\"password\":\"${admin_pw}\"}")"

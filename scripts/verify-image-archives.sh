@@ -57,6 +57,7 @@ while IFS=$'\t' read -r slug platform archive local_ref; do
         exit 1
     }
 
+    echo "verify: scanning ${slug} (${platform})"
     trivy image \
         --input "$archive_path" \
         --scanners vuln \
@@ -73,6 +74,7 @@ while IFS=$'\t' read -r slug platform archive local_ref; do
         --output "$IMAGE_DIR/sbom-${slug}.cdx.json" \
         --no-progress
 
+    echo "verify: loading ${slug}"
     docker image rm "$local_ref" >/dev/null 2>&1 || true
     docker load --input "$archive_path" >/dev/null
 
@@ -94,7 +96,12 @@ while IFS=$'\t' read -r slug platform archive local_ref; do
     printf '%s\t%s\t%s\t%s\t%s\n' "$slug" "$platform" "$archive" "$local_ref" "$image_id" >>"$IMAGE_DIR/IMAGE_IDS.tsv"
 
     if [ -n "${native_platform}" ] && [ "${platform}" = "${native_platform}" ]; then
-        scripts/smoke-test-image.sh "$local_ref" "novaveil-${slug}-smoke" "$platform"
+        echo "verify: smoke testing ${slug}"
+        if command -v timeout >/dev/null 2>&1; then
+            timeout 600 scripts/smoke-test-image.sh "$local_ref" "novaveil-${slug}-smoke" "$platform"
+        else
+            scripts/smoke-test-image.sh "$local_ref" "novaveil-${slug}-smoke" "$platform"
+        fi
     else
         echo "Skipping smoke test for ${platform} (non-native; QEMU emulation too slow for container runtime)"
     fi
