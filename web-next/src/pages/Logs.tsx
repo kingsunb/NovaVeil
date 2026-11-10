@@ -541,6 +541,7 @@ function LiveTable({
         ref={parentRef}
         className="relative overflow-auto"
         style={{ height: "min(480px, 60vh)" }}
+        tabIndex={0}
         onScroll={handleScroll}
       >
       <div className="min-w-[1150px]">

@@ -13,7 +13,7 @@ Status: implemented
 
 ## 决定
 
-- `docker-publish` 改为 `build-verify-publish`：test-gate 增加前端单测；先构建 4 平台镜像归档，再由 `verify-image-archives.sh` 执行 Trivy HIGH/CRITICAL、CycloneDX SBOM、按架构校验与 native smoke；全部通过后用 `PUBLISH.sha256` 校验归档，`docker load` 已验证的 amd64/arm64 字节，打 per-arch `:sha-<short>-<arch>` 标签，再组 `:sha-<short>` 与 `:latest` 多架构 manifest 推送。发布阶段不再 buildx 重建。
+- `docker-publish` 改为 `build-verify-publish`：test-gate 增加前端单测；先构建 4 平台镜像归档（386/armv7 使用无 Bun 的 runtime target，因为官方 `oven/bun` 只提供 amd64/arm64），再由 `verify-image-archives.sh` 执行 Trivy HIGH/CRITICAL、CycloneDX SBOM、按架构校验与 native smoke；全部通过后用 `PUBLISH.sha256` 校验归档，`docker load` 已验证的 amd64/arm64 字节，打 per-arch `:sha-<short>-<arch>` 标签，再组 `:sha-<short>` 与 `:latest` 多架构 manifest 推送。发布阶段不再 buildx 重建。
 - 删除 `test.yaml` 与 `build.yaml` 的 `go test` 重试；失败即红。
 - 新增 `scripts/agent-notes/verify-pr-note.ts`：对 PR base..head 的 diff 检查非平凡路径（`internal/`、`cmd/`、`web-next/`、`scripts/`、`.github/`、`docs/modules/`、`docs/脱敏开发/`、部署/备份/路由契约文档、根构建文件）是否新增或更新 `.agents/notes/` 活跃笔记；`skip-agent-note` 与 `dependencies` 标签豁免，纯 lockfile 变更内置豁免。`verify-notes` workflow 在 PR 事件调用，并随 opened/synchronize/reopened/labeled/unlabeled 重跑。
 - `security-scan` 增加 push `main` 与 PR 的依赖清单 paths 触发；根 `package.json` 的 `tsx` 固定 `4.23.15`。
@@ -31,7 +31,7 @@ Status: implemented
 ## 后果
 
 - 收益：main 发布只推送已验证归档，per-arch 标签、`PUBLISH.sha256` 与 SBOM artifact 可追溯；flaky 不再被重试掩盖；无 Note 的非平凡 PR 在 `verify-notes` 处失败并输出可操作清单。
-- 代价与已知上限：main 发布预计升至 80 分钟量级（与手动 build 的全矩阵审计同量级）；多架构 manifest 由 `docker manifest` 手工组装，未生成 buildx provenance，生产仍需 pin digest；`skip-agent-note` 标签可被滥用（保留 GitHub 审计日志）；Note 门禁是启发式路径匹配，新增顶层目录需同步维护规则；`security-scan` 的 PR 触发只覆盖依赖清单，不覆盖全部代码变更。
+- 代价与已知上限：main 发布预计升至 80 分钟量级（与手动 build 的全矩阵审计同量级）；多架构 manifest 由 `docker manifest` 手工组装，未生成 buildx provenance，生产仍需 pin digest；386/armv7 镜像不含 Bun sidecar，免费档不可用，且它们不进入发布 manifest；`skip-agent-note` 标签可被滥用（保留 GitHub 审计日志）；Note 门禁是启发式路径匹配，新增顶层目录需同步维护规则；`security-scan` 的 PR 触发只覆盖依赖清单，不覆盖全部代码变更。
 
 ## 验证
 

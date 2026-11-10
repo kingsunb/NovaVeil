@@ -94,7 +94,7 @@ test.describe("E2E 冒烟", () => {
   test("首页直达 dashboard", async ({ page }) => {
     await page.goto("/");
     await page.waitForSelector('[data-testid="sidebar"]', { timeout: 10_000 });
-    await expect(page.getByRole("heading", { level: 2 })).toContainText("总览");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("总览");
     await expect(page.getByText("总请求").first()).toBeVisible();
     await expect(page.getByText("客户端 IP").first()).toBeVisible();
     await expect(page.getByText("错误数").first()).toBeVisible();
@@ -103,26 +103,26 @@ test.describe("E2E 冒烟", () => {
 
   test("渠道页：空态 + 新建按钮可见", async ({ page }) => {
     await navTo(page, "渠道");
-    await expect(page.getByRole("heading", { level: 2 })).toContainText("渠道");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("渠道");
     await expect(page.getByRole("button", { name: /新建渠道/ })).toBeVisible();
     await expect(page.getByText(/还没有渠道/)).toBeVisible();
   });
 
   test("分组页：空态", async ({ page }) => {
     await navTo(page, "分组");
-    await expect(page.getByRole("heading", { level: 2 })).toContainText("分组");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("分组");
     await expect(page.getByText(/还没有分组/)).toBeVisible();
   });
 
   test("密钥页：空态", async ({ page }) => {
     await navTo(page, "API 密钥");
-    await expect(page.getByRole("heading", { level: 2 })).toContainText(/API 密钥/);
+    await expect(page.getByRole("heading", { level: 1 })).toContainText(/API 密钥/);
     await expect(page.getByText(/还没有密钥/)).toBeVisible();
   });
 
   test("日志页：Tab 切换", async ({ page }) => {
     await navTo(page, "日志");
-    await expect(page.getByRole("heading", { level: 2 })).toContainText("日志");
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("日志");
     await expect(page.getByText(/实时请求/).first()).toBeVisible();
     await page.getByRole("button", { name: "错误日志" }).click();
     await expect(page.getByText(/类别/).first()).toBeVisible();

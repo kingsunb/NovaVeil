@@ -1,10 +1,11 @@
 # Bun 1.4.4 与官方 OpenCode CLI 同版本, 供免费档 sidecar 使用真 BoringSSL 发送。
 # 从官方 Alpine 镜像复制二进制, 保留下方已固定的 Alpine 3.21.7 运行时。
-FROM oven/bun:1.4.4-alpine@sha256:4cf82f5686b196504fe119db3fcd9185b191f82ece82c40680e597228ec6070a AS bun
+ARG BUN_IMAGE=oven/bun:1.4.4-alpine@sha256:4cf82f5686b196504fe119db3fcd9185b191f82ece82c40680e597228ec6070a
+FROM ${BUN_IMAGE} AS bun
 
 # Pin the complete Alpine 3.21.7 multi-platform index so each TARGETPLATFORM selects
 # its verified child manifest without allowing a mutable tag to replace the base.
-FROM alpine:3.21.7@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
+FROM alpine:3.21.7@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d AS runtime
 
 # 固定的容器运行身份。宿主 bind mount 必须预先归属这组数字 UID/GID。
 ARG APP_UID=10001
@@ -32,7 +33,6 @@ RUN apk add --no-cache ca-certificates tzdata libstdc++ libgcc \
 # 只 COPY 运行必需产物。应用、Bun 与许可证保持 root 所有、只读; 仅 /app/data
 # 归属应用用户, 防止运行时修改二进制或供应链报告。权限在 COPY 时设置, 避免
 # 后续 chmod 触发大文件在 overlay 层复制。
-COPY --from=bun --chmod=0555 /usr/local/bin/bun /usr/local/bin/bun
 COPY --chmod=0555 build/docker/${TARGETPLATFORM}/${APP_NAME} /app/${APP_NAME}
 COPY --chmod=0444 LICENSE /app/LICENSE
 COPY --chmod=0444 build/THIRD_PARTY_LICENSES.csv /app/THIRD_PARTY_LICENSES.csv
@@ -49,3 +49,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["start"]
+
+# 官方 Bun 无 386/armv7 镜像, 这两个架构的归档不提供免费档 sidecar。
+FROM runtime AS without-bun
+
+FROM runtime AS with-bun
+COPY --from=bun --chmod=0555 /usr/local/bin/bun /usr/local/bin/bun

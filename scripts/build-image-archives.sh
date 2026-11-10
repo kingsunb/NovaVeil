@@ -42,9 +42,24 @@ for spec in "${specs[@]}"; do
         exit 1
     }
     local_ref="novaveil-candidate:${slug}"
+    target="with-bun"
+    bun_image="oven/bun:1.4.4-alpine@sha256:4cf82f5686b196504fe119db3fcd9185b191f82ece82c40680e597228ec6070a"
+    case "$platform" in
+        linux/amd64|linux/arm64) ;;
+        linux/386|linux/arm/v7)
+            target="without-bun"
+            bun_image="alpine:3.21.7@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
+            ;;
+        *)
+            echo "unsupported platform: ${platform}" >&2
+            exit 1
+            ;;
+    esac
     docker buildx build \
         --platform "$platform" \
         --file scripts/dockerfile/Dockerfile \
+        --target "$target" \
+        --build-arg "BUN_IMAGE=${bun_image}" \
         --tag "$local_ref" \
         --label org.opencontainers.image.title=NovaVeil \
         --label org.opencontainers.image.source=https://github.com/kingsunb/NovaVeil \

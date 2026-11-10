@@ -40,7 +40,7 @@ Go 1.27.3 / Node 22.19 / pnpm 11.21 在 CI 硬编码；本地开发用 `GOTOOLCH
 
 ## 设计想法
 
-- **发布阶段绝不重新 build，只 docker load 已验证归档**：先构建 4 平台镜像归档，漏洞扫描 / SBOM / smoke 全部通过后，才把已验证的 amd64/arm64 字节组成多架构 manifest 推送——供应链可审计；`PUBLISH.sha256` 同时用于发布前完整性自校验。
+- **发布阶段绝不重新 build，只 docker load 已验证归档**：先构建 4 平台镜像归档（amd64/arm64 含 Bun sidecar；386/armv7 因官方 Bun 无对应架构，构建无 sidecar 的镜像），漏洞扫描 / SBOM / smoke 全部通过后，才把已验证的 amd64/arm64 字节组成多架构 manifest 推送——供应链可审计；`PUBLISH.sha256` 同时用于发布前完整性自校验。
 - **测试要跑就得先构建前端**：`//go:embed all:out` 在编译期抓产物，CI 的 test workflow 专门先跑 `pnpm build`——这个"怪"顺序是 embed 机制的直接后果。
 - **许可证 fail-closed**：归档必须含真实许可证报告，`--skip-licenses` 强制搭配 `--no-archive`——发布物不带许可证清单就不允许出货。
 
