@@ -27,6 +27,7 @@ Status: implemented
 
 - **收益**：两个直接 Go 依赖保持精确锁定，前端 4 个补丁进入锁文件；`go.mod` 无连带间接依赖变化，前后端验证均通过。
 - **代价与边界**：服务器默认 Go 与 CI 不一致，后续执行必须显式使用 `GOTOOLCHAIN=go1.26.10`；`vite@8.3.5` 的供应链例外需在发布满 24 小时后移除。截至 2026-10-22，Go 1.26.10 已修复 GO-2026-6809；GO-2026-5932 无修复版本但源码未调用，与 dev 依赖漏洞及上述暂缓项一并待跟进。上游放宽 peer、Node 运行时升级或发布迁移说明后，应重新评估对应项。
+- 本笔记记录批次 1/2 的历史边界；当前 Go/CI 版本与安全扫描状态已由 [依赖升级批次 3 与安全扫描恢复](2026-11-10-deps-upgrade-batch-3-and-security-scan-recovery.md) 更新，TypeScript 7、@types/node 26 与 minimatch moderate 仍暂缓。
 
 ## 验证
 

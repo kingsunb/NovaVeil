@@ -30,6 +30,7 @@ Status: implemented
 - 收益：仓库首次具有周期性的供应链安全扫描、依赖更新提案和清晰的 code review 归属。
 - 代价与边界：`go vet` 是轻量基线，不是 gosec/govulncheck 级别；`pnpm audit` 结果取决于 npm 审计接口；Dependabot 对 `github.com/looplj/axonhub/llm` 这类伪版本直接依赖与 `replace` 指向的个人 fork 可能无法给出常规更新 PR，风险没有消除，只是被周期性监控。
 - 前端审计默认 `--audit-level=high`：低于 high 的漏洞不使 job 失败，避免审计接口与生态噪音阻塞开发。
+- 当前已改为固定安装 gosec v2.30.0 与 govulncheck v1.9.0，并放行 Dependabot PR；见 [依赖升级批次 3 与安全扫描恢复](2026-11-10-deps-upgrade-batch-3-and-security-scan-recovery.md)。
 
 ## 验证
 
