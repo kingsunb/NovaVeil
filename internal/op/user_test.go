@@ -363,11 +363,17 @@ func TestUserInitPropagatesDatabaseErrors(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("register failing query callback: %v", err)
 	}
-	defer func() {
+	removed := false
+	removeCallback := func() {
+		if removed {
+			return
+		}
+		removed = true
 		if err := queryCB.Remove(cbName); err != nil {
 			t.Errorf("remove failing query callback: %v", err)
 		}
-	}()
+	}
+	defer removeCallback()
 
 	err := UserInit(t.TempDir())
 	if err == nil {
@@ -376,6 +382,7 @@ func TestUserInitPropagatesDatabaseErrors(t *testing.T) {
 	if !errors.Is(err, errInjectedDBFailure) {
 		t.Fatalf("database error must be propagated, got %v", err)
 	}
+	removeCallback()
 	var count int64
 	if err := db.GetDB().Model(&model.User{}).Count(&count).Error; err != nil {
 		t.Fatalf("count users: %v", err)

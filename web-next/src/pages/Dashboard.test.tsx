@@ -14,6 +14,11 @@ function toRgb(hex: string) {
   return `rgb(${(value >> 16) & 0xff}, ${(value >> 8) & 0xff}, ${value & 0xff})`;
 }
 
+// 内联样式在不同 DOM 实现中可能保留 hex 或归一化为 rgb。
+function normalizeColor(color: string) {
+  return color.startsWith("#") ? toRgb(color) : color;
+}
+
 // 把 useQuery 用的 queryClient 单独创建，避免测试间缓存污染
 function makeWrapper() {
   const qc = new QueryClient({
@@ -319,8 +324,12 @@ describe("<DashboardPage /> Token 趋势", () => {
     const outDot = screen
       .getByText("输出 tokens")
       .querySelector("span") as HTMLElement;
-    expect(inDot.style.backgroundColor).toBe(toRgb(TOKEN_IN_COLOR));
-    expect(outDot.style.backgroundColor).toBe(toRgb(TOKEN_OUT_COLOR));
+    expect(normalizeColor(inDot.style.backgroundColor)).toBe(
+      toRgb(TOKEN_IN_COLOR),
+    );
+    expect(normalizeColor(outDot.style.backgroundColor)).toBe(
+      toRgb(TOKEN_OUT_COLOR),
+    );
   });
 
   it("趋势接口返回空点位时显示暂无用量数据占位", async () => {

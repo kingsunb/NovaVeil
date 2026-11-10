@@ -93,6 +93,11 @@ describe("GroupEditor relay_config 默认值契约", () => {
     await user.click(screen.getByRole("button", { name: "新建分组" }));
     await waitFor(() => screen.getByRole("dialog"));
 
+    // 自动匹配模型在默认的「成员」Tab 内
+    expect(
+      screen.getByRole("switch", { name: "自动匹配模型" }),
+    ).toBeInTheDocument();
+
     // 路由策略字段在「路由策略」Tab 内，切过去才能看到
     await user.click(screen.getByRole("button", { name: "路由策略" }));
 
@@ -108,9 +113,6 @@ describe("GroupEditor relay_config 默认值契约", () => {
     const switches = screen.getAllByRole("switch");
     expect(switches.length).toBe(7);
     expect(switches[0]).toHaveAttribute("aria-checked", "true");
-    expect(
-      screen.getByRole("switch", { name: "自动匹配模型" }),
-    ).toBeInTheDocument();
   });
 
   it("编辑已有分组：读服务端 relay_config，不被默认值覆盖", async () => {
