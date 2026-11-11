@@ -315,3 +315,27 @@ func TestCustomTermTableDropsRemovedTerms(t *testing.T) {
 	again := customTermTable([]CustomTerm{{Value: "dog"}, {Value: "张三"}})
 	assert.Same(t, second["dog"], again["dog"])
 }
+
+// TestEngine_IP_ExtraOctetNotMasked 五段点分串不得被截成合法 IPv4 脱敏。
+func TestEngine_IP_ExtraOctetNotMasked(t *testing.T) {
+	e := NewEngine(NewSessionStore())
+	res, err := e.Apply("公网 93.184.216.34", "s1", enable("IP"), nil)
+	require.NoError(t, err)
+	require.Contains(t, res.Masked, "{{IP_", "对照组: 标准公网 IPv4 应被脱敏")
+
+	res2, err := e.Apply("公网 93.184.216.34.5", "s2", enable("IP"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "公网 93.184.216.34.5", res2.Masked, "多一段不得截半脱敏")
+}
+
+// TestEngine_SSN_AdjacentDigitsNotMasked 相邻数字不得被截成 SSN 形状脱敏。
+func TestEngine_SSN_AdjacentDigitsNotMasked(t *testing.T) {
+	e := NewEngine(NewSessionStore())
+	res, err := e.Apply("编号 321-54-9876 555-12-3456", "s1", enable("SSN"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, strings.Count(res.Masked, "{{SSN_"), "相邻两条 SSN 都应识别")
+
+	res2, err := e.Apply("订单 2024-01-2345", "s2", enable("SSN"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "订单 2024-01-2345", res2.Masked, "日期串不得截半脱敏")
+}

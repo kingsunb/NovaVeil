@@ -31,21 +31,30 @@ type RuleMeta struct {
 
 // builtinValidators 按标签索引的校验函数表。引擎对每条命中先跑对应校验, 不通过则跳过。
 // 规则结构本身不含校验字段, 校验是包内按标签分派的关注点。
-var builtinValidators = map[string]Validator{
-	"CARD":   luhnOK,
-	"IDCARD": idcard18OK,
-	"PHONE":  phoneOK,
-	"EMAIL":  emailOK,
-	"JWT":    jwtOK,
-	"MAC":    macOK,
-	"SECRET": secretOK,
-	"USCC":   usccOK,
-}
+var builtinValidators = func() map[string]Validator {
+	m := map[string]Validator{
+		"CARD":   luhnOK,
+		"IDCARD": idcard18OK,
+		"PHONE":  phoneOK,
+		"EMAIL":  emailOK,
+		"JWT":    jwtOK,
+		"MAC":    macOK,
+		"SECRET": secretOK,
+		"USCC":   usccOK,
+	}
+	for k, v := range CryptoValidators {
+		m[k] = v
+	}
+	for k, v := range PersonalExtraValidators {
+		m[k] = v
+	}
+	return m
+}()
 
 // BuiltinRules 内置正则规则, 按 docs/脱敏开发/02 顺序排列。默认全关, 由调用方按 enabledRules 开启。
 // 正则译自 maskit transparent.py:52-114, 因 Go 标准库 regexp(RE2)不支持前后向断言,
 // 用 \b 词边界与字符类替代; 误报由校验函数兜底。
-var BuiltinRules = []Rule{
+var BuiltinRules = append(append([]Rule{
 	{
 		Label:       "PRIVATE_KEY",
 		Pattern:     regexp.MustCompile(`(?s)-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----.{20,}?-----END[^-]*PRIVATE KEY-----`),
@@ -118,11 +127,11 @@ var BuiltinRules = []Rule{
 		Group:       0,
 		Description: "统一社会信用代码(18 位 31 进制 + MOD 31 校验位)",
 	},
-}
+}, append(CryptoRules, PersonalExtraRules...)))
 
 // BuiltinRuleMeta 内置规则的对外元信息。硬约束: 全部默认关闭(NovaVeil 面向网关多用户,
 // 误报影响面更大, 首次引入应保守)。管理员按需在配置层开启, 详见 docs/脱敏开发/02 §2.2。
-var BuiltinRuleMeta = []RuleMeta{
+var BuiltinRuleMeta = append(append([]RuleMeta{
 	{"PRIVATE_KEY", "PEM 私钥整块替换", false},
 	{"API_KEY", "GitHub PAT / Google / Slack / Stripe / OpenAI / 钉钉 凭据", false},
 	{"CONNSTR", "数据库连接串密码", false},
@@ -135,7 +144,7 @@ var BuiltinRuleMeta = []RuleMeta{
 	{"TOKEN", "Bearer Token", false},
 	{"MAC", "MAC 地址", false},
 	{"USCC", "统一社会信用代码", false},
-}
+}, append(CryptoRuleMeta, PersonalExtraRuleMeta...)))
 
 // ---- 校验函数(防误报), 译自 maskit transparent.py:410-612 ----
 

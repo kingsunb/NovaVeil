@@ -235,6 +235,12 @@ func ruleMayHit(text, label string) bool {
 	case "USCC":
 		return hasNAlnum(text, 18)
 	}
+	if !CryptoMayHit(text, label) {
+		return false
+	}
+	if !PersonalExtraMayHit(text, label) {
+		return false
+	}
 	return true
 }
 
