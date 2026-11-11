@@ -127,7 +127,7 @@ var BuiltinRules = append(append([]Rule{
 		Group:       0,
 		Description: "统一社会信用代码(18 位 31 进制 + MOD 31 校验位)",
 	},
-}, append(CryptoRules, PersonalExtraRules...)))
+}, CryptoRules...), PersonalExtraRules...)
 
 // BuiltinRuleMeta 内置规则的对外元信息。硬约束: 全部默认关闭(NovaVeil 面向网关多用户,
 // 误报影响面更大, 首次引入应保守)。管理员按需在配置层开启, 详见 docs/脱敏开发/02 §2.2。
@@ -144,7 +144,7 @@ var BuiltinRuleMeta = append(append([]RuleMeta{
 	{"TOKEN", "Bearer Token", false},
 	{"MAC", "MAC 地址", false},
 	{"USCC", "统一社会信用代码", false},
-}, append(CryptoRuleMeta, PersonalExtraRuleMeta...)))
+}, CryptoRuleMeta...), PersonalExtraRuleMeta...)
 
 // ---- 校验函数(防误报), 译自 maskit transparent.py:410-612 ----
 
