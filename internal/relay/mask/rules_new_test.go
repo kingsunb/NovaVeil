@@ -250,7 +250,9 @@ func TestCryptoSolanaKeypairOK(t *testing.T) {
 
 	// 公钥半换成别的公钥: 数组长度对, 但公钥不由种子派生.
 	other := ed25519.NewKeyFromSeed(ntHex(t, "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"))
-	assert.False(t, solanaKeypairOK(ntByteList(other)), "公钥半不匹配应失败")
+	mixed := append([]byte{}, key[:ed25519.SeedSize]...)
+	mixed = append(mixed, other[ed25519.SeedSize:]...)
+	assert.False(t, solanaKeypairOK(ntByteList(mixed)), "公钥半不匹配应失败")
 
 	assert.False(t, solanaKeypairOK(""), "空串应失败")
 	assert.False(t, solanaKeypairOK("[]"), "空数组应失败")
