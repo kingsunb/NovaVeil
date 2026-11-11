@@ -546,7 +546,7 @@ describe("<LogsPage /> 追踪 Sheet 诊断区块与时间线", () => {
     expect(within(dialog).queryByText("（估算）")).toBeNull();
   });
 
-  it("令牌汇总展示缓存命中率百分比「缓存 N (xx%)」", async () => {
+  it("令牌汇总展示缓存命中量，不展示百分比", async () => {
     const dialog = await openTrace({
       ...makeLog(1),
       usage: {
@@ -556,15 +556,14 @@ describe("<LogsPage /> 追踪 Sheet 诊断区块与时间线", () => {
         prompt_tokens_details: { cached_tokens: 30 },
       },
     });
-    // 命中率 = 缓存输入 30 / 总输入 101 ≈ 29.7%，随「缓存 30」一并展示。
-    expect(within(dialog).getByText(/缓存 30/)).toBeTruthy();
-    expect(within(dialog).getByText("(29.7%)")).toBeTruthy();
+    expect(within(dialog).getByText(/\/ 缓存 30/)).toBeTruthy();
+    expect(within(dialog).queryByText(/\(29\.7%\)/)).toBeNull();
   });
 
-  it("无缓存命中时不展示百分比（CacheSuffix 返回 null）", async () => {
+  it("无缓存命中时不展示缓存标记（CacheSuffix 返回 null）", async () => {
     const dialog = await openTrace(makeLog(1));
     expect(within(dialog).getByText(/tokens 101 \/ 51/)).toBeTruthy();
-    expect(within(dialog).queryByText(/缓存/)).toBeNull();
+    expect(within(dialog).queryByText(/\/ 缓存/)).toBeNull();
     expect(within(dialog).queryByText(/\(\d+(\.\d+)?%\)/)).toBeNull();
   });
 

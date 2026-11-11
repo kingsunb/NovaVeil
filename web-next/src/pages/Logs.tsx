@@ -61,40 +61,18 @@ function cacheTokensOf(
   return r.usage?.prompt_tokens_details?.cached_tokens ?? 0;
 }
 
-// 输入 token 中命中缓存的占比(百分比), 用于日志「缓存 N (xx%)」直观展示 prompt cache 收益;
-// 无缓存或不含输入 token 时返回 null(不展示百分比)。
-function cacheRateOf(
-  r: { usage?: { prompt_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } },
-): number | null {
-  const prompt = r.usage?.prompt_tokens ?? 0;
-  const cached = cacheTokensOf(r);
-  if (cached <= 0 || prompt <= 0) return null;
-  return (cached / prompt) * 100;
-}
-
-// 百分比展示: 四舍五入到 0.1 并去掉无意义的尾随 0 (85% / 42.3%)。
-function formatPercent(rate: number): string {
-  if (!Number.isFinite(rate)) return "—";
-  const tenth = Math.round(rate * 10) / 10;
-  return `${Number.isInteger(tenth) ? Math.round(tenth) : tenth}%`;
-}
-
-// 「缓存 N (xx%)」片段; 无缓存时返回 null。命中率 = 缓存输入 token / 总输入 token。
+// 日志展示「/ 缓存 N」, 只给命中量, 不再显示百分比。
 function CacheSuffix({
   r,
-  className,
 }: {
   r: { usage?: { prompt_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } };
-  className?: string;
 }) {
   const cached = cacheTokensOf(r);
   if (cached <= 0) return null;
-  const rate = cacheRateOf(r);
   return (
     <>
       {" / 缓存 "}
       {formatNumber(cached)}
-      {rate != null && <span className={className}> ({formatPercent(rate)})</span>}
     </>
   );
 }
