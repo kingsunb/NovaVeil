@@ -11,7 +11,7 @@ Status: implemented
 ## 决定
 
 - `scripts/dockerfile/Dockerfile` 的 ENV 增加 `NOVAVEIL_SERVER_HOST=0.0.0.0`，镜像单独运行时也能被宿主端口访问；`docker run -e` 与 Compose 仍可覆盖。
-- `scripts/smoke-test-image.sh` 的就绪探测优先 `curl -fs --max-time 3`（总时长上限，代理无响应也不会无限等待），无 curl 的主机回退 `wget -T 3`；补充启动、就绪、加固检查、健康检查、读取初始密码与登录阶段日志。
+- `scripts/smoke-test-image.sh` 的就绪探测优先 `curl -fs --max-time 3`（总时长上限，代理无响应也不会无限等待），无 curl 的主机回退 `wget -T 3`；补充启动、就绪、加固检查、健康检查、读取初始密码与登录阶段日志；带 Cookie 的管理写请求同时发送同源 `Origin`，覆盖 OriginProtection 的 CSRF 校验。
 - `scripts/verify-image-archives.sh` 为每架构扫描、加载与 smoke 增加阶段日志，并用 `timeout 600` 包住 native smoke（无 `timeout` 的主机直接执行），把潜在挂起变成可诊断的失败。
 
 ## 备选方案

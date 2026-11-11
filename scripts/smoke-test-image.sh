@@ -101,6 +101,7 @@ echo "smoke: image healthcheck healthy"
 # ---------------------------------------------------------------------------
 if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
     cookie_jar="/tmp/${NAME}-cookies.$$"
+    origin="http://127.0.0.1:${port}"
     rm -f "${cookie_jar}"
 
     # Read the one-time initial admin password written by UserInit.
@@ -125,10 +126,12 @@ if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
 
     # --- DB write: change password and verify it persists across re-login ---
     new_pw="smoke-pw-changed"
-    curl -s --max-time 10 -b "${cookie_jar}" -X POST "http://127.0.0.1:${port}/api/v1/user/change-password" \
+    change_pw_body="$(curl -s --max-time 10 -b "${cookie_jar}" -X POST "http://127.0.0.1:${port}/api/v1/user/change-password" \
         -H 'Content-Type: application/json' \
-        -d "{\"old_password\":\"${admin_pw}\",\"new_password\":\"${new_pw}\"}" | grep -q '"code":200' \
-        || { echo "smoke: change-password failed" >&2; exit 1; }
+        -H "Origin: ${origin}" \
+        -d "{\"old_password\":\"${admin_pw}\",\"new_password\":\"${new_pw}\"}")"
+    printf '%s' "${change_pw_body}" | grep -q '"code":200' \
+        || { echo "smoke: change-password failed: ${change_pw_body}" >&2; exit 1; }
     curl -s --max-time 10 -c "${cookie_jar}" -X POST "http://127.0.0.1:${port}/api/v1/user/login" \
         -H 'Content-Type: application/json' \
         -d "{\"username\":\"admin\",\"password\":\"${new_pw}\"}" | grep -q '"code":200' \
@@ -140,6 +143,7 @@ if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
     # full relay pipeline (API-key auth → group resolution → channel → response).
     chan_body="$(curl -s --max-time 10 -b "${cookie_jar}" -X POST "http://127.0.0.1:${port}/api/v1/channel/create" \
         -H 'Content-Type: application/json' \
+        -H "Origin: ${origin}" \
         -d '{"name":"smoke-chan","type":"custom","enabled":true,"fixed_reply":"smoke-forward-ok","models":[{"name":"smoke-model","source":"manual"}]}')"
     printf '%s' "${chan_body}" | grep -q '"code":200' || { echo "smoke: channel create failed: ${chan_body}" >&2; exit 1; }
     chan_model_id="$(printf '%s' "${chan_body}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["models"][0]["id"])')"
@@ -147,11 +151,13 @@ if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
 
     group_body="$(curl -s --max-time 10 -b "${cookie_jar}" -X POST "http://127.0.0.1:${port}/api/v1/group/create" \
         -H 'Content-Type: application/json' \
+        -H "Origin: ${origin}" \
         -d "{\"name\":\"smoke-model\",\"mode\":\"failover\",\"items\":[{\"channel_model_id\":${chan_model_id},\"priority\":1}]}")"
     printf '%s' "${group_body}" | grep -q '"code":200' || { echo "smoke: group create failed: ${group_body}" >&2; exit 1; }
 
     key_body="$(curl -s --max-time 10 -b "${cookie_jar}" -X POST "http://127.0.0.1:${port}/api/v1/apikey/create" \
         -H 'Content-Type: application/json' \
+        -H "Origin: ${origin}" \
         -d '{"name":"smoke-key","enabled":true}')"
     printf '%s' "${key_body}" | grep -q '"code":200' || { echo "smoke: apikey create failed: ${key_body}" >&2; exit 1; }
     api_key="$(printf '%s' "${key_body}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["api_key"])')"
