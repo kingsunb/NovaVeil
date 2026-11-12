@@ -25,8 +25,9 @@
 路由状态 `RouteState`（Cooldowns / Levels / HalfOpens / ProbeItemID / PostCommitStrikes / emergencyCounts）全部是进程内存，单锁 `routeMu` 保护，临界区内不做 IO：
 
 - CLOSED 成员直接选中；OPEN 成员按 `cooldownMillis` 指数退避，受冷却上限封顶。
-- 存在 CLOSED 成员时，对冷却到期的 OPEN 成员做**异步非阻塞探测**，本请求照常服务。
-- 全组冷却到期时整批原子切换 HALF_OPEN 并行探测，最先成功者胜出、置 `ProbeItemID` 等待真实业务请求二次确认（`recordRouteSuccess` 才真正恢复 CLOSED）。
+- 请求触发的半开探测由分组配置 `request_probe_enabled` 控制，默认 false：有 CLOSED 成员时不再探测到期成员；全部冷却时按优先级取第一个到期成员，直接由真实业务请求恢复（`recordRouteSuccess` 才真正恢复 CLOSED）。
+- 设为 true 后：存在 CLOSED 成员时，对冷却到期的 OPEN 成员做**异步非阻塞探测**，本请求照常服务；全组冷却到期时整批原子切换 HALF_OPEN 并行探测，最先成功者胜出、置 `ProbeItemID` 等待真实业务请求二次确认。
+- 后台定时探测不受该开关影响，仍由 `background_probe_enabled` 独立控制。
 - 全部成员不可用时走紧急兜底 `claimEmergencyItem`，以 `emergencyMaxConcurrent=3` 的信号量节流放行最后防线。
 - 完整流程图与配置项见 [DEVELOPMENT_routing.md](../DEVELOPMENT_routing.md)。
 

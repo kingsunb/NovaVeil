@@ -65,6 +65,7 @@ export const sampleGroup: Group = {
     all_cooldown_retry_max_seconds: 60,
     background_probe_enabled: false,
     background_probe_interval_seconds: 60,
+    request_probe_enabled: false,
     emergency_item_id: 0,
     prefer_passthrough: false,
     auto_match_models: false,

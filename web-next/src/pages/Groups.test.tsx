@@ -1239,4 +1239,51 @@ describe("GroupEditor 路由开关持久化", () => {
     await user.click(within(reopened).getByRole("button", { name: "路由策略" }));
     expect(backgroundSwitch()).toHaveAttribute("aria-checked", "true");
   });
+
+  it("请求触发半开探测默认关闭，开启后保存并重新打开仍保留", async () => {
+    const user = userEvent.setup();
+    let groups = [sampleGroup];
+    const savedConfigs: GroupRelayConfig[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url.includes("/group/list")) return Promise.resolve(jsonOk(groups));
+        if (url.includes("/channel/list")) return Promise.resolve(jsonOk([sampleChannel]));
+        if (url.includes("/group/update")) {
+          const body = JSON.parse(String(init?.body)) as { relay_config: GroupRelayConfig };
+          savedConfigs.push(body.relay_config);
+          const saved = { ...sampleGroup, relay_config: body.relay_config };
+          groups = [saved];
+          return Promise.resolve(jsonOk(saved));
+        }
+        return Promise.resolve(jsonOk(null));
+      }),
+    );
+
+    render(<GroupsPage />, { wrapper: Wrapper });
+    await screen.findByText(sampleGroup.name);
+    await user.click(screen.getByRole("button", { name: /编辑/ }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "路由策略" }));
+
+    const requestProbeSwitch = () =>
+      screen.getByRole("switch", { name: "请求触发半开探测" });
+    expect(requestProbeSwitch()).toHaveAttribute("aria-checked", "false");
+    await user.click(requestProbeSwitch());
+    await waitFor(() =>
+      expect(requestProbeSwitch()).toHaveAttribute("aria-checked", "true"),
+    );
+
+    await user.click(within(dialog).getByRole("button", { name: /^保存$/ }));
+    await waitFor(() => {
+      expect(savedConfigs).toHaveLength(1);
+      expect(savedConfigs[0].request_probe_enabled).toBe(true);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /编辑/ }));
+    const reopened = await screen.findByRole("dialog");
+    await user.click(within(reopened).getByRole("button", { name: "路由策略" }));
+    expect(requestProbeSwitch()).toHaveAttribute("aria-checked", "true");
+  });
 });

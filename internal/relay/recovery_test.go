@@ -64,6 +64,7 @@ func backoffConfig(cooldownSeconds int, multiplier float64, maxSeconds int) mode
 	config.MemberCooldownSeconds = cooldownSeconds
 	config.CooldownBackoffMultiplier = multiplier
 	config.CooldownMaxSeconds = maxSeconds
+	config.RequestProbeEnabled = true // 既有用例覆盖开启请求探测的恢复路径。
 	return config
 }
 
@@ -329,6 +330,82 @@ func TestWholeBatchFailureBacksOffAndCaps(t *testing.T) {
 			t.Fatalf("成员 %d 应升级到等级 2, 实际 %d", itemID, level)
 		}
 		assertCooldownApprox(t, fmt.Sprintf("封顶成员 %d", itemID), route.Cooldowns[itemID], now, 30_000)
+	}
+}
+
+// TestPickGroupItemRequestProbeDefaultDisabledUsesExpiredDirectly 验证默认关闭请求探测后由真实业务直接恢复首个到期成员。
+func TestPickGroupItemRequestProbeDefaultDisabledUsesExpiredDirectly(t *testing.T) {
+	stubRelayEnv(t)
+	config := backoffConfig(10, 2, 30)
+	config.RequestProbeEnabled = false
+	group := testFailoverGroup(6, config, 61, 62)
+	now := time.Now().UnixMilli()
+	routes[group.ID] = &RouteState{
+		GroupID:   group.ID,
+		Cooldowns: make(map[int]int64),
+		Levels:    make(map[int]int),
+		HalfOpens: make(map[int]int64),
+	}
+	seedExpired(routes[group.ID], now, 61, 62)
+
+	var probes atomic.Int32
+	probeChannelFunc = func(ctx context.Context, channel model.Channel, modelName string) error {
+		probes.Add(1)
+		return nil
+	}
+
+	item := pickGroupItem(group, 0)
+	if item.ID != 61 {
+		t.Fatalf("应直接返回优先级最高的到期成员 61, 实际 %d", item.ID)
+	}
+	route := routes[group.ID]
+	if route.ProbeItemID != 61 || route.HalfOpens[61] == 0 {
+		t.Fatalf("应占用成员 61 等待业务确认, 实际 ProbeItemID=%d HalfOpens=%v", route.ProbeItemID, route.HalfOpens)
+	}
+	if probes.Load() != 0 {
+		t.Fatalf("关闭请求探测后不应发起合成探测, 实际 %d 次", probes.Load())
+	}
+
+	recordRouteSuccess(group, 61)
+	route = routes[group.ID]
+	if route.ProbeItemID != 0 || len(route.HalfOpens) != 0 {
+		t.Fatalf("业务成功后应释放探测占用, 实际 ProbeItemID=%d HalfOpens=%v", route.ProbeItemID, route.HalfOpens)
+	}
+}
+
+// TestPickGroupItemRequestProbeDefaultDisabledSkipsExpiredWhenClosedExists 验证默认关闭时有 CLOSED 成员不后台探测到期成员。
+func TestPickGroupItemRequestProbeDefaultDisabledSkipsExpiredWhenClosedExists(t *testing.T) {
+	stubRelayEnv(t)
+	config := backoffConfig(10, 2, 30)
+	config.RequestProbeEnabled = false
+	group := testFailoverGroup(7, config, 71, 72)
+	now := time.Now().UnixMilli()
+	routes[group.ID] = &RouteState{
+		GroupID:   group.ID,
+		Cooldowns: map[int]int64{72: now - 1000},
+		Levels:    make(map[int]int),
+		HalfOpens: make(map[int]int64),
+	}
+
+	var probes atomic.Int32
+	probeChannelFunc = func(ctx context.Context, channel model.Channel, modelName string) error {
+		probes.Add(1)
+		return nil
+	}
+
+	item := pickGroupItem(group, 0)
+	if item.ID != 71 {
+		t.Fatalf("应优先返回 CLOSED 成员 71, 实际 %d", item.ID)
+	}
+	route := routes[group.ID]
+	if probes.Load() != 0 {
+		t.Fatalf("关闭请求探测后不应探测到期成员, 实际 %d 次", probes.Load())
+	}
+	if len(route.HalfOpens) != 0 || route.ProbeItemID != 0 {
+		t.Fatalf("不应占用到期成员, 实际 ProbeItemID=%d HalfOpens=%v", route.ProbeItemID, route.HalfOpens)
+	}
+	if _, cooling := route.Cooldowns[72]; !cooling {
+		t.Fatal("到期成员应保留冷却记录等待业务请求")
 	}
 }
 

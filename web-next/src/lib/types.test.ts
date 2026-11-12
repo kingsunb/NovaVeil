@@ -28,6 +28,7 @@ describe("DEFAULT_GROUP_RELAY_CONFIG", () => {
     expect(DEFAULT_GROUP_RELAY_CONFIG.cooldown_max_seconds).toBe(1800);
     expect(DEFAULT_GROUP_RELAY_CONFIG.background_probe_enabled).toBe(false);
     expect(DEFAULT_GROUP_RELAY_CONFIG.background_probe_interval_seconds).toBe(60);
+    expect(DEFAULT_GROUP_RELAY_CONFIG.request_probe_enabled).toBe(false);
     expect(DEFAULT_GROUP_RELAY_CONFIG.emergency_item_id).toBe(0);
     expect(DEFAULT_GROUP_RELAY_CONFIG.prefer_passthrough).toBe(false);
   });

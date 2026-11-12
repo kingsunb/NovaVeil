@@ -1536,6 +1536,12 @@ function GroupEditor({
                 onChange={(v) => updateRelay("background_probe_enabled", v)}
               />
               <Toggle
+                label="请求触发半开探测"
+                description="默认关闭；开启后对冷却到期成员发起半开探测，关闭时由真实业务请求直接恢复"
+                checked={relayConfig.request_probe_enabled}
+                onChange={(v) => updateRelay("request_probe_enabled", v)}
+              />
+              <Toggle
                 label="协议透传偏好"
                 description="开启后优先将请求透传给与客户端协议相同的渠道，减少转换开销"
                 checked={relayConfig.prefer_passthrough}

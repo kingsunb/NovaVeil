@@ -31,6 +31,7 @@ type GroupRelayConfig struct {
 	AllCooldownRetryMaxSeconds     int     `json:"all_cooldown_retry_max_seconds" binding:"omitempty,min=1"`    // 全冷却自动重试的间隔上限秒数。
 	BackgroundProbeEnabled         bool    `json:"background_probe_enabled"`                                    // 是否启用后台定时探测,对处于 OPEN 状态的成员周期性发起半开测试。
 	BackgroundProbeIntervalSeconds int     `json:"background_probe_interval_seconds" binding:"omitempty,min=1"` // 后台定时探测的执行间隔秒数。
+	RequestProbeEnabled            bool    `json:"request_probe_enabled"`                                       // 是否启用请求触发的半开探测;默认 false,关闭时冷却到期成员由真实业务请求直接恢复。
 	EmergencyItemID                int     `json:"emergency_item_id" binding:"omitempty,min=0"`                 // 紧急兜底成员 ID:全部常规成员不可用时的最后放行目标,须指向同分组已有成员,0 表示关闭。
 	PreferPassthrough              bool    `json:"prefer_passthrough"`                                          // 故障转移时优先选择与客户端协议相同的渠道直接透传, 默认关闭。
 	MaskEnabled                    bool    `json:"mask_enabled"`                                                // 是否对本分组启用请求脱敏, 默认 false; 须同时全局 Enabled=true 才生效, 旧分组 JSON 反序列化自动得关, 无需数据迁移。

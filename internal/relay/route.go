@@ -244,11 +244,13 @@ func pickGroupItemSkipping(ctx context.Context, group model.Group, exclude int, 
 		break
 	}
 
-	// 存在 CLOSED 成员时对到期的 OPEN 成员做异步非阻塞探测: 临界区内原子占用后立即返回当前成员,
-	// 合成测试在后台进行, 本请求照常继续服务。
+	// 开启请求探测且存在 CLOSED 成员时, 对到期的 OPEN 成员做异步非阻塞探测:
+	// 临界区内原子占用后立即返回当前成员, 合成测试在后台进行, 本请求照常继续服务。
 	if selected.ID != 0 {
-		for _, item := range expired {
-			ensureProbeLocked(route, group, item, now)
+		if group.RelayConfig.RequestProbeEnabled {
+			for _, item := range expired {
+				ensureProbeLocked(route, group, item, now)
+			}
 		}
 		route.CurrentItemID = selected.ID
 		publishRouteLocked(route)
@@ -256,9 +258,22 @@ func pickGroupItemSkipping(ctx context.Context, group model.Group, exclude int, 
 		return selected
 	}
 
-	// 扫描不到 CLOSED 成员且本批存在到期成员: 全部原子切换 HALF_OPEN 后并行探测。
-	// 切换和写入在同一临界区内完成, 其余请求看到探测占用即让路, 避免重复探测。
+	// 扫描不到 CLOSED 成员且本批存在到期成员。
 	if len(expired) > 0 {
+		// 默认关闭时由真实请求恢复首个到期成员。
+		if !group.RelayConfig.RequestProbeEnabled {
+			item := expired[0]
+			if !claimHalfOpenLocked(route, item.ID, now) {
+				routeMu.Unlock()
+				return model.GroupItem{}
+			}
+			route.ProbeItemID = item.ID
+			publishRouteLocked(route)
+			routeMu.Unlock()
+			return item
+		}
+		// 全部原子切换 HALF_OPEN 后并行探测; 切换和写入在同一临界区内完成,
+		// 其余请求看到探测占用即让路, 避免重复探测。
 		for _, item := range expired {
 			claimHalfOpenLocked(route, item.ID, now)
 		}

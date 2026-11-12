@@ -274,6 +274,8 @@ export interface GroupRelayConfig {
   all_cooldown_retry_max_seconds: number;
   background_probe_enabled: boolean;
   background_probe_interval_seconds: number;
+  /** 是否启用请求触发的半开探测，默认 false；关闭时由真实业务请求直接恢复。 */
+  request_probe_enabled: boolean;
   emergency_item_id: number;
   prefer_passthrough: boolean;
   /** 是否对本分组启用请求脱敏，默认 false；须同时全局 enabled=true 才生效。 */
@@ -312,6 +314,7 @@ export const DEFAULT_GROUP_RELAY_CONFIG: GroupRelayConfig = {
   all_cooldown_retry_max_seconds: 60,
   background_probe_enabled: false,
   background_probe_interval_seconds: 60,
+  request_probe_enabled: false,
   emergency_item_id: 0,
   prefer_passthrough: false,
   auto_match_models: false,

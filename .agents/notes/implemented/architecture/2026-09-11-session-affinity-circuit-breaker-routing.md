@@ -12,7 +12,7 @@ Status: implemented
 
 1. **会话粘合**：客户端标识仍只来自 `X-Session-Id`，没有时用 `x-opencode-session`。表键是按 API Key 隔离后的 `sessionScopeKey`，不是裸会话名。详见 [请求体预算、会话隔离与污染流截断](../bug-fix/2026-09-22-relay-body-budget-sticky-mask-stream.md)。粘合未过期且目标渠道为 CLOSED 时，优先走粘合渠道；粘合渠道请求失败且还有重试次数则重试粘合渠道，否则渠道进 OPEN、算冷却、清粘合，从渠道 1 重新扫描。粘合渠道成功则刷新粘合时间。
 2. **三态熔断**：渠道状态 CLOSED（正常）/ OPEN（冷却中，跳过）/ HALF_OPEN（探测中）。扫描时跳过 OPEN 与 HALF_OPEN。
-3. **非阻塞半开探测**：存在正常（CLOSED）渠道时，半开探测不阻塞主路径；全部不可用时从渠道 1 重新扫描触发恢复。
+3. **非阻塞半开探测**：存在正常（CLOSED）渠道时，后台/请求触发的半开探测都不阻塞主路径；全部不可用时从渠道 1 重新扫描触发恢复。请求触发探测默认关闭；分组可配置 `request_probe_enabled=true` 开启，关闭时由真实业务请求直接恢复（见 [请求触发半开探测开关](../feature/2026-11-12-request-probe-toggle.md)）。
 
 成员重试间隔 `member_retry_interval_seconds` 使用非负小数秒，`0` 表示立即重试，`0.01` 表示 10 毫秒；新分组仍默认 2 秒。API、JSON 配置与等待函数都保留小数，转换到 `time.Duration` 前先乘纳秒单位，避免把亚秒间隔截成 0。已有整数 JSON 直接兼容，v7 旧整数列迁移显式转成 `float64`。整份零值配置继续回填默认；正常完整配置中的显式 0 保留。
 
