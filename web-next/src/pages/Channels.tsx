@@ -57,6 +57,15 @@ type ProxyFilter = "all" | "on" | "off";
 type FreeFilter = "all" | "free" | "builtin" | "custom";
 type Sort = "custom" | "name" | "status" | "models";
 
+function isChannelCardAction(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest(
+      "button, a, label, input, select, textarea, [contenteditable='true'], [role='switch'], [role='button'], [data-card-action]",
+    ) !== null
+  );
+}
+
 export default function ChannelsPage() {
   const qc = useQueryClient();
   const testMessage = useChannelTestMessage();
@@ -473,7 +482,12 @@ export default function ChannelsPage() {
           {rows.map((c) => (
             <article
               key={c.id}
-              className="glass-panel glass-inset-highlight flex flex-col gap-3 rounded-card p-4 transition-all hover:shadow-apple-md"
+              data-testid={`channel-card-${c.id}`}
+              onClick={(event) => {
+                if (isChannelCardAction(event.target)) return;
+                setEditing(c);
+              }}
+              className="glass-panel glass-inset-highlight flex cursor-pointer flex-col gap-3 rounded-card p-4 transition-all hover:shadow-apple-md"
             >
               {/* 头部：名称 + 标签 + 开关 */}
               <header className="flex items-start justify-between gap-2">

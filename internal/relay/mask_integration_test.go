@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -64,6 +65,37 @@ func TestMaskRoundtrip_BuiltinRules(t *testing.T) {
 	restored := restoreNonStream([]byte(result.Masked), result.Mapping)
 	if string(restored) != original {
 		t.Errorf("roundtrip mismatch:\n  original:  %s\n  restored:  %s", original, restored)
+	}
+}
+
+// TestRestoreNonStream_JSONEscapesSpecialCharacters 验证还原原文含引号/反斜杠/换行时仍保持合法 JSON。
+func TestRestoreNonStream_JSONEscapesSpecialCharacters(t *testing.T) {
+	engine := mask.NewEngine(mask.NewSessionStore())
+	originalValue := "he said \"hi\"\\path\n"
+	original, err := json.Marshal(map[string]string{"content": originalValue})
+	if err != nil {
+		t.Fatalf("marshal original: %v", err)
+	}
+	terms := []mask.CustomTerm{{Value: originalValue, Category: "人名"}}
+
+	result, err := engine.Apply(string(original), "s-json-escape", nil, terms)
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	if !strings.Contains(result.Masked, "{{TERM_") {
+		t.Fatalf("masked body should contain TERM placeholder: %s", result.Masked)
+	}
+
+	restored := restoreNonStream([]byte(result.Masked), result.Mapping)
+	if !json.Valid(restored) {
+		t.Fatalf("restored body must remain valid JSON: %s", restored)
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal(restored, &decoded); err != nil {
+		t.Fatalf("unmarshal restored body: %v", err)
+	}
+	if decoded["content"] != originalValue {
+		t.Fatalf("restored content = %q, want %q", decoded["content"], originalValue)
 	}
 }
 

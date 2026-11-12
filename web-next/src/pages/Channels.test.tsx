@@ -26,6 +26,7 @@ function Wrapper({ children }: { children: React.ReactNode }) {
 
 
 beforeEach(() => {
+  localStorage.removeItem("nv-channel-view");
   localStorage.setItem(
     "nv-auth",
     JSON.stringify({ isAuthenticated: true, username: "admin", mustChangePassword: false }),
@@ -208,6 +209,53 @@ describe("<ChannelsPage />", () => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     });
     expect(screen.getByText(/编辑：openai-prod/)).toBeInTheDocument();
+  });
+
+  it("点击渠道卡片空白处打开编辑 Sheet", async () => {
+    const user = userEvent.setup();
+    mockList([sampleChannel]);
+    render(<ChannelsPage />, { wrapper: Wrapper });
+    const card = await screen.findByTestId(`channel-card-${sampleChannel.id}`);
+    await user.click(card);
+    await waitFor(() => {
+      expect(screen.getByText(/编辑：openai-prod/)).toBeInTheDocument();
+    });
+  });
+
+  it("卡片内开关、测试、复制、删除不会误触编辑", async () => {
+    const user = userEvent.setup();
+    mockList([sampleChannel]);
+    render(<ChannelsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("openai-prod"));
+
+    await user.click(screen.getByRole("switch", { name: "切换 openai-prod 启用状态" }));
+    expect(screen.queryByText(/编辑：openai-prod/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("优先级 openai-prod"));
+    expect(screen.queryByText(/编辑：openai-prod/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "测试 openai-prod" }));
+    expect(screen.queryByText(/编辑：openai-prod/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "复制 openai-prod" }));
+    expect(screen.queryByText(/编辑：openai-prod/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "删除 openai-prod" }));
+    expect(screen.queryByText(/编辑：openai-prod/)).not.toBeInTheDocument();
+    expect(screen.getByText(/删除渠道/)).toBeInTheDocument();
+  });
+
+  it("列表视图点击卡片空白处同样打开编辑", async () => {
+    const user = userEvent.setup();
+    mockList([sampleChannel]);
+    render(<ChannelsPage />, { wrapper: Wrapper });
+    await waitFor(() => screen.getByText("openai-prod"));
+
+    await user.click(screen.getByRole("button", { name: "列表" }));
+    await user.click(screen.getByTestId(`channel-card-${sampleChannel.id}`));
+    await waitFor(() => {
+      expect(screen.getByText(/编辑：openai-prod/)).toBeInTheDocument();
+    });
   });
 
   it("开关与渠道名按钮可分别聚焦，Space 切换不打开编辑器", async () => {

@@ -419,8 +419,8 @@ func normalizeImportGroups(dump *model.DBDump) {
 // 不写入任何数据。校验项:
 //   - 设置值: 与 Setting.Validate 同规则(设置值、CORS、同步间隔、随机头等)
 //   - 渠道密钥: normalizeChannelKeys 唯一性
-//   - 渠道模型引用: ChannelID 指向有效渠道(现存或 dump 新增)
-//   - 分组成员引用: ChannelModelID / RefGroupName 指向有效目标
+//   - 渠道模型引用: ChannelID 指向有效且身份一致的渠道(现存复用或 dump 实际可插入)
+//   - 分组成员引用: GroupID / ChannelModelID / RefGroupName 指向有效且身份一致的目标
 //   - 分组引用循环: 有效态分组引用链无环
 //   - API Key 领域校验与唯一性: 与正常写接口相同的最小长度校验, 脱敏 Key 拒绝;
 //     dump 内及与现存库无重复明文
@@ -483,24 +483,30 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 	// --- 构建现存库查找表 ---
 	existingChannelIDs := make(map[int]struct{}, len(existingChannels))
 	existingChannelNames := make(map[string]struct{}, len(existingChannels))
+	existingChannelByID := make(map[int]model.Channel, len(existingChannels))
 	for _, ch := range existingChannels {
 		existingChannelIDs[ch.ID] = struct{}{}
 		existingChannelNames[ch.Name] = struct{}{}
+		existingChannelByID[ch.ID] = ch
 	}
 
 	existingChannelModelIDs := make(map[int]struct{}, len(existingChannelModels))
 	existingChannelModelNatural := make(map[string]int, len(existingChannelModels)) // "channel_id\x00name" → id
+	existingChannelModelByID := make(map[int]model.ChannelModel, len(existingChannelModels))
 	for _, cm := range existingChannelModels {
 		existingChannelModelIDs[cm.ID] = struct{}{}
 		existingChannelModelNatural[channelModelNaturalKey(cm)] = cm.ID
+		existingChannelModelByID[cm.ID] = cm
 	}
 
 	existingGroupIDs := make(map[int]struct{}, len(existingGroups))
 	existingGroupNames := make(map[string]int, len(existingGroups)) // name → id
 	existingGroupItemIDs := make(map[int]struct{})
+	existingGroupByID := make(map[int]model.Group, len(existingGroups))
 	for _, g := range existingGroups {
 		existingGroupIDs[g.ID] = struct{}{}
 		existingGroupNames[g.Name] = g.ID
+		existingGroupByID[g.ID] = g
 		for _, item := range g.Items {
 			existingGroupItemIDs[item.ID] = struct{}{}
 		}
@@ -620,47 +626,94 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 		}
 	}
 
-	// --- 构建有效态集合(现存 ∪ dump 新增, DO NOTHING 语义) ---
-	effectiveChannelIDs := make(map[int]struct{}, len(existingChannelIDs)+len(dump.Channels))
-	for id := range existingChannelIDs {
-		effectiveChannelIDs[id] = struct{}{}
+	// --- 计算导入后的父行身份可用性(DO NOTHING 语义) ---
+	channelIdentityUsable := make(map[int]bool, len(existingChannels)+len(dump.Channels))
+	claimedChannelNames := make(map[string]struct{}, len(existingChannels)+len(dump.Channels))
+	for _, ch := range existingChannels {
+		channelIdentityUsable[ch.ID] = true
+		claimedChannelNames[ch.Name] = struct{}{}
 	}
 	for _, ch := range dump.Channels {
-		effectiveChannelIDs[ch.ID] = struct{}{}
+		if local, exists := existingChannelByID[ch.ID]; exists {
+			channelIdentityUsable[ch.ID] = local.Name == ch.Name
+			continue
+		}
+		if _, used := claimedChannelNames[ch.Name]; used {
+			channelIdentityUsable[ch.ID] = false
+			continue
+		}
+		claimedChannelNames[ch.Name] = struct{}{}
+		channelIdentityUsable[ch.ID] = true
 	}
 
-	effectiveChannelModelIDs := make(map[int]struct{}, len(existingChannelModelIDs)+len(dump.ChannelModels))
-	for id := range existingChannelModelIDs {
-		effectiveChannelModelIDs[id] = struct{}{}
-	}
-	for _, cm := range dump.ChannelModels {
-		effectiveChannelModelIDs[cm.ID] = struct{}{}
-	}
-
-	// 有效态分组名: 现存分组名 + dump 新增分组名(ID 不冲突者)
-	effectiveGroupNames := make(map[string]struct{}, len(existingGroupNames)+len(dump.Groups))
-	for name := range existingGroupNames {
-		effectiveGroupNames[name] = struct{}{}
+	groupIdentityUsable := make(map[int]bool, len(existingGroups)+len(dump.Groups))
+	groupNameUsable := make(map[string]struct{}, len(existingGroups)+len(dump.Groups))
+	for _, g := range existingGroups {
+		groupIdentityUsable[g.ID] = true
+		groupNameUsable[g.Name] = struct{}{}
 	}
 	for _, g := range dump.Groups {
-		if _, exists := existingGroupIDs[g.ID]; !exists {
-			effectiveGroupNames[g.Name] = struct{}{}
+		if local, exists := existingGroupByID[g.ID]; exists {
+			groupIdentityUsable[g.ID] = local.Name == g.Name
+			continue
 		}
+		if _, used := groupNameUsable[g.Name]; used {
+			groupIdentityUsable[g.ID] = false
+			continue
+		}
+		groupNameUsable[g.Name] = struct{}{}
+		groupIdentityUsable[g.ID] = true
+	}
+
+	channelModelIdentityUsable := make(map[int]bool, len(existingChannelModels)+len(dump.ChannelModels))
+	channelModelAttemptInsert := make(map[int]bool, len(dump.ChannelModels))
+	claimedChannelModelNatural := make(map[string]int, len(existingChannelModels)+len(dump.ChannelModels))
+	for _, cm := range existingChannelModels {
+		_, parentExists := existingChannelByID[cm.ChannelID]
+		channelModelIdentityUsable[cm.ID] = parentExists
+		claimedChannelModelNatural[channelModelNaturalKey(cm)] = cm.ID
+	}
+	for _, cm := range dump.ChannelModels {
+		if local, exists := existingChannelModelByID[cm.ID]; exists {
+			sameIdentity := local.ChannelID == cm.ChannelID && local.Name == cm.Name
+			_, parentExists := existingChannelByID[cm.ChannelID]
+			channelModelIdentityUsable[cm.ID] = sameIdentity && parentExists
+			continue
+		}
+		key := channelModelNaturalKey(cm)
+		if _, used := claimedChannelModelNatural[key]; used {
+			channelModelIdentityUsable[cm.ID] = false
+			continue
+		}
+		channelModelAttemptInsert[cm.ID] = true
+		claimedChannelModelNatural[key] = cm.ID
+		channelModelIdentityUsable[cm.ID] = channelIdentityUsable[cm.ChannelID]
 	}
 
 	// --- 渠道模型引用校验 ---
 	for _, cm := range dump.ChannelModels {
-		if _, ok := effectiveChannelIDs[cm.ChannelID]; !ok {
+		if channelModelAttemptInsert[cm.ID] && !channelIdentityUsable[cm.ChannelID] {
 			preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
 				Table: "channel_models",
 				ID:    cm.ID,
-				Desc:  fmt.Sprintf("渠道模型 id=%d 引用的渠道 id=%d 不存在", cm.ID, cm.ChannelID),
+				Desc:  fmt.Sprintf("渠道模型 id=%d 引用的渠道 id=%d 不存在或身份不一致", cm.ID, cm.ChannelID),
 			})
 		}
 	}
 
 	// --- 分组成员引用校验 ---
 	for _, gi := range dump.GroupItems {
+		// 已存在 ID 的成员会被 DO NOTHING 跳过，不应参与父引用校验。
+		if _, exists := existingGroupItemIDs[gi.ID]; exists {
+			continue
+		}
+		if !groupIdentityUsable[gi.GroupID] {
+			preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
+				Table: "group_items",
+				ID:    gi.ID,
+				Desc:  fmt.Sprintf("分组成员 id=%d 所属分组 id=%d 不存在或身份不一致", gi.ID, gi.GroupID),
+			})
+		}
 		if gi.ChannelModelID == 0 && strings.TrimSpace(gi.RefGroupName) == "" {
 			preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
 				Table: "group_items",
@@ -669,17 +722,15 @@ func analyzeImport(tx *gorm.DB, dump *model.DBDump) (*model.DBImportPreview, err
 			})
 			continue
 		}
-		if gi.ChannelModelID != 0 {
-			if _, ok := effectiveChannelModelIDs[gi.ChannelModelID]; !ok {
-				preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
-					Table: "group_items",
-					ID:    gi.ID,
-					Desc:  fmt.Sprintf("分组成员 id=%d 引用的渠道模型 id=%d 不存在", gi.ID, gi.ChannelModelID),
-				})
-			}
+		if gi.ChannelModelID != 0 && !channelModelIdentityUsable[gi.ChannelModelID] {
+			preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
+				Table: "group_items",
+				ID:    gi.ID,
+				Desc:  fmt.Sprintf("分组成员 id=%d 引用的渠道模型 id=%d 不存在或身份不一致", gi.ID, gi.ChannelModelID),
+			})
 		}
 		if refName := strings.TrimSpace(gi.RefGroupName); refName != "" {
-			if _, ok := effectiveGroupNames[refName]; !ok {
+			if _, ok := groupNameUsable[refName]; !ok {
 				preview.InvalidRefs = append(preview.InvalidRefs, model.DBImportInvalidRef{
 					Table: "group_items",
 					ID:    gi.ID,

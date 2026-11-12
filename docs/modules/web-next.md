@@ -8,6 +8,7 @@ React 19 + Vite 8 + TypeScript 6 的管理台，React Query 5 管服务端状态
 
 - 13 个页面：登录、总览（KPI + Token 趋势 / 热力图）、渠道、自定义模型、分组、模型评估、上下文探测、账号体检、脱敏、API 密钥、日志（全链路实时可视化）、设置（13 分区）、对话。页面级 lazy chunk + 分类 skeleton + 路由滚动复位 + 导航预加载。
 - `lib/api.ts` 是唯一 API 客户端（约 90 端点），统一 `/api/v1` 前缀与 `{code,message,data}` 信封；导出走 rawDownload 不经信封。
+- 渠道页网格与列表共用同一张卡片：点击卡片空白区打开编辑；按钮、链接、标签、输入框、可编辑区、Switch 与 `[role=button]` 等控件不触发编辑，键盘操作继续走渠道名按钮与编辑按钮。
 - 灰度基建 `lib/flags.ts`：构建期默认 + 运行时 runtime.json + localStorage 调试覆盖，匿名桶 sessionStorage 固定。
 
 ### 鉴权前端面

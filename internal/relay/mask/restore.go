@@ -1,6 +1,9 @@
 package mask
 
-import "strconv"
+import (
+	"encoding/json"
+	"strconv"
+)
 
 // RestoreString 把 body 中的占位符还原为原文(非流式, 一次性全量替换)。
 // 未登记的占位符原样保留: 绝不做模糊匹配、不猜、不推算。
@@ -21,6 +24,29 @@ func RestoreString(body string, mapping *Mapping) string {
 // RestoreBytes 是 RestoreString 的 []byte 封装。
 func RestoreBytes(body []byte, mapping *Mapping) []byte {
 	return []byte(RestoreString(string(body), mapping))
+}
+
+// RestoreJSONBytes 对合法 JSON 响应按字符串值还原, 自动转义原文中的引号、反斜杠与换行。
+// 解码后无占位符时原样返回; 非 JSON 输入回退整段文本替换, 兼容纯文本与二进制响应。
+func RestoreJSONBytes(body []byte, mapping *Mapping) []byte {
+	if mapping == nil || len(body) == 0 {
+		return body
+	}
+	if !json.Valid(body) {
+		return RestoreBytes(body, mapping)
+	}
+	changed := false
+	restored := mapJSONStringValues(string(body), func(s string) string {
+		out := RestoreString(s, mapping)
+		if out != s {
+			changed = true
+		}
+		return out
+	})
+	if !changed {
+		return body // 无占位符时保持原字节
+	}
+	return []byte(restored)
 }
 
 // RestoreJSONString 用于还原 JSON 字符串值内部的占位符(如工具调用 arguments 字段)。

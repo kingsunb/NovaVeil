@@ -108,12 +108,12 @@ func truncateMaskMatches(matches []mask.Match) ([]MaskMatch, bool) {
 }
 
 // restoreNonStream 对非流式响应体执行占位符还原。
-// 映射表为 nil 时原样返回, no-op。
+// 合法 JSON 按字符串值还原并自动转义; 非 JSON 回退整段替换。映射表为 nil 时原样返回。
 func restoreNonStream(body []byte, mapping *mask.Mapping) []byte {
 	if mapping == nil {
 		return body
 	}
-	return mask.RestoreBytes(body, mapping)
+	return mask.RestoreJSONBytes(body, mapping)
 }
 
 // restoreStreamEvent 对单个 SSE 事件的增量文本执行占位符还原。

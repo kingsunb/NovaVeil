@@ -1,6 +1,7 @@
 package mask
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,9 +34,42 @@ func TestRestoreBytes(t *testing.T) {
 	assert.Equal(t, "pw=secret-pw", string(restored))
 }
 
+func TestRestoreJSONBytes_EscapesSpecialCharacters(t *testing.T) {
+	m := newMapping()
+	original := "he said \"hi\"\\path\n"
+	ph := m.Recall(original, "TERM")
+	body := []byte(`{"content":"prefix ` + ph + ` suffix"}`)
+
+	restored := RestoreJSONBytes(body, m)
+	require.True(t, json.Valid(restored), "还原后必须是合法 JSON: %s", restored)
+
+	var decoded struct {
+		Content string `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(restored, &decoded))
+	assert.Equal(t, "prefix "+original+" suffix", decoded.Content)
+}
+
+func TestRestoreJSONBytes_NoPlaceholderKeepsOriginalBytes(t *testing.T) {
+	m := newMapping()
+	m.Recall("13800138000", "PHONE")
+	body := []byte("{ \"html\": \"<tag> & value\" }")
+
+	restored := RestoreJSONBytes(body, m)
+	assert.Equal(t, body, restored, "无占位符时不应重编码")
+}
+
+func TestRestoreJSONBytes_PlainTextFallback(t *testing.T) {
+	m := newMapping()
+	ph := m.Recall(`he said "hi"`, "TERM")
+	restored := RestoreJSONBytes([]byte("prefix "+ph+" suffix"), m)
+	assert.Equal(t, `prefix he said "hi" suffix`, string(restored))
+}
+
 func TestRestore_NilMapping_Passthrough(t *testing.T) {
 	assert.Equal(t, "nothing happens", RestoreString("nothing happens", nil))
 	assert.Equal(t, "x", string(RestoreBytes([]byte("x"), nil)))
+	assert.Equal(t, `{"a":"b"}`, string(RestoreJSONBytes([]byte(`{"a":"b"}`), nil)))
 }
 
 func TestRestoreJSONString_Escape(t *testing.T) {

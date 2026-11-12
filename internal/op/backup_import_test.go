@@ -3,6 +3,7 @@ package op
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/kingsunb/NovaVeil/internal/db"
@@ -139,6 +140,260 @@ func TestImportForeignSameID(t *testing.T) {
 	}
 	if cm.Name != "model-a" {
 		t.Fatalf("channel_model name = %q, want model-a (DO NOTHING, not UpdateAll)", cm.Name)
+	}
+}
+
+// TestImportForeignChannelIdentityRejectsNewModel 验证同 ID 但名称不同的本地渠道不能被新增模型挂靠。
+func TestImportForeignChannelIdentityRejectsNewModel(t *testing.T) {
+	ctx := context.Background()
+	t.Cleanup(func() { cleanupImportTestRows(t) })
+
+	local := model.Channel{ID: 920001, Name: "audit-local-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://local.invalid"}
+	if err := db.GetDB().Create(&local).Error; err != nil {
+		t.Fatalf("seed local channel: %v", err)
+	}
+
+	dump := &model.DBDump{
+		Version: dbDumpVersion,
+		Channels: []model.Channel{
+			{ID: 920001, Name: "audit-foreign-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com"},
+		},
+		ChannelModels: []model.ChannelModel{
+			{ID: 920102, ChannelID: 920001, Name: "audit-new-model"},
+		},
+	}
+
+	_, err := DBImportIncremental(ctx, dump)
+	if err == nil {
+		t.Fatal("import with mismatched parent channel should fail")
+	}
+	var valErr *DBImportValidationError
+	if !errors.As(err, &valErr) {
+		t.Fatalf("error should be DBImportValidationError, got %T: %v", err, err)
+	}
+	found := false
+	for _, ref := range valErr.Preview.InvalidRefs {
+		if ref.Table == "channel_models" && ref.ID == 920102 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("preview should report channel_models id=920102, got %+v", valErr.Preview.InvalidRefs)
+	}
+	var count int64
+	if err := db.GetDB().Model(&model.ChannelModel{}).Where("id = ?", 920102).Count(&count).Error; err != nil {
+		t.Fatalf("count channel model: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("channel model 920102 must not be written, got %d rows", count)
+	}
+}
+
+// TestImportForeignGroupIdentityRejectsNewItem 验证同 ID 但名称不同的本地分组不能被新增成员挂靠。
+func TestImportForeignGroupIdentityRejectsNewItem(t *testing.T) {
+	ctx := context.Background()
+	t.Cleanup(func() { cleanupImportTestRows(t) })
+
+	local := model.Group{ID: 920010, Name: "audit-local-group", Mode: model.GroupModeFailover}
+	ref := model.Group{ID: 920011, Name: "audit-ref-group", Mode: model.GroupModeFailover}
+	if err := db.GetDB().Create(&local).Error; err != nil {
+		t.Fatalf("seed local group: %v", err)
+	}
+	if err := db.GetDB().Create(&ref).Error; err != nil {
+		t.Fatalf("seed ref group: %v", err)
+	}
+
+	dump := &model.DBDump{
+		Version: dbDumpVersion,
+		Groups: []model.Group{
+			{ID: 920010, Name: "audit-foreign-group", Mode: model.GroupModeFailover},
+		},
+		GroupItems: []model.GroupItem{
+			{ID: 920020, GroupID: 920010, RefGroupName: "audit-ref-group", Priority: 1},
+		},
+	}
+
+	_, err := DBImportIncremental(ctx, dump)
+	if err == nil {
+		t.Fatal("import with mismatched parent group should fail")
+	}
+	var valErr *DBImportValidationError
+	if !errors.As(err, &valErr) {
+		t.Fatalf("error should be DBImportValidationError, got %T: %v", err, err)
+	}
+	found := false
+	for _, ref := range valErr.Preview.InvalidRefs {
+		if ref.Table == "group_items" && ref.ID == 920020 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("preview should report group_items id=920020, got %+v", valErr.Preview.InvalidRefs)
+	}
+	var count int64
+	if err := db.GetDB().Model(&model.GroupItem{}).Where("id = ?", 920020).Count(&count).Error; err != nil {
+		t.Fatalf("count group item: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("group item 920020 must not be written, got %d rows", count)
+	}
+}
+
+// TestImportSkipsExistingGroupItemBeforeRefValidation 验证已存在 ID 的成员按 DO NOTHING 跳过,
+// 即使其父引用失效也不阻塞整份导入。
+func TestImportSkipsExistingGroupItemBeforeRefValidation(t *testing.T) {
+	ctx := context.Background()
+	t.Cleanup(func() { cleanupImportTestRows(t) })
+
+	group := model.Group{ID: 920010, Name: "audit-existing-group", Mode: model.GroupModeFailover}
+	item := model.GroupItem{ID: 920020, GroupID: 920010, RefGroupName: "missing-group", Priority: 1}
+	if err := db.GetDB().Create(&group).Error; err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+	if err := db.GetDB().Create(&item).Error; err != nil {
+		t.Fatalf("seed group item: %v", err)
+	}
+
+	dump := &model.DBDump{
+		Version: dbDumpVersion,
+		Groups: []model.Group{
+			{ID: 920010, Name: "audit-existing-group", Mode: model.GroupModeFailover},
+		},
+		GroupItems: []model.GroupItem{
+			{ID: 920020, GroupID: 920010, RefGroupName: "missing-group", Priority: 1},
+		},
+	}
+
+	result, err := DBImportIncremental(ctx, dump)
+	if err != nil {
+		t.Fatalf("existing group item should be skipped without validation: %v", err)
+	}
+	if result.RowsAffected["groups"] != 0 || result.RowsAffected["group_items"] != 0 {
+		t.Fatalf("existing rows should be skipped, got %+v", result.RowsAffected)
+	}
+}
+
+// TestImportReusesExistingModelWhenChannelNameConflicts 验证同 ID 异名渠道不会连带
+// 禁用本地现存模型，新成员仍可引用该模型。
+func TestImportReusesExistingModelWhenChannelNameConflicts(t *testing.T) {
+	ctx := context.Background()
+	t.Cleanup(func() { cleanupImportTestRows(t) })
+
+	channel := model.Channel{ID: 920001, Name: "audit-local-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://local.invalid"}
+	channelModel := model.ChannelModel{ID: 920101, ChannelID: 920001, Name: "audit-local-model"}
+	group := model.Group{ID: 920010, Name: "audit-local-group", Mode: model.GroupModeFailover}
+	if err := db.GetDB().Create(&channel).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	if err := db.GetDB().Create(&channelModel).Error; err != nil {
+		t.Fatalf("seed channel model: %v", err)
+	}
+	if err := db.GetDB().Create(&group).Error; err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+
+	dump := &model.DBDump{
+		Version: dbDumpVersion,
+		Channels: []model.Channel{
+			{ID: 920001, Name: "audit-foreign-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://example.com"},
+		},
+		ChannelModels: []model.ChannelModel{
+			{ID: 920101, ChannelID: 920001, Name: "audit-local-model"},
+		},
+		GroupItems: []model.GroupItem{
+			{ID: 920020, GroupID: 920010, ChannelModelID: 920101, Priority: 1},
+		},
+	}
+
+	result, err := DBImportIncremental(ctx, dump)
+	if err != nil {
+		t.Fatalf("existing model should remain usable: %v", err)
+	}
+	if result.RowsAffected["group_items"] != 1 {
+		t.Fatalf("group item rows affected = %d, want 1", result.RowsAffected["group_items"])
+	}
+}
+
+// TestImportMissingGroupIDRejected 验证分组成员所属 GroupID 不存在时预检失败。
+func TestImportMissingGroupIDRejected(t *testing.T) {
+	ctx := context.Background()
+	t.Cleanup(func() { cleanupImportTestRows(t) })
+
+	dump := &model.DBDump{
+		Version: dbDumpVersion,
+		Groups: []model.Group{
+			{ID: 920010, Name: "audit-parent-group", Mode: model.GroupModeFailover},
+		},
+		GroupItems: []model.GroupItem{
+			{ID: 920020, GroupID: 920399, RefGroupName: "audit-parent-group", Priority: 1},
+		},
+	}
+
+	_, err := DBImportIncremental(ctx, dump)
+	if err == nil {
+		t.Fatal("import with missing parent group should fail")
+	}
+	var valErr *DBImportValidationError
+	if !errors.As(err, &valErr) {
+		t.Fatalf("error should be DBImportValidationError, got %T: %v", err, err)
+	}
+	found := false
+	for _, ref := range valErr.Preview.InvalidRefs {
+		if ref.Table == "group_items" && ref.ID == 920020 && strings.Contains(ref.Desc, "所属分组") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("preview should report missing group_id, got %+v", valErr.Preview.InvalidRefs)
+	}
+}
+
+// TestImportIdentityConsistentReusesParents 验证同 ID 同名称的父行可复用, 新增子行正常落库。
+func TestImportIdentityConsistentReusesParents(t *testing.T) {
+	ctx := context.Background()
+	t.Cleanup(func() { cleanupImportTestRows(t) })
+
+	ch := model.Channel{ID: 920001, Name: "audit-consistent-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://local.invalid"}
+	cm := model.ChannelModel{ID: 920101, ChannelID: 920001, Name: "audit-existing-model"}
+	group := model.Group{ID: 920010, Name: "audit-consistent-group", Mode: model.GroupModeFailover}
+	if err := db.GetDB().Create(&ch).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	if err := db.GetDB().Create(&cm).Error; err != nil {
+		t.Fatalf("seed channel model: %v", err)
+	}
+	if err := db.GetDB().Create(&group).Error; err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+
+	dump := &model.DBDump{
+		Version: dbDumpVersion,
+		Channels: []model.Channel{
+			{ID: 920001, Name: "audit-consistent-channel", Type: model.ChannelProviderOpenAI, BaseURL: "https://local.invalid"},
+		},
+		ChannelModels: []model.ChannelModel{
+			{ID: 920102, ChannelID: 920001, Name: "audit-added-model"},
+		},
+		Groups: []model.Group{
+			{ID: 920010, Name: "audit-consistent-group", Mode: model.GroupModeFailover},
+		},
+		GroupItems: []model.GroupItem{
+			{ID: 920020, GroupID: 920010, ChannelModelID: 920102, Priority: 1},
+		},
+	}
+
+	result, err := DBImportIncremental(ctx, dump)
+	if err != nil {
+		t.Fatalf("identity-consistent import: %v", err)
+	}
+	if result.RowsAffected["channels"] != 0 || result.RowsAffected["groups"] != 0 {
+		t.Fatalf("existing parents should be skipped, got %+v", result.RowsAffected)
+	}
+	if result.RowsAffected["channel_models"] != 1 || result.RowsAffected["group_items"] != 1 {
+		t.Fatalf("new children should be inserted, got %+v", result.RowsAffected)
 	}
 }
 
