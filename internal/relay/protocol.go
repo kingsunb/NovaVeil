@@ -469,6 +469,11 @@ var errAbnormalFinish = errors.New("upstream reported abnormal finish reason")
 // incomplete, 两者均已由既有异常判定覆盖, 无需重复处理。
 var errNoAnswerStop = errors.New("upstream finished with reasoning only and no answer content")
 
+// errInvalidToolCallArguments 表示上游返回的工具调用参数不是合法 JSON:
+// 非流式在提交前整轮判失败换目标重试; 流式在终止帧前中止, 让客户端按断流重试。
+// 不尝试修复或改写参数, 避免把模型生成的坏 JSON 变成看似成功的错误调用。
+var errInvalidToolCallArguments = errors.New("upstream returned invalid tool call arguments")
+
 // errStreamIdleTimeout 表示流式转发期相邻事件间隔超过配置的空闲超时:
 // 首有效内容后逐事件转发期间, 上游长时间不产出任何事件(疑似卡死的心跳流或挂起的连接),
 // 超过 MemberStreamIdleTimeoutSeconds 即以明确终态终止流并按失败定稿。0 表示不限时,
@@ -588,6 +593,35 @@ func validateRoundAnswer(format llm.APIFormat, body []byte) error {
 		return nil
 	}
 	return fmt.Errorf("%w: finish_reason stop with reasoning_content only", errNoAnswerStop)
+}
+
+// validateToolCallArguments 校验非流式 OpenAI Chat 响应的工具参数是否为合法 JSON。
+// 空参数放行(部分上游在工具无参数时省略内容), 非字符串参数不在此判定;
+// 仅在上游已给出参数却无法解析时判本轮无效, 避免客户端拿到无法执行的工具调用。
+func validateToolCallArguments(format llm.APIFormat, body []byte) error {
+	if format != llm.APIFormatOpenAIChatCompletion {
+		return nil
+	}
+	for _, choice := range gjson.GetBytes(body, "choices").Array() {
+		for _, call := range choice.Get("message.tool_calls").Array() {
+			if err := validateToolArguments(call.Get("function.name").String(), call.Get("function.arguments")); err != nil {
+				return err
+			}
+		}
+		if call := choice.Get("message.function_call"); call.Exists() {
+			if err := validateToolArguments(call.Get("name").String(), call.Get("arguments")); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateToolArguments(name string, args gjson.Result) error {
+	if args.Type != gjson.String || args.Str == "" || gjson.Valid(args.Str) {
+		return nil
+	}
+	return fmt.Errorf("%w: tool %q", errInvalidToolCallArguments, name)
 }
 
 // chatMessageHasAnswer 判定一条 OpenAI Chat 消息是否携带最终回答信号:

@@ -943,6 +943,9 @@ func validateCollapsedFreeBody(format llm.APIFormat, body []byte, usage *llm.Usa
 	if err := validateRoundAnswer(format, body); err != nil {
 		return err
 	}
+	if err := validateToolCallArguments(format, body); err != nil {
+		return err
+	}
 	if terminal != "" && !validChatFinishReason(terminal) {
 		return fmt.Errorf("%w: %q", errAbnormalFinish, terminal)
 	}

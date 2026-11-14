@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -178,6 +179,23 @@ func TestOfficialToolStreamFlushesAtEOF(t *testing.T) {
 	}
 	if got := gjson.GetBytes(out[0].Data, "choices.0.delta.tool_calls.0.function.name").String(); got != "Read" {
 		t.Fatalf("EOF 工具名未还原: %s", out[0].Data)
+	}
+}
+
+func TestOfficialToolStreamAbortsInvalidArguments(t *testing.T) {
+	stream := &officialToolStream{
+		inner: &fakeStream{events: []*httpclient.StreamEvent{
+			sseEvent(`{"id":"chunk","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{\"filePath\":\"x\""}}]}}]}`),
+			sseEvent(`{"id":"chunk","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`),
+			sseEvent(`[DONE]`),
+		}},
+		official: officialTestTargets(t),
+	}
+	for stream.Next() {
+		t.Fatalf("非法参数不应产出事件: %s", stream.Current().Data)
+	}
+	if !errors.Is(stream.Err(), errInvalidToolCallArguments) {
+		t.Fatalf("非法参数应返回哨兵错误, 得到: %v", stream.Err())
 	}
 }
 

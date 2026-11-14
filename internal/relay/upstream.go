@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/log"
 	"github.com/kingsunb/NovaVeil/internal/helper"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/looplj/axonhub/llm"
@@ -189,6 +188,12 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 		releaseConcurrency()
 		return nil, fmt.Errorf("%w: %s", err, errBodySnippet(response.Body))
 	}
+	// 模型偶尔会生成无法解析的工具参数; 在提交前判整轮无效, 交给既有换目标重试,
+	// 而不是把坏 JSON 原样交给客户端。
+	if err := validateToolCallArguments(format, response.Body); err != nil {
+		releaseConcurrency()
+		return nil, fmt.Errorf("%w: %s", err, errBodySnippet(response.Body))
+	}
 	// response.Body 是本请求的独立读取缓冲, 直接移交所有权, 不再整包克隆一份。
 	response.Body = restoreToolAliasesInBody(response.Body, toolAliases)
 	response.Body = restoreOfficialToolCallsInBody(response.Body, officialTools)
@@ -275,6 +280,7 @@ type officialToolStream struct {
 	template *httpclient.StreamEvent
 	ended    bool
 	aborted  bool
+	err      error
 }
 
 type officialToolPending struct {
@@ -286,6 +292,10 @@ type officialToolPending struct {
 }
 
 func (s *officialToolStream) Next() bool {
+	if s.err != nil {
+		s.current = nil
+		return false
+	}
 	for len(s.queue) == 0 && !s.ended {
 		if s.inner != nil && s.inner.Next() {
 			s.queue = append(s.queue, s.consume(s.inner.Current())...)
@@ -299,7 +309,7 @@ func (s *officialToolStream) Next() bool {
 			s.queue = append(s.queue, s.flushPending()...)
 		}
 	}
-	if len(s.queue) == 0 {
+	if s.err != nil || len(s.queue) == 0 {
 		s.current = nil
 		return false
 	}
@@ -318,6 +328,9 @@ func (s *officialToolStream) Close() error {
 }
 
 func (s *officialToolStream) Err() error {
+	if s.err != nil {
+		return s.err
+	}
 	if s.inner == nil {
 		return nil
 	}
@@ -345,6 +358,9 @@ func (s *officialToolStream) consume(ev *httpclient.StreamEvent) []*httpclient.S
 	trimmed := strings.TrimSpace(string(ev.Data))
 	if trimmed == "[DONE]" {
 		out := s.flushPending()
+		if s.err != nil {
+			return nil
+		}
 		return append(out, ev)
 	}
 	if failure := gjson.GetBytes(ev.Data, "error"); failure.Exists() && failure.Type != gjson.Null {
@@ -403,6 +419,9 @@ func (s *officialToolStream) consume(ev *httpclient.StreamEvent) []*httpclient.S
 	}
 	if finish {
 		out := s.flushPending()
+		if s.err != nil {
+			return nil
+		}
 		return append(out, stripToolCallsFromEvent(ev))
 	}
 	if sawTool {
@@ -439,9 +458,12 @@ func (s *officialToolStream) flushPending() []*httpclient.StreamEvent {
 				args = adaptOfficialToolArguments(pending.name, args, target)
 			}
 		}
-		// 上游可能给出残缺参数, 直接告警便于定位
 		if args != "" && !gjson.Valid(args) {
-			log.Warnf("tool call %q 参数非法 JSON, 长度 %d, 首 60 字节: %.60q", name, len(args), args)
+			s.err = fmt.Errorf("%w: tool %q", errInvalidToolCallArguments, name)
+			s.aborted = true
+			s.pending = nil
+			s.order = nil
+			return nil
 		}
 		if ev := s.syntheticToolCall(pending, name, args); ev != nil {
 			out = append(out, ev)
@@ -1117,6 +1139,10 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		}
 		// 思考-only 空回答轮次(stop 终态但只有推理内容)同样在提交前整轮判无效换目标重试。
 		if err := validateRoundAnswer(format, result.Response.Body); err != nil {
+			releaseConcurrency()
+			return nil, fmt.Errorf("%w: %s", err, middleware.rawBody)
+		}
+		if err := validateToolCallArguments(format, result.Response.Body); err != nil {
 			releaseConcurrency()
 			return nil, fmt.Errorf("%w: %s", err, middleware.rawBody)
 		}
