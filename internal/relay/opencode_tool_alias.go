@@ -396,6 +396,11 @@ func adaptOfficialToolArguments(official, args string, target ocOfficialToolTarg
 	if strings.TrimSpace(args) == "" {
 		args = "{}"
 	}
+	// 非法 JSON 不做适配: gjson.Parse 宽松解析会把坏参数洗成合法对象,
+	// 上游的错误参数必须原样暴露给调用方的合法性校验。
+	if !gjson.Valid(args) {
+		return args
+	}
 	parsed := gjson.Parse(args)
 	if !parsed.IsObject() {
 		return args

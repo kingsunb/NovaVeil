@@ -108,10 +108,10 @@ describe("GroupEditor relay_config 默认值契约", () => {
     const cooldown = screen.getByLabelText(/^冷却时间/) as HTMLInputElement;
     expect(cooldown.value).toBe("60");
     expect(screen.getByLabelText(/^重试间隔/)).toHaveValue(2);
-    // 路由策略页有 会话粘合 / 后台定时探测 / 协议透传偏好 / 启用脱敏 / 回显请求模型名 /
-    // 上下文窗口过滤 / 拒绝标题类请求 七个开关；粘合默认开
+    // 路由策略页有 会话粘合 / 后台定时探测 / 请求触发半开探测 / 协议透传偏好 / 启用脱敏 /
+    // 回显请求模型名 / 上下文窗口过滤 / 拒绝标题类请求 八个开关；粘合默认开
     const switches = screen.getAllByRole("switch");
-    expect(switches.length).toBe(7);
+    expect(switches.length).toBe(8);
     expect(switches[0]).toHaveAttribute("aria-checked", "true");
   });
 

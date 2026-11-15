@@ -11,7 +11,8 @@ DeepSeek 等上游偶尔在 OpenAI Chat 的 `tool_calls[].function.arguments` �
 ## 决定
 
 - 非流式 OpenAI Chat：在 `validateRoundAnswer` 之后、工具别名还原之前调用 `validateToolCallArguments`。只检查字符串类型的 `message.tool_calls[].function.arguments` 与旧式 `message.function_call.arguments`；空字符串放行，非字符串忽略，非 Chat 协议不检查。非法时返回 `errInvalidToolCallArguments`，复用既有换目标重试。
-- 流式官方工具缓冲：`officialToolStream.flushPending` 在合成工具调用前检查累计 `arguments`。任一非空参数不是合法 JSON 时，记录 `errInvalidToolCallArguments`、置 `aborted`、清空 pending/order，不产出任何工具调用事件；`consume` 的 finish 与 `[DONE]` 分支在错误状态下不再追加终止帧，`Err()` 返回该错误，让 handler 按流错误结束并由客户端重试。
+- 流式官方工具缓冲：`officialToolStream.flushPending` 在**官方工具适配之前**检查上游原始累计 `arguments`。任一非空参数不是合法 JSON 时，记录 `errInvalidToolCallArguments`、置 `aborted`、清空 pending/order，不产出任何工具调用事件；`consume` 的 finish 与 `[DONE]` 分支在错误状态下不再追加终止帧，`Err()` 返回该错误，让 handler 按流错误结束并由客户端重试。
+- 官方工具参数适配（`adaptOfficialToolArguments`）遇到非法 JSON 时原样返回，不做键名改写：它用的是宽松解析（`gjson.Parse`），会把缺括号的坏参数“洗成”合法对象，先适配再校验会让非法参数蒙混过关。
 - 不自动修复、不补引号、不重新编码模型生成的参数。网关只做交付前校验，避免把错误调用伪装成成功。
 
 ## 备选方案
@@ -24,6 +25,7 @@ DeepSeek 等上游偶尔在 OpenAI Chat 的 `tool_calls[].function.arguments` �
 ## 后果
 
 - **收益**：非法工具参数不再作为成功响应交付；非流式可自动换目标重试，流式会以错误断流，客户端可重试。
+- 官方工具参数适配不再把非法 JSON “洗成”合法对象：适配层用宽松解析重建参数，坏参数原本会被改写成看起来合法的对象并交付客户端；现在原样保留，由交付前的合法性校验拦截。
 - **代价与已知上限**：模型连续生成坏参数时可能连续失败，消耗重试次数与 token；流式在已有内容后才发现坏参数时，客户端会看到已输出内容后断流；空参数仍放行，由工具自身处理；非 OpenAI Chat 协议依赖其结构化输入校验。
 - 上游成功返回后才会进入本校验，不改变路由、计费或用量统计口径。
 

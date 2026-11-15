@@ -118,6 +118,18 @@ func TestAdaptOfficialToolArgumentsKeepsArgsWithoutProperties(t *testing.T) {
 	}
 }
 
+func TestAdaptOfficialToolArgumentsKeepsInvalidJSON(t *testing.T) {
+	targets := buildOfficialToolTargets([]byte(`{"tools":[{"type":"function","function":{"name":"Read","parameters":{"type":"object","properties":{"file_path":{"type":"string"}}}}}]}`))
+	target, ok := targets["read"]
+	if !ok {
+		t.Fatalf("read 目标缺失: %+v", targets)
+	}
+	const args = `{"filePath":"x"`
+	if got := adaptOfficialToolArguments("read", args, target); got != args {
+		t.Fatalf("非法 JSON 被洗成合法参数: %s", got)
+	}
+}
+
 func TestRestoreOfficialToolCallsInBody(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"tool_calls":[{"id":"1","type":"function","function":{"name":"read","arguments":"{\"filePath\":\"C:\\\\x\",\"offset\":1,\"unknown\":true}"}}]}}]}`)
 	out := restoreOfficialToolCallsInBody(body, officialTestTargets(t))

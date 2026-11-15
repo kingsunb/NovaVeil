@@ -450,6 +450,15 @@ func (s *officialToolStream) flushPending() []*httpclient.StreamEvent {
 			official = false
 		}
 		args := pending.arguments.String()
+		// 先校验上游原始参数: 官方工具适配用宽松解析改写参数,
+		// 放到适配之后检查会让非法 JSON 被洗成合法参数后放行。
+		if args != "" && !gjson.Valid(args) {
+			s.err = fmt.Errorf("%w: tool %q", errInvalidToolCallArguments, pending.name)
+			s.aborted = true
+			s.pending = nil
+			s.order = nil
+			return nil
+		}
 		if official {
 			if target.clientName != "" {
 				name = target.clientName
@@ -457,13 +466,6 @@ func (s *officialToolStream) flushPending() []*httpclient.StreamEvent {
 			if args != "" {
 				args = adaptOfficialToolArguments(pending.name, args, target)
 			}
-		}
-		if args != "" && !gjson.Valid(args) {
-			s.err = fmt.Errorf("%w: tool %q", errInvalidToolCallArguments, name)
-			s.aborted = true
-			s.pending = nil
-			s.order = nil
-			return nil
 		}
 		if ev := s.syntheticToolCall(pending, name, args); ev != nil {
 			out = append(out, ev)
