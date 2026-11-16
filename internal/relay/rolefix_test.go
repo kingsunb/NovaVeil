@@ -156,3 +156,25 @@ func readBody(r *http.Request) ([]byte, error) {
 
 // context 引用保持(测试文件内未直接使用的导入占位)。
 var _ = context.Background
+
+// TestNormalizeChatContent 锁定 null/缺失 content 补为空串, 非空与数组不变。
+func TestNormalizeChatContent(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":null},{"role":"assistant","content":"hi"}]}`)
+	out := normalizeChatContent(body)
+	if got := gjson.GetBytes(out, "messages.0.content").String(); got != "" {
+		t.Fatalf("null content 应补为空串: %s", out)
+	}
+	if got := gjson.GetBytes(out, "messages.1.content").String(); got != "hi" {
+		t.Fatalf("非 null content 不应改变: %s", out)
+	}
+	body2 := []byte(`{"messages":[{"role":"user"}]}`)
+	out2 := normalizeChatContent(body2)
+	if got := gjson.GetBytes(out2, "messages.0.content").String(); got != "" {
+		t.Fatalf("缺失 content 应补为空串: %s", out2)
+	}
+	body3 := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	out3 := normalizeChatContent(body3)
+	if !gjson.GetBytes(out3, "messages.0.content").IsArray() {
+		t.Fatalf("数组 content 不应改变: %s", out3)
+	}
+}

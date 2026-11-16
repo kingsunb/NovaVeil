@@ -64,6 +64,7 @@ func TestOpencodeProtocolContractPreservesClientTools(t *testing.T) {
 					if protocol == model.UpstreamProtocolChat {
 						wire = ocExpectWireName(name)
 						want = strings.Replace(want, `"name": "`+name+`"`, `"name": "`+wire+`"`, 1)
+						want = strings.Replace(want, `"description": "client definition"`, `"description": "client\u200b definition"`, 1)
 						if aliases[wire] != name {
 							t.Fatalf("缺少客户端映射 %s: %v", name, aliases)
 						}

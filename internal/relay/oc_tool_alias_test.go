@@ -145,3 +145,86 @@ func TestShapeV1AlsoAlignsToolset(t *testing.T) {
 		t.Fatalf("v1 应把客户端工具改名为 clint_ 前缀: %v", aliases)
 	}
 }
+
+// TestBuildOfficialToolTargetsCodexCandidates 锁定 Codex 客户端候选映射。
+func TestBuildOfficialToolTargetsCodexCandidates(t *testing.T) {
+	targets := buildOfficialToolTargets([]byte(`{"tools":[
+		{"type":"function","function":{"name":"exec_command","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false}}},
+		{"type":"function","function":{"name":"update_plan","parameters":{"type":"object","properties":{"plan":{"type":"array"}},"required":["plan"],"additionalProperties":false}}},
+		{"type":"function","function":{"name":"apply_patch","parameters":{"type":"object","properties":{"input":{"type":"string"}},"required":["input"],"additionalProperties":false}}}
+	]}`))
+	if targets["bash"].clientName != "exec_command" {
+		t.Fatalf("bash 应映射到 exec_command: %+v", targets["bash"])
+	}
+	if targets["shell"].clientName != "exec_command" {
+		t.Fatalf("shell 应映射到 exec_command: %+v", targets["shell"])
+	}
+	if targets["todowrite"].clientName != "update_plan" {
+		t.Fatalf("todowrite 应映射到 update_plan: %+v", targets["todowrite"])
+	}
+	if targets["todowrite"].transform == nil {
+		t.Fatal("todowrite→update_plan 应注册 transform")
+	}
+	if targets["patch"].clientName != "apply_patch" {
+		t.Fatalf("patch 应映射到 apply_patch: %+v", targets["patch"])
+	}
+}
+
+// TestTodoWriteToUpdatePlanArgs 锁定 todos→plan 变换: 丢弃 cancelled,
+// content 映射为 step, status 归一。
+func TestTodoWriteToUpdatePlanArgs(t *testing.T) {
+	args := `{"todos":[{"content":"step1","status":"in_progress"},{"content":"step2","status":"completed"},{"content":"step3","status":"cancelled"},{"content":"step4","status":"pending"}]}`
+	got := todoWriteToUpdatePlanArgs("todowrite", args)
+	plan := gjson.Get(got, "plan")
+	if !plan.IsArray() || len(plan.Array()) != 3 {
+		t.Fatalf("应丢弃 cancelled 保留 3 条: %s", got)
+	}
+	if gjson.Get(got, "plan.0.step").String() != "step1" {
+		t.Fatalf("content 应映射为 step: %s", got)
+	}
+	if gjson.Get(got, "plan.0.status").String() != "in_progress" {
+		t.Fatalf("in_progress 应保留: %s", got)
+	}
+	if gjson.Get(got, "plan.2.status").String() != "pending" {
+		t.Fatalf("pending 应保留: %s", got)
+	}
+	// 非法 JSON 原样返回
+	bad := `not json`
+	if todoWriteToUpdatePlanArgs("todowrite", bad) != bad {
+		t.Fatal("非法 JSON 应原样返回")
+	}
+}
+
+// TestObfuscateToolDescription 锁定描述混淆: 插零宽空格, 幂等, 无空格不变。
+func TestObfuscateToolDescription(t *testing.T) {
+	got := obfuscateToolDescription("hello world")
+	if !strings.ContainsRune(got, '\u200b') {
+		t.Fatal("应插入零宽空格")
+	}
+	if strings.Contains(got, "hello world") {
+		t.Fatal("原文不应直接出现")
+	}
+	if obfuscateToolDescription(got) != got {
+		t.Fatal("应幂等")
+	}
+	if obfuscateToolDescription("nospace") != "nospace" {
+		t.Fatal("无空格描述不应改变")
+	}
+	if obfuscateToolDescription("") != "" {
+		t.Fatal("空串不应改变")
+	}
+}
+
+// TestSanitizeSchemaDescriptions 锁定嵌套 description 混淆与无描述时不变。
+func TestSanitizeSchemaDescriptions(t *testing.T) {
+	raw := []byte(`{"type":"object","properties":{"x":{"type":"string","description":"hello world"}}}`)
+	got := sanitizeSchemaDescriptions(raw)
+	desc := gjson.GetBytes(got, "properties.x.description").String()
+	if !strings.ContainsRune(desc, '\u200b') {
+		t.Fatalf("嵌套 description 应被混淆: %s", got)
+	}
+	raw2 := []byte(`{"type":"object","properties":{"x":{"type":"string"}}}`)
+	if string(sanitizeSchemaDescriptions(raw2)) != string(raw2) {
+		t.Fatal("无 description 的 schema 不应改变")
+	}
+}

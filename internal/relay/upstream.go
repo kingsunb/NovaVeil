@@ -464,6 +464,9 @@ func (s *officialToolStream) flushPending() []*httpclient.StreamEvent {
 				name = target.clientName
 			}
 			if args != "" {
+				if target.transform != nil {
+					args = target.transform(pending.name, args)
+				}
 				args = adaptOfficialToolArguments(pending.name, args, target)
 			}
 		}
@@ -767,6 +770,7 @@ func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *
 	if m.format == llm.APIFormatOpenAIChatCompletion {
 		toolChoice := gjson.GetBytes(request.Body, "tool_choice")
 		request.Body = normalizeChatRoles(request.Body)
+		request.Body = normalizeChatContent(request.Body)
 		if toolChoice.Exists() && isOpencodeFreeModel(m.channel, bodyModelName(request.Body)) && !gjson.GetBytes(request.Body, "tool_choice").Exists() {
 			var err error
 			request.Body, err = sjson.SetRawBytes(request.Body, "tool_choice", []byte(toolChoice.Raw))
@@ -947,6 +951,27 @@ func normalizeChatRoles(body []byte) []byte {
 				out = o
 			}
 		}
+	}
+	return out
+}
+
+// normalizeChatContent 把 null 或缺失的 content 补为空串。
+// 严格上游(DashScope/Cloudflare)拒绝 null content。
+func normalizeChatContent(body []byte) []byte {
+	rows := gjson.GetBytes(body, "messages").Array()
+	if len(rows) == 0 {
+		return body
+	}
+	out := body
+	for i, row := range rows {
+		if row.Get("content").Type != gjson.Null {
+			continue
+		}
+		next, err := sjson.SetBytes(out, fmt.Sprintf("messages.%d.content", i), "")
+		if err != nil {
+			return body
+		}
+		out = next
 	}
 	return out
 }

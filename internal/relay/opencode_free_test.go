@@ -100,10 +100,11 @@ func TestShapeOpencodeFreeBodyPreservesSameNameTools(t *testing.T) {
 		t.Fatalf("同名客户端工具应独立改名: %v", aliases)
 	}
 	want := strings.Replace(client, `"name":"shell"`, `"name":"`+ocExpectWireName("shell")+`"`, 1)
+	want = strings.Replace(want, `"description":"my custom"`, `"description":"my\u200b custom"`, 1)
 	for _, tool := range gjson.GetBytes(body, "tools").Array() {
 		if tool.Get("function.name").String() == ocExpectWireName("shell") {
 			if tool.Raw != want {
-				t.Fatalf("仅允许改名，不能覆盖定义: %s", tool.Raw)
+				t.Fatalf("仅改名与描述混淆, 不覆盖定义: %s", tool.Raw)
 			}
 			return
 		}

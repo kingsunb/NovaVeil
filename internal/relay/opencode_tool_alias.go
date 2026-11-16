@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"unicode"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -169,7 +170,79 @@ func ocToolRename(raw string, taken map[string]bool, aliases map[string]string) 
 		return "", false
 	}
 	aliases[renamed] = name
+	if desc := gjson.GetBytes(next, "function.description").String(); desc != "" {
+		if next, err = sjson.SetBytes(next, "function.description", obfuscateToolDescription(desc)); err != nil {
+			return "", false
+		}
+	}
+	if params := gjson.GetBytes(next, "function.parameters"); params.Exists() {
+		if sanitized := sanitizeSchemaDescriptions([]byte(params.Raw)); string(sanitized) != params.Raw {
+			if next, err = sjson.SetRawBytes(next, "function.parameters", sanitized); err != nil {
+				return "", false
+			}
+		}
+	}
 	return string(next), true
+}
+
+// obfuscateToolDescription 在空格前插零宽空格以混淆指纹, 幂等。
+func obfuscateToolDescription(desc string) string {
+	if desc == "" || strings.ContainsRune(desc, '\u200b') {
+		return desc
+	}
+	runes := []rune(desc)
+	b := strings.Builder{}
+	for _, r := range runes {
+		if unicode.IsSpace(r) {
+			b.WriteRune('\u200b')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// sanitizeSchemaDescriptions 递归混淆 schema 内全部 description。
+func sanitizeSchemaDescriptions(raw []byte) []byte {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return raw
+	}
+	if !obfuscateDescInPlace(v) {
+		return raw
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// obfuscateDescInPlace 递归混淆 description 字段, 返回是否有改动。
+func obfuscateDescInPlace(v any) bool {
+	changed := false
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if k == "description" {
+				if s, ok := val.(string); ok && s != "" {
+					ob := obfuscateToolDescription(s)
+					if ob != s {
+						t[k] = ob
+						changed = true
+					}
+				}
+			} else if obfuscateDescInPlace(val) {
+				changed = true
+			}
+		}
+	case []any:
+		for _, item := range t {
+			if obfuscateDescInPlace(item) {
+				changed = true
+			}
+		}
+	}
+	return changed
 }
 
 func rewriteToolReferences(body []byte, aliases map[string]string) []byte {
@@ -294,8 +367,8 @@ func restoreToolAliasesInEvent(data []byte, aliases map[string]string) []byte {
 
 // ocOfficialToolCandidates 是官方工具名到客户端等价名的候选, 按优先级排列。
 var ocOfficialToolCandidates = map[string][]string{
-	"bash":      []string{"Bash", "bash", "pwsh"},
-	"shell":     []string{"Bash", "bash", "pwsh", "shell"},
+	"bash":      []string{"Bash", "bash", "pwsh", "exec_command"},
+	"shell":     []string{"Bash", "bash", "pwsh", "shell", "exec_command"},
 	"edit":      []string{"Edit", "edit"},
 	"read":      []string{"Read", "read"},
 	"write":     []string{"Write", "write"},
@@ -304,10 +377,11 @@ var ocOfficialToolCandidates = map[string][]string{
 	"question":  []string{"AskUserQuestion", "ask_user_question"},
 	"task":      []string{"Agent", "Task", "task", "subagent"},
 	"subagent":  []string{"Agent", "Task", "subagent"},
-	"todowrite": []string{"TodoWrite", "todo_write", "todo"},
+	"todowrite": []string{"TodoWrite", "todo_write", "todo", "update_plan"},
 	"webfetch":  []string{"WebFetch", "web_fetch", "fetch_content"},
 	"websearch": []string{"WebSearch", "web_search"},
 	"skill":     []string{"Skill", "skill"},
+	"patch":     []string{"apply_patch"},
 }
 
 // ocOfficialToolTarget 保存客户端声明名及其参数白名单。
@@ -317,6 +391,7 @@ type ocOfficialToolTarget struct {
 	properties map[string]struct{}
 	required   map[string]struct{}
 	hasSchema  bool
+	transform  func(official, args string) string
 }
 
 // buildOfficialToolTargets 从已转成 Chat 的客户端工具声明建官方名映射。
@@ -366,10 +441,48 @@ func buildOfficialToolTargets(body []byte) map[string]ocOfficialToolTarget {
 	if len(targets) == 0 {
 		return nil
 	}
+	if t, ok := targets["todowrite"]; ok && t.clientName == "update_plan" {
+		t.transform = todoWriteToUpdatePlanArgs
+		targets["todowrite"] = t
+	}
 	return targets
 }
 
 const ocWebFetchDefaultPrompt = "Return the page content."
+
+// todoWriteToUpdatePlanArgs 把官方 todowrite 的 todos 数组转为 update_plan 的 plan 数组。
+// 丢弃 cancelled 条目; content 映射为 step; status 归一为 update_plan 接受的三态。
+func todoWriteToUpdatePlanArgs(official, args string) string {
+	if !gjson.Valid(args) {
+		return args
+	}
+	todos := gjson.Get(args, "todos")
+	if !todos.IsArray() {
+		return args
+	}
+	plan := make([]map[string]string, 0, len(todos.Array()))
+	for _, todo := range todos.Array() {
+		status := strings.ToLower(strings.TrimSpace(todo.Get("status").String()))
+		if status == "cancelled" {
+			continue
+		}
+		step := strings.TrimSpace(todo.Get("content").String())
+		if step == "" {
+			continue
+		}
+		switch status {
+		case "in_progress", "completed":
+		default:
+			status = "pending"
+		}
+		plan = append(plan, map[string]string{"step": step, "status": status})
+	}
+	data, err := json.Marshal(map[string]any{"plan": plan})
+	if err != nil {
+		return args
+	}
+	return string(data)
+}
 
 // ocOfficialArgumentAliases 是官方参数键到客户端常见键的候选。
 var ocOfficialArgumentAliases = map[string][]string{
@@ -385,6 +498,7 @@ var ocOfficialArgumentAliases = map[string][]string{
 	"id":         []string{"skill"},
 	"command":    []string{"script", "cmd"},
 	"workdir":    []string{"cwd"},
+	"patchText":  []string{"input"},
 }
 
 // adaptOfficialToolArguments 按客户端 schema 改参数键并递归丢弃未声明键。
@@ -529,6 +643,9 @@ func restoreOfficialToolCallsInBody(body []byte, targets map[string]ocOfficialTo
 			}
 			base := fmt.Sprintf("choices.%d.message.tool_calls.%d.function", i, j)
 			if args := function.Get("arguments").String(); args != "" && target.hasSchema {
+				if target.transform != nil {
+					args = target.transform(official, args)
+				}
 				next, err := sjson.SetBytes(out, base+".arguments", adaptOfficialToolArguments(official, args, target))
 				if err != nil {
 					continue
