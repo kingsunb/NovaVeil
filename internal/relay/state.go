@@ -494,7 +494,7 @@ func jitteredWaitSeconds(seconds float64) float64 {
 	if seconds <= 0 {
 		return seconds
 	}
-	return seconds * (1 + rand.Float64()*retryJitterRatio)
+	return seconds * (1 + rand.Float64()*retryJitterRatio) // #nosec G404 退避抖动非安全用途
 }
 
 // wait 在重新选择目标之前退避 seconds 秒, 支持小数秒与 0 秒立即重试;
