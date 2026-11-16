@@ -22,3 +22,10 @@ updates:
       frontend-dependencies:
         patterns:
           - "*"
+    ignore:
+      # typescript-eslint 尚不支持 TS 7
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # 运行时为 Node 22, 类型需对齐
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
