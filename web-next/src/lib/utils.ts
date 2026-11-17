@@ -219,39 +219,6 @@ export function downloadText(
 }
 
 /**
- * 导入设置前的校验 —— 抽成纯函数便于单测
- *  - 1 MB 上限（防止 DoS）
- *  - 必须 JSON parse 成功
- *  - 顶层必须是 plain object
- *  - 所有 value 必须是 string（后端 KV 存储）
- *
- * 返回校验后的对象；失败抛 Error。
- */
-export function validateSettingsImport(text: string, size: number): Record<string, string> {
-  const MAX = 1024 * 1024;
-  if (size > MAX) {
-    throw new Error(`文件过大（${(size / 1024).toFixed(0)} KB > 1 MB）`);
-  }
-  let data: unknown;
-  try {
-    data = JSON.parse(text);
-  } catch (e) {
-    throw new Error("JSON 解析失败：" + (e as Error).message, { cause: e });
-  }
-  if (data === null || typeof data !== "object" || Array.isArray(data)) {
-    throw new Error("JSON 顶层必须是对象（key → value）");
-  }
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(data)) {
-    if (typeof v !== "string") {
-      throw new Error(`设置项 ${k} 的值必须是字符串，实际为 ${typeof v}`);
-    }
-    out[k] = v;
-  }
-  return out;
-}
-
-/**
  * 导入完整数据库备份前的校验。
  * 后端 /setting/import 接受 DBDump（不是只有 KV 的设置对象），上限与后端
  * maxDBImportBodyBytes 对齐为 128 MiB；对象数量和表结构由后端再次校验。

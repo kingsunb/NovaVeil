@@ -2001,7 +2001,7 @@ function BackupSection() {
           <div>
             <p className="text-sm font-medium text-ink">导入 JSON</p>
             <p className="text-xs text-ink-muted">
-              选择文件后需再次确认。导入会覆盖渠道、分组、密钥和设置（最大 1 MB）
+              选择文件后需再次确认。导入会覆盖渠道、分组、密钥和设置（最大 128 MB）
             </p>
           </div>
           <input

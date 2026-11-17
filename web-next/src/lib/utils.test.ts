@@ -15,7 +15,6 @@ import {
   URL_RULE,
   validateDBDumpImport,
   validateField,
-  validateSettingsImport,
 } from "./utils";
 
 describe("cn", () => {
@@ -157,45 +156,6 @@ describe("downloadJson", () => {
       HTMLAnchorElement.prototype.click = origClick;
       vi.useRealTimers();
     }
-  });
-});
-
-describe("validateSettingsImport", () => {
-  it("合法 KV 通过", () => {
-    const out = validateSettingsImport('{"a":"1","b":"2"}', 10);
-    expect(out).toEqual({ a: "1", b: "2" });
-  });
-
-  it("超大文件被拒", () => {
-    expect(() => validateSettingsImport('{"a":"1"}', 2 * 1024 * 1024)).toThrow(
-      /文件过大/,
-    );
-  });
-
-  it("非法 JSON 抛错", () => {
-    expect(() => validateSettingsImport("not json", 5)).toThrow(/JSON 解析失败/);
-  });
-
-  it("顶层是数组被拒", () => {
-    expect(() => validateSettingsImport("[1,2,3]", 5)).toThrow(
-      /JSON 顶层必须是对象/,
-    );
-  });
-
-  it("顶层是 null 被拒", () => {
-    expect(() => validateSettingsImport("null", 4)).toThrow(
-      /JSON 顶层必须是对象/,
-    );
-  });
-
-  it("value 非 string 被拒", () => {
-    expect(() => validateSettingsImport('{"foo": 123}', 14)).toThrow(
-      /foo.*必须是字符串/,
-    );
-  });
-
-  it("空对象合法", () => {
-    expect(validateSettingsImport("{}", 2)).toEqual({});
   });
 });
 
