@@ -315,6 +315,9 @@ func (t *bunSidecarTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	if err != nil {
 		return nil, fmt.Errorf("bun sidecar payload: %w", err)
 	}
+	if os.Getenv("NOVEIL_SIDECAR_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "[sidecar-go] url=%s body_len=%d hdrs=%v\n", payload.URL, len(payload.Body), payload.Headers)
+	}
 	forward, err := http.NewRequestWithContext(req.Context(), http.MethodPost, sidecar.endpoint, bytes.NewReader(encoded))
 	if err != nil {
 		return nil, fmt.Errorf("bun sidecar request: %w", err)
