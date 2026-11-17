@@ -178,7 +178,7 @@ func TestEnsureFreeBuiltinChannelsClearsCustomFreeFlag(t *testing.T) {
 }
 
 func TestBuiltinFreeChannelsDefinitions(t *testing.T) {
-	if got, want := len(BuiltinFreeChannels), 18; got != want {
+	if got, want := len(BuiltinFreeChannels), 16; got != want {
 		t.Fatalf("BuiltinFreeChannels count = %d, want %d", got, want)
 	}
 	seen := make(map[string]bool, len(BuiltinFreeChannels))
@@ -215,8 +215,12 @@ func TestBuiltinFreeChannelsDefinitions(t *testing.T) {
 
 func TestBuiltinFreeChannelsOpencodeLaneMapping(t *testing.T) {
 	retired := map[string]bool{
-		"OpenCode Free":     true,
-		"OpenCode Free Old": true,
+		"OpenCode Free":        true,
+		"OpenCode Free Old":    true,
+		"OpenCode Free V1":     true,
+		"OpenCode Free V1 账号池": true,
+		"OpenCode Free V1 备用1": true,
+		"OpenCode Free V1 备用2": true,
 	}
 	byName := make(map[string]model.Channel)
 	for _, def := range BuiltinFreeChannels {
@@ -228,8 +232,9 @@ func TestBuiltinFreeChannelsOpencodeLaneMapping(t *testing.T) {
 		}
 	}
 	want := map[string]string{
-		"OpenCode Free V2": "v2",
-		"OpenCode Free V1": "v1",
+		"OpenCode Free V2":     "v2",
+		"OpenCode Free V2 备用1": "v2",
+		"OpenCode Free V2 备用2": "v2",
 	}
 	for name, lane := range want {
 		def, ok := byName[name]
@@ -245,35 +250,18 @@ func TestBuiltinFreeChannelsOpencodeLaneMapping(t *testing.T) {
 	}
 }
 
-func TestBuiltinKeyedOpencodeFreeChannel(t *testing.T) {
-	var def *model.Channel
-	for i := range BuiltinFreeChannels {
-		if BuiltinFreeChannels[i].Name == "OpenCode Free V1 账号池" {
-			def = &BuiltinFreeChannels[i]
-			break
+// 1.x 免费档已停止支持: 出厂只剩 v2 lane 且不带 Keyed 账号池。
+func TestBuiltinOpencodeFreeRetiredChannels(t *testing.T) {
+	for _, def := range BuiltinFreeChannels {
+		if !def.OpencodeCompat {
+			continue
 		}
-	}
-	if def == nil {
-		t.Fatal("BuiltinFreeChannels should contain OpenCode Free V1 账号池")
-	}
-	if !def.Keyed {
-		t.Fatal("keyed channel should mark Keyed=true")
-	}
-	if def.Key != "" || def.ChannelProxy != nil {
-		t.Fatalf("keyed channel should have no public Key or proxy: key=%q proxy=%v", def.Key, def.ChannelProxy)
-	}
-	if !def.OpencodeCompat || def.OpencodeLane != "v1" {
-		t.Fatalf("keyed channel shape = compat%v lane%q, want v1", def.OpencodeCompat, def.OpencodeLane)
-	}
-	stored := freeChannelFromDefinition(*def)
-	if !stored.IsFree || !stored.Builtin || stored.Enabled {
-		t.Fatalf("keyed channel defaults wrong: IsFree=%v Builtin=%v Enabled=%v", stored.IsFree, stored.Builtin, stored.Enabled)
-	}
-	if stored.Key != "" || len(stored.Keys) != 0 {
-		t.Fatalf("keyed channel must start without keys: key=%q keys=%d", stored.Key, len(stored.Keys))
-	}
-	if len(stored.Models) == 0 {
-		t.Fatal("keyed channel should ship fallback models")
+		if def.OpencodeLane != "v2" {
+			t.Fatalf("channel %q should not ship a non-v2 lane", def.Name)
+		}
+		if def.Keyed {
+			t.Fatalf("channel %q should not ship a keyed variant", def.Name)
+		}
 	}
 }
 

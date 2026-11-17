@@ -54,11 +54,9 @@ func init() {
 //
 //   - OpenCode Free V2：公开免费端点，OpenAI Compatible；需要 OpenCode 会话头，
 //     后端 OpencodeCompat 机制负责注入 x-opencode-session。
-//   - OpenCode Free V1 备用1 / 备用2：V1 的同构副本，默认停用，供实例单独挂
+//   - OpenCode Free V2 备用1 / 备用2：V2 的同构副本，供实例单独挂
 //     resin/WARP 代理做出出口隔离与容灾。
-//   - OpenCode Free V1 账号池：密钥型免费渠道，无 public Key、默认无代理，
-//     出厂禁用；管理员配置真实 Key 后启用，Key 走轮询，配置 {account} 代理后
-//     按 Key 分区进入 IP 账号池；每个 Key 的账号固定为 Key.ID，不随机生成。
+//   - 1.x 免费档（v1 lane）已停止支持，v1 渠道不再出厂。
 //   - AI Horde Free：社区志愿算力，OpenAI Compatible 匿名端点；匿名 key 固定为
 //     0000000000，队列式响应较慢，不保证工具调用。
 //   - Pollinations Free：免 key OpenAI Compatible 端点，模型列表较大，
@@ -105,22 +103,14 @@ var BuiltinFreeChannels = []model.Channel{
 			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
 		},
 	},
+	// V2 备用副本: 挂独立出口做容灾。
 	{
-		// OpenCode Free V1: opencode 1.x 客户端形态(历史上对应 legacy /zen/v1 通道)。
-		// 2026-10-26 实测: /zen 已关闭(官方 1.19.4 客户端指向 /zen/v1 同样 429),
-		// 官方 1.x 默认 baseURL 就是 https://opencode.ai/inference。因此本渠道改为与
-		// OpenCode Free V2 同一端点, 仅保留 1.x 形态差异(由 OpencodeLane="v1" 承载):
-		//   - User-Agent 用 v1 模型请求格式 opencode/1.19.5 ai-sdk/provider-utils/<ver>
-		//     runtime/bun/1.4.4, <ver> 按出站协议(chat=4.0.23/responses=4.0.40/anthropic=4.0.46);
-		//   - x-opencode-project 用裸 40-hex(由 injectOpencodeCorrelationHeaders 注入);
-		//   - 额外发送 x-opencode-request(msg_ 递增 id), v2 形态也发此头(2026-10-30 实抓)。
-		// 两条渠道都打 /inference, 形态由 OpencodeLane 显式指定, 不再由 BaseURL 推断。
-		Name:           "OpenCode Free V1",
+		Name:           "OpenCode Free V2 备用1",
 		Type:           model.ChannelProviderOpenAI,
 		BaseURL:        "https://opencode.ai/inference",
 		Key:            "public",
 		OpencodeCompat: true,
-		OpencodeLane:   "v1",
+		OpencodeLane:   "v2",
 		Models: []model.ChannelModel{
 			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
 			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
@@ -133,54 +123,12 @@ var BuiltinFreeChannels = []model.Channel{
 		},
 	},
 	{
-		// Keyed 免费档: 不带内置 public Key, 默认不配代理;
-		// 管理员配置真实 Key 后启用; 配置 {account} 代理后按 Key 分区入池,
-		// 每个 Key 的账号固定为 Key.ID, 不随机生成。
-		Name:           "OpenCode Free V1 账号池",
-		Type:           model.ChannelProviderOpenAI,
-		BaseURL:        "https://opencode.ai/inference",
-		Keyed:          true,
-		OpencodeCompat: true,
-		OpencodeLane:   "v1",
-		Models: []model.ChannelModel{
-			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
-			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
-		},
-	},
-	// OpenCode Free V1 备用1/备用2: V1 的同构副本, 供实例单独挂 resin/WARP 代理做
-	// 出口隔离与容灾(主渠道被身份惩罚时切换出口)。种子只补建, 默认停用, 代理与
-	// 启用由实例自配; 挂 WARP 的副本不参与自动体检(isWarpProxy 跳过)。
-	{
-		Name:           "OpenCode Free V1 备用1",
+		Name:           "OpenCode Free V2 备用2",
 		Type:           model.ChannelProviderOpenAI,
 		BaseURL:        "https://opencode.ai/inference",
 		Key:            "public",
 		OpencodeCompat: true,
-		OpencodeLane:   "v1",
-		Models: []model.ChannelModel{
-			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
-			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
-		},
-	},
-	{
-		Name:           "OpenCode Free V1 备用2",
-		Type:           model.ChannelProviderOpenAI,
-		BaseURL:        "https://opencode.ai/inference",
-		Key:            "public",
-		OpencodeCompat: true,
-		OpencodeLane:   "v1",
+		OpencodeLane:   "v2",
 		Models: []model.ChannelModel{
 			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
 			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
