@@ -357,12 +357,12 @@ func TestOpencodeV2FamilyUpstreamURL(t *testing.T) {
 		clientFormat llm.APIFormat
 		want         string
 	}{
-		{"Chat 透传", model.UpstreamProtocolChat, llm.APIFormatOpenAIChatCompletion, base + "/openai/v1/chat/completions"},
-		{"Chat 转换", model.UpstreamProtocolChat, llm.APIFormatOpenAIResponse, base + "/openai/v1/chat/completions"},
-		{"Responses 透传", model.UpstreamProtocolResponses, llm.APIFormatOpenAIResponse, base + "/openai/v1/responses"},
-		{"Responses 转换", model.UpstreamProtocolResponses, llm.APIFormatOpenAIChatCompletion, base + "/openai/v1/responses"},
-		{"Anthropic 透传", model.UpstreamProtocolAnthropic, llm.APIFormatAnthropicMessage, base + "/anthropic/v1/messages"},
-		{"Anthropic 转换", model.UpstreamProtocolAnthropic, llm.APIFormatOpenAIChatCompletion, base + "/anthropic/v1/messages"},
+		{"Chat 透传", model.UpstreamProtocolChat, llm.APIFormatOpenAIChatCompletion, base + "/chat/completions"},
+		{"Chat 转换", model.UpstreamProtocolChat, llm.APIFormatOpenAIResponse, base + "/v1/chat/completions"},
+		{"Responses 透传", model.UpstreamProtocolResponses, llm.APIFormatOpenAIResponse, base + "/responses"},
+		{"Responses 转换", model.UpstreamProtocolResponses, llm.APIFormatOpenAIChatCompletion, base + "/v1/responses"},
+		{"Anthropic 透传", model.UpstreamProtocolAnthropic, llm.APIFormatAnthropicMessage, base + "/messages"},
+		{"Anthropic 转换", model.UpstreamProtocolAnthropic, llm.APIFormatOpenAIChatCompletion, base + "/v1/messages"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -398,29 +398,3 @@ func TestOpencodeV2FamilyUpstreamURL(t *testing.T) {
 	}
 }
 
-func TestOpencodeV2FamilyBaseURLBoundaries(t *testing.T) {
-	cases := []struct {
-		name    string
-		baseURL string
-		compat  bool
-		family  string
-		want    string
-	}{
-		{"裸 inference", "https://opencode.ai/inference", true, "openai", "https://opencode.ai/inference/openai"},
-		{"尾斜杠", "http://127.0.0.1:9977/inference/", true, "openai", "http://127.0.0.1:9977/inference/openai"},
-		{"anthropic family", "https://opencode.ai/inference", true, "anthropic", "https://opencode.ai/inference/anthropic"},
-		{"已有 family", "https://opencode.ai/inference/openai/v1", true, "openai", "https://opencode.ai/inference/openai/v1"},
-		{"v1 档", "https://opencode.ai/zen", true, "openai", "https://opencode.ai/zen"},
-		{"go 档", "https://opencode.ai/zen/v1", true, "openai", "https://opencode.ai/zen/v1"},
-		{"非 inference 自定义路径", "https://example.com/inference/custom", true, "openai", "https://example.com/inference/custom"},
-		{"非兼容渠道", "https://example.com/inference", false, "openai", "https://example.com/inference"},
-		{"完整 URL", "https://opencode.ai/inference##", true, "openai", "https://opencode.ai/inference"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			channel := model.Channel{BaseURL: tc.baseURL, OpencodeCompat: tc.compat}
-			base := strings.TrimSuffix(tc.baseURL, "##")
-			assert.Equal(t, tc.want, opencodeV2FamilyBaseURL(base, channel, tc.family))
-		})
-	}
-}

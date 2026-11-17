@@ -151,45 +151,6 @@ func opencodeLaneKey(channel model.Channel) string {
 	return "v2"
 }
 
-// opencodeUpstreamFamily 返回 v2 family 段。
-func opencodeUpstreamFamily(provider model.ChannelProvider) string {
-	switch provider {
-	case model.ChannelProviderOpenAI, model.ChannelProviderOpenAIResponses:
-		return "openai"
-	case model.ChannelProviderAnthropic:
-		return "anthropic"
-	default:
-		return ""
-	}
-}
-
-// opencodeFamilyForFormat 按客户端协议选 family。
-func opencodeFamilyForFormat(format llm.APIFormat) string {
-	switch format {
-	case llm.APIFormatOpenAIChatCompletion, llm.APIFormatOpenAIResponse:
-		return "openai"
-	case llm.APIFormatAnthropicMessage:
-		return "anthropic"
-	default:
-		return ""
-	}
-}
-
-// opencodeV2FamilyBaseURL 仅补裸 /inference。
-func opencodeV2FamilyBaseURL(base string, channel model.Channel, family string) string {
-	if family == "" || !isOpencodeFreeLane(channel) ||
-		strings.HasSuffix(strings.TrimSpace(channel.BaseURL), "##") {
-		return base
-	}
-	parsed, err := url.Parse(base)
-	if err != nil || strings.TrimRight(parsed.Path, "/") != "/inference" {
-		return base
-	}
-	parsed.Path = "/inference/" + family
-	parsed.RawPath = ""
-	return parsed.String()
-}
-
 // opencodeModelProtocol 在渠道模型表中按名查 UpstreamProtocol; 未找到或为空返回 chat(默认)。
 // 与 opencode2api 的 v1ProviderUtils 默认分支一致: SystemOne 等无 v1 对应的协议也报 chat 包。
 func opencodeModelProtocol(channel model.Channel, modelName string) string {
