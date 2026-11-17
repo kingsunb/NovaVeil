@@ -124,8 +124,8 @@ var (
 
 // SessionIDFromSignal 由信号确定性派生官方 ses_ 会话号。
 // 对齐官方 2.3.0 算法(二进制反编译): 时间段 = 真实毫秒 ×4096 + 同毫秒序号,
-// 位反后取 48 位 hex; 序号必须小于 256(位 11..8 为零), 否则 hex 第 10 位
-// 不是 f, 上游形态校验直接 429。随机段由信号哈希确定性派生。
+// 位反后取 48 位 hex; 序号必须小于 64(位 7..6 为零), 否则 hex 第 10、11 位
+// 不在 [c-f], 上游形态校验直接 429。随机段由信号哈希确定性派生。
 // 时间取信号首次解析时刻(缓存), 同一信号在进程内恒定; 缓存超龄刷新,
 // 时间保持新鲜, 重启后派生新号(官方同款语义)。官方合法号原样返回。
 func SessionIDFromSignal(signal string, v1Lane bool) string {
@@ -133,7 +133,7 @@ func SessionIDFromSignal(signal string, v1Lane bool) string {
 		return signal
 	}
 	sum := sha256.Sum256(saltedSessionSeed(signal))
-	mixed := sessionClockMillis(signal)<<12 | uint64(sum[5])&0xff
+	mixed := sessionClockMillis(signal)<<12 | uint64(sum[5])&0x3f
 	inverted := ^mixed & 0xFFFFFFFFFFFF
 	hexPart := hex.EncodeToString([]byte{
 		byte(inverted >> 40), byte(inverted >> 32), byte(inverted >> 24),
