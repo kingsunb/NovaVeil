@@ -17,6 +17,7 @@ Status: implemented
 - `x-opencode-project` 在 v2 档按渠道派生稳定 40-hex（`sha256("novaveil:opencode-project:"+channelID)[:40]`）；v1 档保持 `global`（1.19.5 实抓即此值）；客户端自带合法 40-hex 时原样透传。
 - 内置 OpenCode 官方渠道的 `x-opencode-client` 与静态 UA 由 `desktop` 改为 `cli`，新增迁移 30 归一存量库（只改精确的 desktop 值，其他自定义头保留）。
 - 恢复一条 `OpenCode Free V1`（lane v1、public、与 V2 同模型集），其余 v1 副本（账号池、备用1、备用2）仍下线。
+- `opencode_probe_v2.json` 按 2.3.0 实抓重建：system 由 185 行/8244 字符升到 191 行/8619 字符（Code Mode 段落重写，新增 session_move 与 worktree 系列说明），工具集由 12 个增到 13 个（新增 `experimental_image_generate`）；动态字段仍参数化为 `{{MODEL_NAME}}`、`{{MODEL_ID}}`、`{{DATE}}`、`{{WORKDIR}}` 四处，`Workspace root folder` 沿用固定值。v1 模板不动（1.19.5 已停售，模板本就取自 1.19.4）。
 
 ## 依据
 
@@ -44,7 +45,7 @@ Status: implemented
 - 免费档出站 UA 为 `opencode/latest/2.3.0/cli`，与官方一致；v2 请求少一个头，更接近真实客户端。
 - project 从 `global` 变为每个渠道一个稳定 40-hex；同一渠道跨目录会话共用一个 project（官方会不同），属于已知近似。
 - 升级到含迁移 30 的版本后，内置 `OpenCode` 官方渠道的 desktop 头被改为 cli；`OpenCode Free V1` 若在迁移 29 被删过，会在下一次启动由 `EnsureBuiltinChannels` 重建（新 ID，需要重新加入分组）。
-- 内置免费渠道总数 16 → 17。
+- 内置免费渠道总数 16 → 17；体检与整形注入的系统提示切到 2.3.0 版本，工具集多一个 `experimental_image_generate`，客户端未声明等价名时官方工具原样透传。
 
 ## 验证
 
