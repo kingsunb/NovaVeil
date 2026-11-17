@@ -131,14 +131,18 @@ func TestDeriveSessionIDForAccount(t *testing.T) {
 // TestSessionIDFromSignalOfficialShape 锁定 2.3.0 官方形态: 序号段位 11..8 为零
 // 使 hex 第 10 位恒为 f(descendingTimePartPattern 的实际来源), 上游按此校验。
 func TestSessionIDFromSignalOfficialShape(t *testing.T) {
-	pattern := regexp.MustCompile(`^ses_[0-9a-f]{9}f[c-f][0-9a-f][0-9A-Za-z]{14}$`)
+	pattern := regexp.MustCompile(`^ses_([0-9a-f]{12})[0-9A-Za-z]{14}$`)
+	shape := regexp.MustCompile(`^[0-9a-f]{9}f[c-f][0-9a-f]`)
 	now := uint64(time.Now().UnixMilli())
 	for _, signal := range []string{"shape-a", "shape-b", "shape-c"} {
 		id := SessionIDFromSignal(signal, false)
-		if !pattern.MatchString(id) {
+		if !shape.MatchString(id[4:16]) {
 			t.Fatalf("派生号不满足官方 descending 形态: %q", id)
 		}
 		m := pattern.FindStringSubmatch(id)
+		if m == nil {
+			t.Fatalf("派生号形态异常: %q", id)
+		}
 		raw, err := hex.DecodeString(m[1])
 		if err != nil {
 			t.Fatalf("解析时间段: %v", err)
