@@ -155,8 +155,8 @@ func TestSessionIDFromSignalOfficialShape(t *testing.T) {
 		// 时间段应接近当前毫秒(纪元折叠后取最接近 now 的解释)。
 		era := uint64(1) << 36
 		best := val
-		if d := now - best; d > era/2 {
-			best += ((d / era) + 1) * era
+		for best > now {
+			best -= era
 		}
 		if best > now+24*3600*1000 || best < now-24*3600*1000 {
 			t.Fatalf("时间段偏离当前时间超过一天: signal=%q val=%d now=%d", signal, best, now)
