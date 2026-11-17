@@ -18,7 +18,7 @@ Status: implemented
 - `ocToolAliasPrefix` 由 `clint_` 改为 `mcp_`，跟随上游选择。理由：`mcp_` 与 MCP 客户端的 `mcp__<server>__<tool>` 同前缀，上游若拒绝它会连带拒绝自己的 MCP 流量，短期最安全。代价是前缀暴露后需要轮换，注释已写明轮换信号（只有带工具的请求回 429 时）。
 - `shapeOpencodeFreeBody` 用**客户端原始正文**判定标题请求（注入前判定），命中时跳过 `ensureOfficialToolset`、v2 核心工具补齐与 v1 `tool_choice: auto` 注入，仍强制 `stream=true` 并注入官方提示词。判定复用 `isTitleGenerationRequest`，补充 v2 的 5 条提示词标记，并新增「出现 assistant/tool/function 角色即不是标题请求」的保护，避免长会话被误判而漏整形。
 - `ensureOfficialToolset` 在改名之前先调用 `ocConvertLegacyFunctions`：`functions[]` 转成 `tools[]` 条目、删除原字段，随后与 `tools` 一起进入同一次改名循环。`rewriteToolReferences` 补充顶层 `function_call.name` 与 `messages[].function_call.name`，保证历史与具名选择同步改名。
-- 重试保留上游失败：循环内用 `lastHTTPErr` 记住最近一次可解析出状态码的上游错误（排除 413，它由请求级不可行单独处理）；轮次超限与截止两个收尾点用 `retainedUpstreamError` 包装该错误，`rejectRequest` 识别包装后透出原状态码与 `Retry-After`。内部状态仍记 `errRoundsExceeded`/`errDeadlineExceeded` 哨兵，不影响诊断分类。
+- 重试保留上游失败：循环内用 `lastHTTPErr` 记住最近一次可解析出状态码的上游错误（排除 413，它由请求级不可行单独处理）；轮次超限与截止两个收尾点调 `logRetainedUpstreamFailure`，把状态码与错误原文写进 warn 日志。**对外仍统一回 `errNoAvailableChannels`（400）**，不透出上游 429/5xx 与 `Retry-After`——这是既有下游契约，客户端应按确定性失败自行重试。
 - Responses 回合合并放在 `conversionMiddleware.OnOutboundRawRequest` 的 Chat 分支（跨协议转换后）：`mergeAssistantTurns` 把连续 assistant 消息的正文与 `tool_calls` 合并成一条，正文形态冲突（string 对 array）时放弃合并；`reasoning_content` 只保留一份。用户输入与工具结果仍分隔回合。
 - 新增 `prompt_environment` 设置项（JSON），可覆盖 `working_directory`、`workspace_root`、`platform`、`is_git_repo`。渲染官方提示词时按整行替换 env 块字段，保留缩进与字段顺序；`platform` 同步改写官方工具描述里的 `on Linux using bash` / `OS: linux, Shell: bash` 措辞。校验在 `Setting.Validate`：路径最长 256 字节且拒绝控制字符，平台仅接受 `linux`/`darwin`/`win32`。
 
@@ -34,7 +34,7 @@ Status: implemented
 - 带自定义工具的免费档请求不再因 `clint_` 被拒；`mcp_` 只用于出站，响应侧仍按别名表还原客户端声明名，JSON 与三种协议的流式还原路径不变。
 - 标题请求不再被补工具集，不会再出现「整形后 403/429」；含对话轮次的 agent 请求仍照常整形。
 - 旧版 `functions` 客户端可以正常走免费档，工具名只编码一次，历史引用与 `tool_choice` 同步。
-- 重试耗尽时客户端可能收到 429/5xx 与 `Retry-After`（此前统一 400「暂无可用渠道」），SDK 可按上游节奏退避；`暂无可用渠道` 仍是兜底文案。
+- 重试耗尽时对外行为不变：客户端仍收到 400「暂无可用渠道」，503 只保留给满载/一键停止/WARP 槽位；上游 429 与 `Retry-After` 只进内部日志，供排障定位。
 - Responses 客户端跨协议到 Chat 上游时，同一回合的文本与工具调用保持相邻，减少上游把工具调用当成新回合的概率。
 - `prompt_environment` 默认空，出厂行为与官方模板完全一致；只有显式配置才改写注入内容。
 

@@ -180,7 +180,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		opencodeAccountRetries := make(map[int]int)    // 各成员本请求已换号次数。
 		allCooldownClears := 0                         // 全冷却自动清除并重试的累计次数, 用于线性退避间隔计算。
 		var failedIdx int                              // 引用链解析失败跳下标(仅当轮有效), 与 hops 一起提升以便用普通赋值接收。
-		var lastHTTPErr error                          // 最近一次带状态码的上游失败, 耗尽后优先报出
+		var lastHTTPErr error                          // 最近一次带状态码的上游失败, 仅进日志
 
 		for {
 			if ctx.Err() != nil {
@@ -207,13 +207,15 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			if limit := maxRequestRounds(relayConfig); rounds > limit {
 				request.markFailed(errRoundsExceeded, "", nil)
 				recordErrorLog(request)
-				rejectRequest(c, inbound, retainedOrGeneric(errNoAvailableChannels, lastHTTPErr))
+				logRetainedUpstreamFailure(rounds, lastHTTPErr)
+				rejectRequest(c, inbound, errNoAvailableChannels)
 				return
 			}
 			if requestDeadlineExceeded(relayConfig, startedAt) {
 				request.markFailed(errDeadlineExceeded, "", nil)
 				recordErrorLog(request)
-				rejectRequest(c, inbound, retainedOrGeneric(errNoAvailableChannels, lastHTTPErr))
+				logRetainedUpstreamFailure(rounds, lastHTTPErr)
+				rejectRequest(c, inbound, errNoAvailableChannels)
 				return
 			}
 
@@ -1633,35 +1635,17 @@ func downstreamErrorText(err error) string {
 	return op.RedactSensitiveText(err.Error())
 }
 
-// rejectRequest 以客户端协议的错误格式返回请求级失败, 用于尚未登记状态因而无需定稿的请求。
-// retainedUpstreamError 保留上一轮上游 HTTP 失败, 供重试耗尽后定稿。
-type retainedUpstreamError struct{ err error }
-
-func (e retainedUpstreamError) Error() string { return e.err.Error() }
-
-func (e retainedUpstreamError) Unwrap() error { return e.err }
-
-// retainedUpstreamStatus 取出保留错误的状态码与 Retry-After。
-func retainedUpstreamStatus(err error) (int, string, bool) {
-	var retained retainedUpstreamError
-	if !errors.As(err, &retained) {
-		return 0, "", false
-	}
-	code, ok := UpstreamStatusCode(retained.err)
-	if !ok || code < 400 || code > 599 {
-		return 0, "", false
-	}
-	return code, UpstreamRetryAfter(retained.err), true
-}
-
-// retainedOrGeneric 有保留的上游失败时优先报它, 否则用通用终态。
-func retainedOrGeneric(generic, retained error) error {
+// logRetainedUpstreamFailure 把最近一次上游 HTTP 失败写进日志供排障。
+// 对外仍统一回 errNoAvailableChannels, 不透出上游状态码。
+func logRetainedUpstreamFailure(rounds int, retained error) {
 	if retained == nil {
-		return generic
+		return
 	}
-	return retainedUpstreamError{err: retained}
+	code, _ := UpstreamStatusCode(retained)
+	log.Warnf("no available channel after %d rounds: last upstream failure status=%d err=%v", rounds, code, retained)
 }
 
+// rejectRequest 以客户端协议的错误格式返回请求级失败, 用于尚未登记状态因而无需定稿的请求。
 // 管理端「一键停止」属于瞬态不可用, 返回 503(+Retry-After) 让下游 SDK 按可重试处理;
 // 暂无可用渠道保持 400: 这是测试钉死的既有下游契约(客户端按确定性失败自行重试整个请求),
 // 请求体超过上游限制返回 413, 其余请求级错误(协议/参数问题)为 400。
@@ -1680,12 +1664,6 @@ func rejectRequest(c *gin.Context, inbound transformer.Inbound, err error) {
 		c.Header("Retry-After", strconv.Itoa(seconds))
 	} else if errors.Is(err, errRequestTooLarge) {
 		status = http.StatusRequestEntityTooLarge
-	} else if code, retryAfter, ok := retainedUpstreamStatus(err); ok {
-		// 保留的 429 等上游失败带原状态码与退避提示
-		status = code
-		if retryAfter != "" {
-			c.Header("Retry-After", retryAfter)
-		}
 	}
 	response := inbound.TransformError(c.Request.Context(), &llm.ResponseError{
 		StatusCode: status,
