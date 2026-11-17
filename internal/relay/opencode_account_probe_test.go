@@ -333,10 +333,11 @@ func TestOpencodeAccountLedgerStates(t *testing.T) {
 }
 
 // ocProbeExpectedV1Tools / ocProbeExpectedV2Tools 是官方客户端实抓的核心工具名与顺序
-// (2026-11-01 起 chrome-devtools 系列移除, 模板回归纯官方核心集)。
+// (2026-11-01 起 chrome-devtools 系列移除, 模板回归纯官方核心集;
+// 2026-11-17 按 2.3.0 实抓补 experimental_image_generate)。
 var (
 	ocProbeExpectedV1Tools = []string{"bash", "edit", "glob", "grep", "question", "read", "skill", "task", "todowrite", "webfetch", "websearch", "write"}
-	ocProbeExpectedV2Tools = []string{"edit", "glob", "grep", "question", "read", "shell", "skill", "subagent", "webfetch", "websearch", "write", "execute"}
+	ocProbeExpectedV2Tools = []string{"edit", "experimental_image_generate", "glob", "grep", "question", "read", "shell", "skill", "subagent", "webfetch", "websearch", "write", "execute"}
 )
 
 // topLevelJSONKeys 按出现顺序返回 JSON 对象的顶层键。
