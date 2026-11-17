@@ -178,7 +178,7 @@ func TestEnsureFreeBuiltinChannelsClearsCustomFreeFlag(t *testing.T) {
 }
 
 func TestBuiltinFreeChannelsDefinitions(t *testing.T) {
-	if got, want := len(BuiltinFreeChannels), 16; got != want {
+	if got, want := len(BuiltinFreeChannels), 17; got != want {
 		t.Fatalf("BuiltinFreeChannels count = %d, want %d", got, want)
 	}
 	seen := make(map[string]bool, len(BuiltinFreeChannels))
@@ -217,7 +217,6 @@ func TestBuiltinFreeChannelsOpencodeLaneMapping(t *testing.T) {
 	retired := map[string]bool{
 		"OpenCode Free":        true,
 		"OpenCode Free Old":    true,
-		"OpenCode Free V1":     true,
 		"OpenCode Free V1 账号池": true,
 		"OpenCode Free V1 备用1": true,
 		"OpenCode Free V1 备用2": true,
@@ -233,6 +232,7 @@ func TestBuiltinFreeChannelsOpencodeLaneMapping(t *testing.T) {
 	}
 	want := map[string]string{
 		"OpenCode Free V2":     "v2",
+		"OpenCode Free V1":     "v1",
 		"OpenCode Free V2 备用1": "v2",
 		"OpenCode Free V2 备用2": "v2",
 	}
@@ -250,13 +250,14 @@ func TestBuiltinFreeChannelsOpencodeLaneMapping(t *testing.T) {
 	}
 }
 
-// 1.x 免费档已停止支持: 出厂只剩 v2 lane 且不带 Keyed 账号池。
+// 1.x 免费档仅保留一条对照渠道, 其余 v1 副本与 keyed 账号池不再出厂。
 func TestBuiltinOpencodeFreeRetiredChannels(t *testing.T) {
+	allowedV1 := map[string]bool{"OpenCode Free V1": true}
 	for _, def := range BuiltinFreeChannels {
 		if !def.OpencodeCompat {
 			continue
 		}
-		if def.OpencodeLane != "v2" {
+		if def.OpencodeLane != "v2" && !allowedV1[def.Name] {
 			t.Fatalf("channel %q should not ship a non-v2 lane", def.Name)
 		}
 		if def.Keyed {
