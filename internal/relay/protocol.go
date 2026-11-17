@@ -125,9 +125,9 @@ func buildPassthroughRequest(format llm.APIFormat, raw *httpclient.Request, chan
 	} else {
 		path = upstreamPath(format)
 	}
-	// 免费档官方客户端发裸 /inference/<endpoint>, 不追加版本段。
+	// 免费档 /inference 端点发裸路径, 不追加版本段; /zen 等 legacy 端点保持原样。
 	version := "v1"
-	if isOpencodeFreeLane(channel) {
+	if isOpencodeFreeLane(channel) && strings.HasSuffix(strings.TrimRight(base, "/"), "/inference") {
 		version = ""
 	}
 	url := transformer.BuildRequestURL(base, version, path, "", rawURL)
