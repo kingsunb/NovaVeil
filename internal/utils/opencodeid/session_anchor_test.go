@@ -132,7 +132,7 @@ func TestDeriveSessionIDForAccount(t *testing.T) {
 // 使 hex 第 10 位恒为 f(descendingTimePartPattern 的实际来源), 上游按此校验。
 func TestSessionIDFromSignalOfficialShape(t *testing.T) {
 	pattern := regexp.MustCompile(`^ses_[0-9a-f]{9}f[c-f][0-9a-f][0-9A-Za-z]{14}$`)
-	now := time.Now().UnixMilli()
+	now := uint64(time.Now().UnixMilli())
 	for _, signal := range []string{"shape-a", "shape-b", "shape-c"} {
 		id := SessionIDFromSignal(signal, false)
 		if !pattern.MatchString(id) {
