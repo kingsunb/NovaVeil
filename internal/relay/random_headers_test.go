@@ -610,8 +610,8 @@ func TestInjectOpencodeCorrelationHeaders(t *testing.T) {
 		t.Fatalf("X-Session-Id 应镜像最终会话号 %q, 实际 %q", validSesA, got)
 	}
 	project := req.Headers.Get(opencodeProjectHeader)
-	if project != "global" {
-		t.Fatalf("x-opencode-project = %q, 期望 global", project)
+	if want := opencodeid.DerivedProjectID(channel.ID); project != want {
+		t.Fatalf("x-opencode-project = %q, 期望按渠道派生 %q", project, want)
 	}
 
 	// 无合法项目信号时跨请求稳定回退 global。
@@ -665,8 +665,8 @@ func TestInjectOpencodeCorrelationHeadersV2Child(t *testing.T) {
 	if got := req.Headers.Get(opencodeUpstreamSessID); got != validSesA {
 		t.Fatalf("X-Session-Id = %q, 期望 root %q", got, validSesA)
 	}
-	if got := req.Headers.Get(opencodeProjectHeader); got != "global" {
-		t.Fatalf("x-opencode-project = %q, 期望 global", got)
+	if got, want := req.Headers.Get(opencodeProjectHeader), opencodeid.DerivedProjectID(channel.ID); got != want {
+		t.Fatalf("x-opencode-project = %q, 期望 %q", got, want)
 	}
 
 	fallback := newRandomHeaderRequest()
@@ -752,25 +752,36 @@ func TestInjectOpencodeCorrelationHeadersV1Unchanged(t *testing.T) {
 
 func TestInjectOpencodeCorrelationHeadersProjectBothLanes(t *testing.T) {
 	commit := "0123456789abcdef0123456789abcdef01234567"
-	for _, baseURL := range []string{"https://opencode.ai/inference", "https://opencode.ai/zen"} {
-		for _, project := range []string{"global", commit} {
-			channel := model.Channel{ID: 1004, OpencodeCompat: true, BaseURL: baseURL}
-			req := newRandomHeaderRequest()
-			req.Headers.Set(opencodeProjectHeader, project)
-			mustInjectOpencodeCorrelationHeaders(t, channel, req)
-			if got := req.Headers.Get(opencodeProjectHeader); got != project {
-				t.Fatalf("%s 项目号 = %q, 期望原样 %q", baseURL, got, project)
-			}
+	cases := []struct {
+		lane    string
+		baseURL string
+		v1      bool
+	}{
+		{lane: "v1", baseURL: "https://opencode.ai/zen", v1: true},
+		{lane: "v2", baseURL: "https://opencode.ai/inference", v1: false},
+	}
+	for _, tc := range cases {
+		channel := model.Channel{ID: 1004, OpencodeCompat: true, BaseURL: tc.baseURL, OpencodeLane: tc.lane}
+		// 合法 40-hex 原样保留。
+		req := newRandomHeaderRequest()
+		req.Headers.Set(opencodeProjectHeader, commit)
+		mustInjectOpencodeCorrelationHeaders(t, channel, req)
+		if got := req.Headers.Get(opencodeProjectHeader); got != commit {
+			t.Fatalf("%s 合法项目号 = %q, 期望原样 %q", tc.lane, got, commit)
 		}
-		for _, project := range []string{"", "prj_abc", strings.ToUpper(commit)} {
-			channel := model.Channel{ID: 1004, OpencodeCompat: true, BaseURL: baseURL}
+		// 非法值: v1 回退 global, v2 按渠道稳定派生。
+		want := "global"
+		if !tc.v1 {
+			want = opencodeid.DerivedProjectID(channel.ID)
+		}
+		for _, project := range []string{"", "prj_abc", "global", strings.ToUpper(commit)} {
 			req := newRandomHeaderRequest()
 			if project != "" {
 				req.Headers.Set(opencodeProjectHeader, project)
 			}
 			mustInjectOpencodeCorrelationHeaders(t, channel, req)
-			if got := req.Headers.Get(opencodeProjectHeader); got != "global" {
-				t.Fatalf("%s 项目号 %q = %q, 期望 global", baseURL, project, got)
+			if got := req.Headers.Get(opencodeProjectHeader); got != want {
+				t.Fatalf("%s 项目号 %q = %q, 期望 %q", tc.lane, project, got, want)
 			}
 		}
 	}

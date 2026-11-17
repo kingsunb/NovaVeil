@@ -78,10 +78,11 @@ func OpencodeSeedProtocols(baseURL string) map[string]string {
 }
 
 // OpenCode 免费档官方客户端指纹版本, 由 2026-11-09 官方 2.2.6 / 1.19.5 实抓核实。
+// v2 UA 已核对 v2.3.0 二进制内嵌值。
 const (
 	opencodeV1ClientVersion = "1.19.5"
 	opencodeV1BunVersion    = "1.4.4"
-	opencodeV2ClientVersion = "2.2.6"
+	opencodeV2ClientVersion = "2.3.0"
 )
 
 // opencodeV1ProviderUtils 按 v1 出站协议返回 UA 中 ai-sdk/provider-utils 的版本。

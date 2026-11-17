@@ -24,7 +24,7 @@ const opencodeSessionHeader = "x-opencode-session"
 // opencode 关联头名。opencode v2 官方客户端(packages/core/src/session/model-request.ts:282-292)
 // 在每个 model 请求上注入: x-opencode-session-id(= session.id)、x-session-affinity(= affinity)、
 // X-Session-Id(= affinity, 大写 X)、x-opencode-project(= projectID)、x-opencode-session(= affinity)、
-// x-opencode-client(= app.name)。x-opencode-request(msg_ 形态)两档都发(2026-10-30 实抓)。
+// x-opencode-client(= app.name)。x-opencode-request(msg_ 形态)仅 v1 发送(1.19.5 实抓)。
 // 对顶层会话, affinity == session.id, 故 x-opencode-session-id / x-session-affinity / X-Session-Id
 // 三者同值, 均镜像 x-opencode-session。
 const (
@@ -297,7 +297,12 @@ func injectOpencodeCorrelationHeaders(channel model.Channel, request *httpclient
 	if project == "" {
 		project = gjson.GetBytes(request.Body, "metadata.project_id").String()
 	}
-	request.Headers.Set(opencodeProjectHeader, opencodeid.ProjectIDForLane(project, v1))
+	project = opencodeid.ProjectIDForLane(project, v1)
+	if !v1 && opencodeid.IsGlobalProjectID(project) {
+		// v2 官方恒发 40-hex, 按渠道稳定派生
+		project = opencodeid.DerivedProjectID(channel.ID)
+	}
+	request.Headers.Set(opencodeProjectHeader, project)
 	if isOpencodeFreeLane(channel) && !v1 {
 		return injectOpencodeTraceHeaders(request)
 	}

@@ -10,7 +10,8 @@ import (
 	"time"
 )
 
-// TestBunRequestHeadOfficialClientWire 用 2026-11-09 官方 2.2.6 客户端实抓的完整头序
+// TestBunRequestHeadOfficialClientWire 头序取自 2026-11-09 2.2.6 实抓;
+// UA 版本取 v2.3.0 二进制内嵌值。
 // 固定 bunRequestHead 输出: 公共块 → 小写排序的应用头 → 传输层追加段。
 // Content-Length 属传输层追加, 必须位于末尾(实抓翻转了写进公共块的旧决定)。
 func TestBunRequestHeadOfficialClientWire(t *testing.T) {
@@ -20,7 +21,7 @@ func TestBunRequestHeadOfficialClientWire(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer public")
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "opencode/latest/2.2.6/cli")
+	req.Header.Set("User-Agent", "opencode/latest/2.3.0/cli")
 	req.Header.Set("b3", "trace-span-1-parent")
 	req.Header.Set("traceparent", "00-trace-span-01")
 	req.Header.Set("x-opencode-client", "cli")
@@ -42,7 +43,7 @@ func TestBunRequestHeadOfficialClientWire(t *testing.T) {
 		"POST /inference/openai/v1/chat/completions HTTP/1.1",
 		"Authorization: Bearer public",
 		"Content-Type: application/json",
-		"User-Agent: opencode/latest/2.2.6/cli",
+		"User-Agent: opencode/latest/2.3.0/cli",
 		"b3: trace-span-1-parent",
 		"traceparent: 00-trace-span-01",
 		"x-opencode-client: cli",

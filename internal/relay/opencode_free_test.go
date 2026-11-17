@@ -505,7 +505,7 @@ func TestApplyOpencodeFreeLaneHeadersV2UserAgent(t *testing.T) {
 		Body:    []byte(`{"model":"chat-x"}`),
 	}
 	applyOpencodeFreeLaneHeaders(channel, request, "chat-x")
-	if got := request.Headers.Get("User-Agent"); got != "opencode/latest/2.2.6/cli" {
+	if got := request.Headers.Get("User-Agent"); got != "opencode/latest/2.3.0/cli" {
 		t.Fatalf("User-Agent = %q, 期望 v2 动态值", got)
 	}
 	if got := request.Headers.Get("Accept"); got != "*/*" {

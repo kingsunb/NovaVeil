@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"math/big"
 	"regexp"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -97,8 +98,8 @@ func generateOpencodePrefixedID(prefix string, descending bool) string {
 }
 
 // GenerateRequestID 生成每请求唯一的 opencode 关联请求 ID, 格式 req_<32 hex>。
-// 注意: 官方客户端在 x-opencode-request 上发送的是 msg_ 形态(实抓确认, 两档都发),
-// req_ 形态与之不符, 该函数保留供内部关联/日志使用, 不注入上游请求头。
+// 注意: 官方 v1 客户端在 x-opencode-request 上发送的是 msg_ 形态(1.19.5 实抓),
+// v2.3.0 已不发该头; req_ 形态与之不符, 该函数保留供内部关联/日志使用。
 func GenerateRequestID() string {
 	buf := make([]byte, 16)
 	if _, err := rand.Read(buf); err != nil {
@@ -213,4 +214,16 @@ func ProjectIDForLane(signal string, _ bool) string {
 		return signal
 	}
 	return globalProjectID
+}
+
+// IsGlobalProjectID 报告是否为无项目号占位值。
+func IsGlobalProjectID(value string) bool {
+	return value == globalProjectID
+}
+
+// DerivedProjectID 按渠道派生稳定的 40 位 project 号。
+// v2 官方恒发 40-hex 且跨会话不变, 故按渠道稳定派生。
+func DerivedProjectID(channelID int) string {
+	sum := sha256.Sum256([]byte("novaveil:opencode-project:" + strconv.Itoa(channelID)))
+	return hex.EncodeToString(sum[:])[:40]
 }

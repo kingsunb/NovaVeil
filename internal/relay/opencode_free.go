@@ -234,8 +234,8 @@ func opencodeFreeLaneAccept(channel model.Channel) string {
 //   - v1 档(/zen): User-Agent 用协议相关的 opencode/1.19.5 ai-sdk/provider-utils/<ver>
 //     runtime/bun/1.4.4(<ver> 按出站协议), Accept 用 */*, 并发送 x-opencode-request
 //     (msg_ 升序 id);
-//   - v2 档(/inference): User-Agent 动态覆盖为 opencode/latest/2.2.6/cli,
-//     Accept 用 */*, 同样发送 x-opencode-request(官方 v2 客户端实抓两个头都发);
+//   - v2 档(/inference): User-Agent 动态覆盖为 opencode/latest/2.3.0/cli,
+//     Accept 用 */*; v2.3.0 实抓不发送 x-opencode-request, 陈旧值显式删除;
 //     Anthropic 出站补 beta=true。
 //
 // 仅对免费档改写头, 改写发生在 applyChannelConfig 之后, 覆盖渠道静态同名头。
@@ -257,12 +257,8 @@ func applyOpencodeFreeLaneHeaders(channel model.Channel, request *httpclient.Req
 	if !isOpencodeV1Lane(channel) {
 		// 动态覆盖渠道静态 UA，存量库也生效。
 		request.Headers.Set("User-Agent", model.OpencodeV2UserAgent())
-		// 官方 v2 客户端实抓两个头都发，v2 档同样注入消息 ID。
-		request.Headers.Set("x-opencode-request", opencodeid.UserMessageID(
-			request.Headers.Get("x-opencode-request"),
-			request.Body,
-			request.Headers.Get(opencodeSessionHeader),
-		))
+		// v2.3.0 实抓无此头, 删除陈旧值
+		request.Headers.Del("x-opencode-request")
 		if isAnthropic {
 			applyAnthropicBetaQuery(request)
 			request.Headers.Set("anthropic-beta", "interleaved-thinking-2025-05-14")
