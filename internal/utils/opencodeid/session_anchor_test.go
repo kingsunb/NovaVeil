@@ -154,8 +154,8 @@ func TestSessionIDFromSignalOfficialShape(t *testing.T) {
 		val := (^inverted & 0xFFFFFFFFFFFF) >> 12
 		// 时间段应接近当前毫秒(纪元折叠后取最接近 now 的解释)。
 		era := uint64(1) << 36
-		best := val
-		for best > now {
+		best := val + (now/era)*era
+		if best > now {
 			best -= era
 		}
 		if best > now+24*3600*1000 || best < now-24*3600*1000 {
