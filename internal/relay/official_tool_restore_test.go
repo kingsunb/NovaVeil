@@ -214,10 +214,10 @@ func TestOfficialToolStreamAbortsInvalidArguments(t *testing.T) {
 func TestOfficialToolStreamKeepsAliasArguments(t *testing.T) {
 	stream := &officialToolStream{
 		inner: &fakeStream{events: []*httpclient.StreamEvent{
-			sseEvent(`{"id":"chunk","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"clint_patcher","arguments":"{\"filePath\":\"x\"}"}}]}}]}`),
+			sseEvent(`{"id":"chunk","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"` + ocToolAliasPrefix + `patcher","arguments":"{\"filePath\":\"x\"}"}}]}}]}`),
 			sseEvent(`{"id":"chunk","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`),
 		}},
-		aliases:  map[string]string{"clint_patcher": "patcher"},
+		aliases:  map[string]string{ocToolAliasPrefix + "patcher": "patcher"},
 		official: officialTestTargets(t),
 	}
 	out := collectOfficialStream(t, stream)

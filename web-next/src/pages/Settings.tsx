@@ -81,6 +81,7 @@ type Section =
   | "header-templates"
   | "conversation"
   | "conv-trace"
+  | "prompt-environment"
   | "retention"
   | "usage-retention"
   | "tester"
@@ -96,6 +97,7 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "header-templates", label: "Header 模板" },
   { id: "conversation", label: "对话留存" },
   { id: "conv-trace", label: "转换追踪" },
+  { id: "prompt-environment", label: "提示词环境" },
   { id: "retention", label: "错误日志保留" },
   { id: "usage-retention", label: "用量保留" },
   { id: "tester", label: "模型测试" },
@@ -133,6 +135,7 @@ export default function SettingsPage() {
         {active === "header-templates" && <HeaderTemplatesSection />}
         {active === "conversation" && <ConversationSection />}
         {active === "conv-trace" && <ConvTraceSection />}
+        {active === "prompt-environment" && <PromptEnvironmentSection />}
         {active === "retention" && <RetentionSection />}
         {active === "usage-retention" && <UsageRetentionSection />}
         {active === "tester" && <TesterSection />}
@@ -1127,6 +1130,117 @@ function swallowMissingSetting(e: unknown) {
 }
 
 // ---------------- 转换追踪 ----------------
+
+function PromptEnvironmentSection() {
+  const qc = useQueryClient();
+  const { data: envSetting } = useQuery({
+    queryKey: ["settings", "prompt_environment"],
+    queryFn: () => api.getSetting("prompt_environment").catch(swallowMissingSetting),
+  });
+
+  const [workingDirectory, setWorkingDirectory] = useState("");
+  const [workspaceRoot, setWorkspaceRoot] = useState("");
+  const [platform, setPlatform] = useState("");
+  const [gitRepo, setGitRepo] = useState("unset");
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    if (hydrated || envSetting == null) return;
+    try {
+      const parsed = JSON.parse(envSetting.value || "{}") as {
+        working_directory?: string;
+        workspace_root?: string;
+        platform?: string;
+        is_git_repo?: boolean | null;
+      };
+      setWorkingDirectory(parsed.working_directory ?? "");
+      setWorkspaceRoot(parsed.workspace_root ?? "");
+      setPlatform(parsed.platform ?? "");
+      if (typeof parsed.is_git_repo === "boolean") {
+        setGitRepo(parsed.is_git_repo ? "yes" : "no");
+      }
+    } catch {
+      // 非法 JSON 按未配置处理, 保存时整体覆盖
+    }
+    setHydrated(true);
+  }, [envSetting, hydrated]);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const payload: Record<string, unknown> = {};
+      if (workingDirectory.trim()) payload.working_directory = workingDirectory.trim();
+      if (workspaceRoot.trim()) payload.workspace_root = workspaceRoot.trim();
+      if (platform) payload.platform = platform;
+      if (gitRepo !== "unset") payload.is_git_repo = gitRepo === "yes";
+      return api.setSetting("prompt_environment", JSON.stringify(payload));
+    },
+    onSuccess: () => {
+      toast.success("已保存, 下一轮整形请求生效");
+      qc.invalidateQueries({ queryKey: ["settings", "prompt_environment"] });
+    },
+    onError: (e: Error) => toast.error(e.message || "保存失败"),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>提示词环境</CardTitle>
+          <CardDescription>
+            覆盖免费档注入提示词里的环境字段, 默认跟随官方模板;
+            留空即保持原值, 只影响该注入块
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Field label="工作目录" hint="对应 Working directory, 留空沿用运行时目录">
+          <Input
+            className="text-sm"
+            value={workingDirectory}
+            onChange={(e) => setWorkingDirectory(e.target.value)}
+            placeholder="/home/user/project"
+          />
+        </Field>
+        <Field label="工作区根目录" hint="对应 Workspace root folder">
+          <Input
+            className="text-sm"
+            value={workspaceRoot}
+            onChange={(e) => setWorkspaceRoot(e.target.value)}
+            placeholder="/"
+          />
+        </Field>
+        <Field label="平台" hint="同步影响 shell 工具描述里的系统与解释器">
+          <Select
+            className="w-full text-sm"
+            value={platform}
+            onChange={(e) => setPlatform(e.target.value)}
+          >
+            <option value="">跟随官方模板 (linux)</option>
+            <option value="linux">linux</option>
+            <option value="darwin">darwin</option>
+            <option value="win32">win32</option>
+          </Select>
+        </Field>
+        <Field label="是否 git 仓库" hint="对应 Is directory a git repo">
+          <Select
+            className="w-full text-sm"
+            value={gitRepo}
+            onChange={(e) => setGitRepo(e.target.value)}
+          >
+            <option value="unset">不覆盖</option>
+            <option value="yes">yes</option>
+            <option value="no">no</option>
+          </Select>
+        </Field>
+        <div className="flex justify-end">
+          <Button onClick={() => save.mutate()} disabled={save.isPending}>
+            保存
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 function ConvTraceSection() {
   const qc = useQueryClient();

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/kingsunb/NovaVeil/internal/utils/opencodeid"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -316,6 +317,8 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 	}
 	out := body
 	changed := false
+	// 标题请求无工具, 补 agent 工具集会被免费层拒
+	isTitle := isTitleGenerationRequest(body)
 	lane := "v2"
 	if v1Lane {
 		lane = "v1"
@@ -331,7 +334,7 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 		}
 	}
 	if !v1Lane {
-		if protocol != model.UpstreamProtocolChat {
+		if protocol != model.UpstreamProtocolChat && !isTitle {
 			if next, injected := ensureOpencodeFreeTools(out, protocol); injected {
 				out, changed = next, true
 			}
@@ -371,15 +374,19 @@ func shapeOpencodeFreeBody(body []byte, v1Lane bool, protocol string) ([]byte, b
 				out, changed = next, true
 			}
 		}
-		if !gjson.GetBytes(out, "tool_choice").Exists() {
+		if !gjson.GetBytes(out, "tool_choice").Exists() && !isTitle {
 			if next, err := sjson.SetBytes(out, "tool_choice", "auto"); err == nil {
 				out, changed = next, true
 			}
 		}
 	}
-	next, aliases := ensureOfficialToolset(out, lane)
-	if !bytes.Equal(next, out) {
-		out, changed = next, true
+	var aliases map[string]string
+	if !isTitle {
+		var next []byte
+		next, aliases = ensureOfficialToolset(out, lane)
+		if !bytes.Equal(next, out) {
+			out, changed = next, true
+		}
 	}
 	if normalized := normalizeOpencodeChatBody(out, keyOrder); normalized != nil {
 		out = normalized
@@ -402,14 +409,67 @@ func renderOfficialOpencodeTemplate(lane, modelName string) (string, string, boo
 		prefix = prefix[:ocOfficialSystemPrefixLen]
 	}
 	official := raw
+	env := ocPromptEnvironmentSetting()
+	workdir := ocRuntimeWorkdir()
+	if env.WorkingDirectory != "" {
+		workdir = env.WorkingDirectory
+	}
 	official = strings.ReplaceAll(official, "{{MODEL_NAME}}", modelName)
 	official = strings.ReplaceAll(official, "{{MODEL_ID}}", modelName)
 	official = strings.ReplaceAll(official, "{{DATE}}", ocProbeDate(time.Now()))
-	official = strings.ReplaceAll(official, "{{WORKDIR}}", ocRuntimeWorkdir())
+	official = strings.ReplaceAll(official, "{{WORKDIR}}", workdir)
+	official = ocApplyPromptEnvironment(official, env)
 	if strings.Contains(official, "{{") {
 		return "", "", false
 	}
 	return official, prefix, true
+}
+
+// ocPromptEnvironmentSetting 读取环境覆盖配置, 未配置返回零值。
+func ocPromptEnvironmentSetting() model.PromptEnvironment {
+	raw, err := op.SettingGetString(model.SettingKeyPromptEnvironment)
+	if err != nil || raw == "" {
+		return model.PromptEnvironment{}
+	}
+	var env model.PromptEnvironment
+	if json.Unmarshal([]byte(raw), &env) != nil {
+		return model.PromptEnvironment{}
+	}
+	return env
+}
+
+// ocApplyPromptEnvironment 按配置覆盖 env 块字段值。
+func ocApplyPromptEnvironment(prompt string, env model.PromptEnvironment) string {
+	out := prompt
+	if env.Platform != "" {
+		out = ocReplacePromptEnvLine(out, "Platform: ", env.Platform)
+	}
+	if env.WorkspaceRoot != "" {
+		out = ocReplacePromptEnvLine(out, "Workspace root folder: ", env.WorkspaceRoot)
+	}
+	if env.IsGitRepo != nil {
+		value := "no"
+		if *env.IsGitRepo {
+			value = "yes"
+		}
+		out = ocReplacePromptEnvLine(out, "Is directory a git repo: ", value)
+	}
+	return out
+}
+
+// ocReplacePromptEnvLine 替换指定前缀的整行取值, 保留缩进。
+func ocReplacePromptEnvLine(prompt, prefix, value string) string {
+	lines := strings.Split(prompt, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t")
+		if !strings.HasPrefix(trimmed, prefix) {
+			continue
+		}
+		indent := line[:len(line)-len(trimmed)]
+		lines[i] = indent + prefix + value
+		return strings.Join(lines, "\n")
+	}
+	return prompt
 }
 
 // ensureOfficialOpencodeSystem 保证免费档正文首条 system 消息是官方模板形态。

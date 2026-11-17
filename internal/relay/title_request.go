@@ -15,6 +15,7 @@ var titleRequestMarkers = []string{
 	"session title",
 	"concise title",
 	"title generator",
+	"you name conversations",
 }
 
 // 指令型标记, 系统角色命中即判定
@@ -24,6 +25,9 @@ var titleInstructionMarkers = []string{
 	"generate a title for this conversation",
 	"generate the session title",
 	"create a concise title",
+	"you generate a descriptive title",
+	"reply with a title and nothing else",
+	"reply with a title for it and nothing else",
 }
 
 // errTitleRequestRejected 分组策略拒绝标题类请求的终态。
@@ -44,6 +48,13 @@ func isTitleGenerationRequest(body []byte) bool {
 	}
 	if tools := gjson.GetBytes(body, "tools"); tools.IsArray() && len(tools.Array()) > 0 {
 		return false
+	}
+	// 已出现对话轮次说明是 agent 流量, 非全新标题请求
+	for _, msg := range items {
+		switch msg.Get("role").String() {
+		case "assistant", "tool", "function":
+			return false
+		}
 	}
 	light := len(items) <= titleRequestMaxMessages
 	for _, msg := range items {

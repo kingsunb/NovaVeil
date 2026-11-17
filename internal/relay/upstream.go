@@ -771,6 +771,7 @@ func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *
 		toolChoice := gjson.GetBytes(request.Body, "tool_choice")
 		request.Body = normalizeChatRoles(request.Body)
 		request.Body = normalizeChatContent(request.Body)
+		request.Body = mergeAssistantTurns(request.Body)
 		if toolChoice.Exists() && isOpencodeFreeModel(m.channel, bodyModelName(request.Body)) && !gjson.GetBytes(request.Body, "tool_choice").Exists() {
 			var err error
 			request.Body, err = sjson.SetRawBytes(request.Body, "tool_choice", []byte(toolChoice.Raw))
@@ -1005,6 +1006,109 @@ func joinBlocks(a, b string) string {
 		return a
 	default:
 		return a + "\n\n" + b
+	}
+}
+
+// mergeAssistantTurns 合并连续 assistant 消息为同一回合。
+// 跨协议转换会把交错文本与工具调用拆成多条。
+func mergeAssistantTurns(body []byte) []byte {
+	rows := gjson.GetBytes(body, "messages").Array()
+	if len(rows) < 2 {
+		return body
+	}
+	items := make([]string, 0, len(rows))
+	merged := false
+	for _, row := range rows {
+		if row.Get("role").String() == "assistant" && len(items) > 0 {
+			last := items[len(items)-1]
+			if gjson.Get(last, "role").String() == "assistant" {
+				if combined, ok := mergeAssistantTurn(last, row.Raw); ok {
+					items[len(items)-1] = combined
+					merged = true
+					continue
+				}
+			}
+		}
+		items = append(items, row.Raw)
+	}
+	if !merged {
+		return body
+	}
+	out, err := sjson.SetRawBytes(body, "messages", []byte("["+strings.Join(items, ",")+"]"))
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// mergeAssistantTurn 拼接同一回合的正文与工具调用, 形态冲突时放弃。
+func mergeAssistantTurn(previous, next string) (string, bool) {
+	content, ok := mergeAssistantContent(gjson.Get(previous, "content"), gjson.Get(next, "content"))
+	if !ok {
+		return "", false
+	}
+	out := previous
+	if content != "" {
+		updated, err := sjson.SetRawBytes(out, "content", []byte(content))
+		if err != nil {
+			return "", false
+		}
+		out = updated
+	}
+	calls := make([]string, 0, 4)
+	for _, call := range gjson.Get(previous, "tool_calls").Array() {
+		calls = append(calls, call.Raw)
+	}
+	for _, call := range gjson.Get(next, "tool_calls").Array() {
+		calls = append(calls, call.Raw)
+	}
+	if len(calls) > 0 {
+		updated, err := sjson.SetRawBytes(out, "tool_calls", []byte("["+strings.Join(calls, ",")+"]"))
+		if err != nil {
+			return "", false
+		}
+		out = updated
+	}
+	// 推理内容只留一份, 缺的一方补上
+	if !gjson.Get(out, "reasoning_content").Exists() {
+		if reasoning := gjson.Get(next, "reasoning_content"); reasoning.Exists() {
+			updated, err := sjson.SetRawBytes(out, "reasoning_content", []byte(reasoning.Raw))
+			if err != nil {
+				return "", false
+			}
+			out = updated
+		}
+	}
+	return out, true
+}
+
+// mergeAssistantContent 合并两段正文, 形态不一致时报告不可合并。
+func mergeAssistantContent(left, right gjson.Result) (string, bool) {
+	blank := func(r gjson.Result) bool { return !r.Exists() || r.Type == gjson.Null }
+	switch {
+	case blank(left) && blank(right):
+		return "", true
+	case blank(left):
+		return right.Raw, true
+	case blank(right):
+		return left.Raw, true
+	case left.Type == gjson.String && right.Type == gjson.String:
+		merged, err := json.Marshal(joinBlocks(left.Str, right.Str))
+		if err != nil {
+			return "", false
+		}
+		return string(merged), true
+	case left.IsArray() && right.IsArray():
+		parts := make([]string, 0, len(left.Array())+len(right.Array()))
+		for _, block := range left.Array() {
+			parts = append(parts, block.Raw)
+		}
+		for _, block := range right.Array() {
+			parts = append(parts, block.Raw)
+		}
+		return "[" + strings.Join(parts, ",") + "]", true
+	default:
+		return "", false
 	}
 }
 

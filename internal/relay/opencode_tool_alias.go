@@ -15,8 +15,9 @@ import (
 
 // ocToolAliasPrefix 免费档出站客户端自定义工具统一前缀。
 // 后接名字摘要, 免费层按客户端词汇拒绝请求。
-// 参考 opencode2api 2026-10-24 fd4c1c6d 的同名方案。
-const ocToolAliasPrefix = "clint_"
+// 免费层已识别 clint_ 字面量, 借 MCP 命名空间掩护。
+// 依据 opencode2api 2026-11-17 95575c5 实测轮换。
+const ocToolAliasPrefix = "mcp_"
 
 // ocToolDigestLen 是出站名携带的名字摘要 hex 位数。
 const ocToolDigestLen = 12
@@ -67,7 +68,7 @@ func ensureOfficialToolset(body []byte, lane string) ([]byte, map[string]string)
 	if err != nil || templates[lane] == nil {
 		return body, nil
 	}
-	official := templates[lane].Tools
+	official := ocApplyToolPlatform(templates[lane].Tools)
 	officialTools := make(map[string]gjson.Result)
 	taken := make(map[string]bool)
 	for _, tool := range gjson.ParseBytes(official).Array() {
@@ -78,6 +79,11 @@ func ensureOfficialToolset(body []byte, lane string) ([]byte, map[string]string)
 	tools := gjson.GetBytes(body, "tools")
 	if tools.Exists() && !tools.IsArray() {
 		return body, nil
+	}
+	// 旧版 functions 先转 tools, 名字只编码一次
+	if converted, ok := ocConvertLegacyFunctions(body); ok {
+		body = converted
+		tools = gjson.GetBytes(body, "tools")
 	}
 	for _, tool := range tools.Array() {
 		if name := tool.Get("function.name").String(); name != "" {
@@ -128,6 +134,54 @@ func ensureOfficialToolset(body []byte, lane string) ([]byte, map[string]string)
 	}
 	out = rewriteToolReferences(out, aliases)
 	return out, aliases
+}
+
+// ocApplyToolPlatform 按平台覆盖官方工具描述里的系统与 shell。
+func ocApplyToolPlatform(tools string) string {
+	switch ocPromptEnvironmentSetting().Platform {
+	case "win32":
+		tools = strings.ReplaceAll(tools, "on Linux using bash", "on Windows using powershell")
+		tools = strings.ReplaceAll(tools, "OS: linux, Shell: bash", "OS: windows, Shell: powershell")
+	case "darwin":
+		tools = strings.ReplaceAll(tools, "on Linux using bash", "on macOS using bash")
+		tools = strings.ReplaceAll(tools, "OS: linux, Shell: bash", "OS: darwin, Shell: bash")
+	}
+	return tools
+}
+
+// ocConvertLegacyFunctions 把旧版 functions 并入 tools 并移除原字段。
+// 只做形态转换不改名, 后续共用改名流程避免重复编码。
+func ocConvertLegacyFunctions(body []byte) ([]byte, bool) {
+	functions := gjson.GetBytes(body, "functions")
+	if !functions.IsArray() || len(functions.Array()) == 0 {
+		return body, false
+	}
+	items := make([]string, 0, len(functions.Array()))
+	for _, tool := range gjson.GetBytes(body, "tools").Array() {
+		items = append(items, tool.Raw)
+	}
+	for _, function := range functions.Array() {
+		if function.Get("name").String() == "" {
+			continue
+		}
+		entry, err := sjson.SetRawBytes([]byte(`{"type":"function"}`), "function", []byte(function.Raw))
+		if err != nil {
+			return body, false
+		}
+		items = append(items, string(entry))
+	}
+	if len(items) == 0 {
+		return body, false
+	}
+	out, err := sjson.SetRawBytes(body, "tools", []byte("["+strings.Join(items, ",")+"]"))
+	if err != nil {
+		return body, false
+	}
+	out, err = sjson.DeleteBytes(out, "functions")
+	if err != nil {
+		return body, false
+	}
+	return out, true
 }
 
 func ocToolDefinitionsEqual(left, right string) bool {
@@ -256,6 +310,7 @@ func rewriteToolReferences(body []byte, aliases map[string]string) []byte {
 		}
 	}
 	out := rewriteToolNameAt(body, "tool_choice.function.name", reverse)
+	out = rewriteToolNameAt(out, "function_call.name", reverse)
 	choice := gjson.GetBytes(out, "tool_choice")
 	switch choice.Get("type").String() {
 	case "function", "custom", "tool":
@@ -273,6 +328,7 @@ func rewriteToolReferences(body []byte, aliases map[string]string) []byte {
 		}
 	}
 	for i, msg := range gjson.GetBytes(out, "messages").Array() {
+		out = rewriteToolNameAt(out, fmt.Sprintf("messages.%d.function_call.name", i), reverse)
 		for j := range msg.Get("tool_calls").Array() {
 			out = rewriteToolNameAt(out, fmt.Sprintf("messages.%d.tool_calls.%d.function.name", i, j), reverse)
 		}

@@ -110,12 +110,12 @@ func TestEnsureOfficialToolsetNoClientVocabularyLeak(t *testing.T) {
 
 // TestRestoreToolAliasesInEventAndBody 锁定响应还原: 非流式与流式增量均还原客户端名。
 func TestRestoreToolAliasesInEventAndBody(t *testing.T) {
-	aliases := map[string]string{"clint_patcher": "patcher"}
-	body := restoreToolAliasesInBody([]byte(`{"choices":[{"message":{"tool_calls":[{"function":{"name":"clint_patcher"}}]}}]}`), aliases)
+	aliases := map[string]string{ocToolAliasPrefix + "patcher": "patcher"}
+	body := restoreToolAliasesInBody([]byte(`{"choices":[{"message":{"tool_calls":[{"function":{"name":"`+ocToolAliasPrefix+`patcher"}}]}}]}`), aliases)
 	if got := gjson.GetBytes(body, "choices.0.message.tool_calls.0.function.name").String(); got != "patcher" {
 		t.Fatalf("非流式未还原: %q", got)
 	}
-	event := restoreToolAliasesInEvent([]byte(`{"choices":[{"delta":{"tool_calls":[{"function":{"name":"clint_patcher"}}]}}]}`), aliases)
+	event := restoreToolAliasesInEvent([]byte(`{"choices":[{"delta":{"tool_calls":[{"function":{"name":"`+ocToolAliasPrefix+`patcher"}}]}}]}`), aliases)
 	if got := gjson.GetBytes(event, "choices.0.delta.tool_calls.0.function.name").String(); got != "patcher" {
 		t.Fatalf("流式未还原: %q", got)
 	}
@@ -137,12 +137,12 @@ func TestShapeV1AlsoAlignsToolset(t *testing.T) {
 	}
 	found := false
 	for name, orig := range aliases {
-		if strings.HasPrefix(name, "clint_") && orig == "mytool" {
+		if strings.HasPrefix(name, ocToolAliasPrefix) && orig == "mytool" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("v1 应把客户端工具改名为 clint_ 前缀: %v", aliases)
+		t.Fatalf("v1 应把客户端工具改名为摘要前缀: %v", aliases)
 	}
 }
 
@@ -226,5 +226,30 @@ func TestSanitizeSchemaDescriptions(t *testing.T) {
 	raw2 := []byte(`{"type":"object","properties":{"x":{"type":"string"}}}`)
 	if string(sanitizeSchemaDescriptions(raw2)) != string(raw2) {
 		t.Fatal("无 description 的 schema 不应改变")
+	}
+}
+
+// TestEnsureOfficialToolsetConvertsLegacyFunctions 锁定旧版 functions 只编码一次。
+func TestEnsureOfficialToolsetConvertsLegacyFunctions(t *testing.T) {
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"functions":[{"name":"legacy_tool","description":"d","parameters":{"type":"object","properties":{}}}]}`)
+	out, aliases := ensureOfficialToolset(body, "v2")
+	if gjson.GetBytes(out, "functions").Exists() {
+		t.Fatal("functions 应被移除")
+	}
+	wire := ocExpectWireName("legacy_tool")
+	if aliases[wire] != "legacy_tool" {
+		t.Fatalf("别名表缺少旧版工具映射: %v", aliases)
+	}
+	found := false
+	for _, tool := range gjson.GetBytes(out, "tools").Array() {
+		if tool.Get("function.name").String() == wire {
+			found = true
+			if tool.Get("type").String() != "function" {
+				t.Fatalf("转换后应带 function 类型: %s", tool.Raw)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("旧版工具应转换为 tools 条目")
 	}
 }

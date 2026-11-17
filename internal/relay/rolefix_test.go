@@ -178,3 +178,24 @@ func TestNormalizeChatContent(t *testing.T) {
 		t.Fatalf("数组 content 不应改变: %s", out3)
 	}
 }
+
+// TestMergeAssistantTurns 锁定交错文本与工具调用合并为同一回合。
+func TestMergeAssistantTurns(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"hi"},
+		{"role":"assistant","content":"let me look"},
+		{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"read","arguments":"{}"}}]},
+		{"role":"tool","content":"done","tool_call_id":"c1"}
+	]}`)
+	out := mergeAssistantTurns(body)
+	rows := gjson.GetBytes(out, "messages").Array()
+	if len(rows) != 3 {
+		t.Fatalf("应合并为 3 条消息, 实际 %d", len(rows))
+	}
+	if got := rows[1].Get("content").String(); got != "let me look" {
+		t.Fatalf("文本应保留: %q", got)
+	}
+	if len(rows[1].Get("tool_calls").Array()) != 1 {
+		t.Fatal("工具调用应并入同一回合")
+	}
+}

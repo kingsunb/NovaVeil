@@ -180,6 +180,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		opencodeAccountRetries := make(map[int]int)    // 各成员本请求已换号次数。
 		allCooldownClears := 0                         // 全冷却自动清除并重试的累计次数, 用于线性退避间隔计算。
 		var failedIdx int                              // 引用链解析失败跳下标(仅当轮有效), 与 hops 一起提升以便用普通赋值接收。
+		var lastHTTPErr error                          // 最近一次带状态码的上游失败, 耗尽后优先报出
 
 		for {
 			if ctx.Err() != nil {
@@ -206,13 +207,13 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			if limit := maxRequestRounds(relayConfig); rounds > limit {
 				request.markFailed(errRoundsExceeded, "", nil)
 				recordErrorLog(request)
-				rejectRequest(c, inbound, errNoAvailableChannels)
+				rejectRequest(c, inbound, retainedOrGeneric(errNoAvailableChannels, lastHTTPErr))
 				return
 			}
 			if requestDeadlineExceeded(relayConfig, startedAt) {
 				request.markFailed(errDeadlineExceeded, "", nil)
 				recordErrorLog(request)
-				rejectRequest(c, inbound, errNoAvailableChannels)
+				rejectRequest(c, inbound, retainedOrGeneric(errNoAvailableChannels, lastHTTPErr))
 				return
 			}
 
@@ -738,6 +739,10 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				// 本地计时器触发的超时会以上下文取消的形式浮出, 还原为明确的超时失败再进入统一处理。
 				if errors.Is(context.Cause(roundCtx), errMemberResponseTimeout) {
 					err = memberTimeoutError(metadataStreaming, timeoutSeconds)
+				}
+				// 传输失败不得掩盖前一轮可用的 HTTP 失败
+				if code, ok := UpstreamStatusCode(err); ok && code >= 400 && code != http.StatusRequestEntityTooLarge {
+					lastHTTPErr = err
 				}
 				// 归类本轮结束原因并回填尝试轨迹: 客户端取消与人工中止不计为轮次失败, 也不向面板展示为错误。
 				outcome := AttemptFailed
@@ -1629,6 +1634,34 @@ func downstreamErrorText(err error) string {
 }
 
 // rejectRequest 以客户端协议的错误格式返回请求级失败, 用于尚未登记状态因而无需定稿的请求。
+// retainedUpstreamError 保留上一轮上游 HTTP 失败, 供重试耗尽后定稿。
+type retainedUpstreamError struct{ err error }
+
+func (e retainedUpstreamError) Error() string { return e.err.Error() }
+
+func (e retainedUpstreamError) Unwrap() error { return e.err }
+
+// retainedUpstreamStatus 取出保留错误的状态码与 Retry-After。
+func retainedUpstreamStatus(err error) (int, string, bool) {
+	var retained retainedUpstreamError
+	if !errors.As(err, &retained) {
+		return 0, "", false
+	}
+	code, ok := UpstreamStatusCode(retained.err)
+	if !ok || code < 400 || code > 599 {
+		return 0, "", false
+	}
+	return code, UpstreamRetryAfter(retained.err), true
+}
+
+// retainedOrGeneric 有保留的上游失败时优先报它, 否则用通用终态。
+func retainedOrGeneric(generic, retained error) error {
+	if retained == nil {
+		return generic
+	}
+	return retainedUpstreamError{err: retained}
+}
+
 // 管理端「一键停止」属于瞬态不可用, 返回 503(+Retry-After) 让下游 SDK 按可重试处理;
 // 暂无可用渠道保持 400: 这是测试钉死的既有下游契约(客户端按确定性失败自行重试整个请求),
 // 请求体超过上游限制返回 413, 其余请求级错误(协议/参数问题)为 400。
@@ -1647,6 +1680,12 @@ func rejectRequest(c *gin.Context, inbound transformer.Inbound, err error) {
 		c.Header("Retry-After", strconv.Itoa(seconds))
 	} else if errors.Is(err, errRequestTooLarge) {
 		status = http.StatusRequestEntityTooLarge
+	} else if code, retryAfter, ok := retainedUpstreamStatus(err); ok {
+		// 保留的 429 等上游失败带原状态码与退避提示
+		status = code
+		if retryAfter != "" {
+			c.Header("Retry-After", retryAfter)
+		}
 	}
 	response := inbound.TransformError(c.Request.Context(), &llm.ResponseError{
 		StatusCode: status,

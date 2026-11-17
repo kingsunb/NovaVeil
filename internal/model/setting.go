@@ -20,16 +20,17 @@ const (
 	SettingKeyConversationRetentionDays SettingKey = "conversation_retention_days" // 对话留存归档保留天数(天), 默认 3, 受 ConversationRetentionDaysMin/Max 校验
 	SettingKeyConversationDirMaxGB      SettingKey = "conversation_dir_max_gb"     // 对话留存目录硬预算(GB), 默认 5, 受 ConversationDirMaxGBMin/Max 校验
 	// #nosec G101 -- 设置键名字符串是配置项名称，不是硬编码凭据。
-	SettingKeyAuthJWTSecret             SettingKey = "auth_jwt_secret"             // JWT 签名密钥(32字节随机数的hex, 64字符). 为空时首次使用自动生成并持久化; 轮换后所有已签发 token 失效. 仅内部管理, 禁止通过设置接口读写
-	SettingKeyHeaderTemplates           SettingKey = "header_templates"            // 渠道自定义请求头模板(JSON 数组), 供渠道表单一键填充
-	SettingKeyChannelRandomHeaders      SettingKey = "channel_random_headers"      // 按渠道指向头名的随机请求头规则(JSON 数组), 值由系统按会话自动生成并注入
-	SettingKeyUsageRetentionDays        SettingKey = "usage_retention_days"        // 用量分桶保留天数(天); 0=永久保留, 否则必须 >= 365(至少覆盖 1 年)
-	SettingKeyMaskConfig                SettingKey = "mask_config"                 // 脱敏功能配置(JSON): 全局开关/内置规则开关/自定义敏感词, 默认全关
-	SettingKeyModelFilter               SettingKey = "model_filter"                // 渠道获取模型时的全局过滤表达式(ECMAScript 正则); 留空表示不过滤, 与渠道级 MatchRegex 取 AND
-	SettingKeyClientStatMaxCount        SettingKey = "client_stat_max_count"       // 调用客户端统计最大保留条数, 默认 10000, 0=不限制
-	SettingKeyProxyPool                 SettingKey = "proxy_pool"                  // 代理池(JSON 数组), 供设置页管理与测试多个可选代理
-	SettingKeyConvTrace                 SettingKey = "conv_trace_enabled"          // 协议转换追踪开关: "1"开启后对跨协议转换记录耗时/大小/降级诊断等 Debug 日志, "0"(默认)关闭, 关闭时仅一次缓存查询零开销
-	SettingKeyOpencodeAccountAutoProbe  SettingKey = "opencode_account_auto_probe" // OpenCode 账号 24h 自动体检开关: "1"开启(默认)由后台任务每天体检一次台账内到期账号, "0"关闭。不进 DefaultSettings, 由 op 层惰性补种
+	SettingKeyAuthJWTSecret            SettingKey = "auth_jwt_secret"             // JWT 签名密钥(32字节随机数的hex, 64字符). 为空时首次使用自动生成并持久化; 轮换后所有已签发 token 失效. 仅内部管理, 禁止通过设置接口读写
+	SettingKeyHeaderTemplates          SettingKey = "header_templates"            // 渠道自定义请求头模板(JSON 数组), 供渠道表单一键填充
+	SettingKeyChannelRandomHeaders     SettingKey = "channel_random_headers"      // 按渠道指向头名的随机请求头规则(JSON 数组), 值由系统按会话自动生成并注入
+	SettingKeyUsageRetentionDays       SettingKey = "usage_retention_days"        // 用量分桶保留天数(天); 0=永久保留, 否则必须 >= 365(至少覆盖 1 年)
+	SettingKeyMaskConfig               SettingKey = "mask_config"                 // 脱敏功能配置(JSON): 全局开关/内置规则开关/自定义敏感词, 默认全关
+	SettingKeyModelFilter              SettingKey = "model_filter"                // 渠道获取模型时的全局过滤表达式(ECMAScript 正则); 留空表示不过滤, 与渠道级 MatchRegex 取 AND
+	SettingKeyClientStatMaxCount       SettingKey = "client_stat_max_count"       // 调用客户端统计最大保留条数, 默认 10000, 0=不限制
+	SettingKeyProxyPool                SettingKey = "proxy_pool"                  // 代理池(JSON 数组), 供设置页管理与测试多个可选代理
+	SettingKeyConvTrace                SettingKey = "conv_trace_enabled"          // 协议转换追踪开关: "1"开启后对跨协议转换记录耗时/大小/降级诊断等 Debug 日志, "0"(默认)关闭, 关闭时仅一次缓存查询零开销
+	SettingKeyOpencodeAccountAutoProbe SettingKey = "opencode_account_auto_probe" // OpenCode 账号 24h 自动体检开关: "1"开启(默认)由后台任务每天体检一次台账内到期账号, "0"关闭。不进 DefaultSettings, 由 op 层惰性补种
+	SettingKeyPromptEnvironment        SettingKey = "prompt_environment"          // 注入提示词环境字段覆盖(JSON): 工作目录/工作区根/平台/是否 git 仓库, 空值保持官方模板原值
 )
 
 // 用量数据保留时间设置项的默认值与下限。
@@ -51,6 +52,47 @@ const (
 type Setting struct {
 	Key   SettingKey `json:"key" gorm:"primaryKey"`
 	Value string     `json:"value" gorm:"not null"`
+}
+
+// PromptEnvironment 覆盖注入提示词中的环境字段, 空值保持模板原值。
+type PromptEnvironment struct {
+	WorkingDirectory string `json:"working_directory"` // 工作目录, 空值沿用运行时目录
+	WorkspaceRoot    string `json:"workspace_root"`    // 工作区根目录
+	Platform         string `json:"platform"`          // linux/darwin/win32
+	IsGitRepo        *bool  `json:"is_git_repo"`       // nil 表示不覆盖
+}
+
+// PromptEnvironmentPlatforms 允许的平台取值。
+var PromptEnvironmentPlatforms = map[string]bool{"": true, "linux": true, "darwin": true, "win32": true}
+
+// PromptEnvironmentMaxLen 单个路径字段的最大字节数。
+const PromptEnvironmentMaxLen = 256
+
+// Validate 校验环境覆盖项, 非法取值立即报错。
+func (e PromptEnvironment) Validate() error {
+	if err := validatePromptEnvPath("working_directory", e.WorkingDirectory); err != nil {
+		return err
+	}
+	if err := validatePromptEnvPath("workspace_root", e.WorkspaceRoot); err != nil {
+		return err
+	}
+	if !PromptEnvironmentPlatforms[e.Platform] {
+		return fmt.Errorf("prompt_environment.platform 只能是 linux/darwin/win32")
+	}
+	return nil
+}
+
+// validatePromptEnvPath 限制路径长度并拒绝控制字符。
+func validatePromptEnvPath(field, value string) error {
+	if len(value) > PromptEnvironmentMaxLen {
+		return fmt.Errorf("prompt_environment.%s 超过 %d 字节", field, PromptEnvironmentMaxLen)
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("prompt_environment.%s 不允许控制字符", field)
+		}
+	}
+	return nil
 }
 
 // HeaderTemplate 一键填充渠道自定义 Header 的命名模板。
@@ -119,6 +161,7 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyClientStatMaxCount, Value: strconv.Itoa(DefaultClientStatMaxCount)},               // 调用客户端统计默认保留 1 万条
 		{Key: SettingKeyProxyPool, Value: "[]"},                                                           // 代理池默认为空
 		{Key: SettingKeyConvTrace, Value: "0"},                                                            // 协议转换追踪默认关闭
+		{Key: SettingKeyPromptEnvironment, Value: "{}"},                                                   // 环境覆盖默认空, 官方模板原值生效
 	}
 }
 
@@ -127,6 +170,14 @@ func (s *Setting) Validate() error {
 		return fmt.Errorf("setting key must not be empty")
 	}
 	switch s.Key {
+	case SettingKeyPromptEnvironment:
+		var env PromptEnvironment
+		if s.Value != "" {
+			if err := json.Unmarshal([]byte(s.Value), &env); err != nil {
+				return fmt.Errorf("prompt_environment 不是合法 JSON: %w", err)
+			}
+		}
+		return env.Validate()
 	case SettingKeyAuthJWTSecret:
 		// JWT 密钥仅由内部生成与轮换, 禁止通过设置接口修改
 		return fmt.Errorf("jwt secret is managed internally and cannot be modified")

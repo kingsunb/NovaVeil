@@ -613,3 +613,27 @@ func TestApplyOpencodeFreeLaneHeadersSkipsBetaForChatAndV1(t *testing.T) {
 		}
 	}
 }
+
+// TestShapeOpencodeFreeBodySkipsTitleTools 锁定标题请求不补 agent 工具集。
+func TestShapeOpencodeFreeBodySkipsTitleTools(t *testing.T) {
+	body := []byte(`{"model":"x-free","messages":[{"role":"system","content":"you are a title generator"},{"role":"user","content":"summarize this"}],"stream":false}`)
+	out, _, _ := shapeOpencodeFreeBody(body, false, model.UpstreamProtocolChat)
+	if tools := gjson.GetBytes(out, "tools"); tools.Exists() && len(tools.Array()) > 0 {
+		t.Fatalf("标题请求不应补工具集: %s", tools.Raw)
+	}
+	if gjson.GetBytes(out, "tool_choice").Exists() {
+		t.Fatal("标题请求不应写 tool_choice")
+	}
+	if !gjson.GetBytes(out, "stream").Bool() {
+		t.Fatal("仍应强制流式")
+	}
+}
+
+// TestShapeOpencodeFreeBodyShapesAgentWithTurn 对面: 含对话轮次仍走整形。
+func TestShapeOpencodeFreeBodyShapesAgentWithTurn(t *testing.T) {
+	body := []byte(`{"model":"x-free","messages":[{"role":"system","content":"you are a title generator"},{"role":"user","content":"hi"},{"role":"assistant","content":"hello"}],"stream":true}`)
+	out, _, _ := shapeOpencodeFreeBody(body, false, model.UpstreamProtocolChat)
+	if tools := gjson.GetBytes(out, "tools"); len(tools.Array()) == 0 {
+		t.Fatal("agent 请求必须补官方工具集")
+	}
+}
