@@ -112,6 +112,7 @@ func buildPassthroughRequest(format llm.APIFormat, raw *httpclient.Request, chan
 	// BaseURL 以 ## 结尾表示地址已完整, 不再追加版本号和协议路径。
 	base := strings.TrimSuffix(channel.BaseURL, "##")
 	rawURL := base != channel.BaseURL
+	base = opencodeV2FamilyBaseURL(base, channel, opencodeFamilyForFormat(format))
 
 	var path string
 	if channel.PassThroughBodyEnabled && !rawURL {
@@ -125,12 +126,7 @@ func buildPassthroughRequest(format llm.APIFormat, raw *httpclient.Request, chan
 	} else {
 		path = upstreamPath(format)
 	}
-	// 免费档 /inference 端点发裸路径, 不追加版本段; /zen 等 legacy 端点保持原样。
-	version := "v1"
-	if isOpencodeFreeLane(channel) && strings.HasSuffix(strings.TrimRight(base, "/"), "/inference") {
-		version = ""
-	}
-	url := transformer.BuildRequestURL(base, version, path, "", rawURL)
+	url := transformer.BuildRequestURL(base, "v1", path, "", rawURL)
 
 	var auth *httpclient.AuthConfig
 	if channel.PrimaryKey() != "" {

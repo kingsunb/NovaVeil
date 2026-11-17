@@ -208,7 +208,7 @@ func buildOutbound(channel model.Channel, channelModel *model.ChannelModel, form
 	staticKey := auth.NewStaticKeyProvider(key)
 	passthrough := supportsNativeFormat(channel, channelModel, format)
 	provider := outboundProvider(channel, channelModel)
-	baseURL := channel.BaseURL
+	baseURL := opencodeV2FamilyBaseURL(channel.BaseURL, channel, opencodeUpstreamFamily(provider))
 	switch provider {
 	case model.ChannelProviderOpenAI:
 		outbound, err := openai.NewOutboundTransformerWithConfig(&openai.Config{PlatformType: openai.PlatformOpenAI, BaseURL: baseURL, APIKeyProvider: staticKey})

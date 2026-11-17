@@ -439,7 +439,7 @@ func assertClientFormBody(t *testing.T, body []byte, lane string, modelName, dis
 }
 
 // TestOcProbeRawRequestMatchesRealClient 验证免费档体检请求与官方客户端实抓形态一致。
-// 2026-11-17 实抓: 官方 2.3.0 发裸 /inference/chat/completions, 不带族段与版本段。
+// 2026-10-26 起两条形态都打 /inference, 路径带协议族段(官方实抓 POST /inference/openai/v1/...)。
 func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 	cases := []struct {
 		lane    string
@@ -463,7 +463,7 @@ func TestOcProbeRawRequestMatchesRealClient(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s 档构造失败: %v", c.lane, err)
 		}
-		if raw.Path != "/chat/completions" {
+		if raw.Path != "/openai/v1/chat/completions" {
 			t.Fatalf("%s 档路径异常: %q", c.lane, raw.Path)
 		}
 		if c.lane == "v2" {
@@ -586,7 +586,7 @@ func TestProbeOpencodeAccountsSendsClientFormAndUniqueSessions(t *testing.T) {
 	runProject := requests[0].Header.Get("x-opencode-project")
 	sessions := make(map[string]bool, 3)
 	for _, request := range requests {
-		if request.Method != http.MethodPost || request.Path != "/inference/chat/completions" {
+		if request.Method != http.MethodPost || request.Path != "/inference/openai/v1/chat/completions" {
 			t.Fatalf("出站请求行异常: %s %s", request.Method, request.Path)
 		}
 		session := request.Header.Get("x-opencode-session")
