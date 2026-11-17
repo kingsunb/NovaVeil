@@ -137,16 +137,21 @@ func ensureOfficialToolset(body []byte, lane string) ([]byte, map[string]string)
 }
 
 // ocApplyToolPlatform 按平台覆盖官方工具描述里的系统与 shell。
-func ocApplyToolPlatform(tools string) string {
-	switch ocPromptEnvironmentSetting().Platform {
-	case "win32":
-		tools = strings.ReplaceAll(tools, "on Linux using bash", "on Windows using powershell")
-		tools = strings.ReplaceAll(tools, "OS: linux, Shell: bash", "OS: windows, Shell: powershell")
-	case "darwin":
-		tools = strings.ReplaceAll(tools, "on Linux using bash", "on macOS using bash")
-		tools = strings.ReplaceAll(tools, "OS: linux, Shell: bash", "OS: darwin, Shell: bash")
+func ocApplyToolPlatform(tools []byte) []byte {
+	platform := ocPromptEnvironmentSetting().Platform
+	if platform == "" {
+		return tools
 	}
-	return tools
+	text := string(tools)
+	switch platform {
+	case "win32":
+		text = strings.ReplaceAll(text, "on Linux using bash", "on Windows using powershell")
+		text = strings.ReplaceAll(text, "OS: linux, Shell: bash", "OS: windows, Shell: powershell")
+	case "darwin":
+		text = strings.ReplaceAll(text, "on Linux using bash", "on macOS using bash")
+		text = strings.ReplaceAll(text, "OS: linux, Shell: bash", "OS: darwin, Shell: bash")
+	}
+	return []byte(text)
 }
 
 // ocConvertLegacyFunctions 把旧版 functions 并入 tools 并移除原字段。

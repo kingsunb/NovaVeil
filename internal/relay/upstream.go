@@ -1047,7 +1047,7 @@ func mergeAssistantTurn(previous, next string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	out := previous
+	out := []byte(previous)
 	if content != "" {
 		updated, err := sjson.SetRawBytes(out, "content", []byte(content))
 		if err != nil {
@@ -1070,7 +1070,7 @@ func mergeAssistantTurn(previous, next string) (string, bool) {
 		out = updated
 	}
 	// 推理内容只留一份, 缺的一方补上
-	if !gjson.Get(out, "reasoning_content").Exists() {
+	if !gjson.GetBytes(out, "reasoning_content").Exists() {
 		if reasoning := gjson.Get(next, "reasoning_content"); reasoning.Exists() {
 			updated, err := sjson.SetRawBytes(out, "reasoning_content", []byte(reasoning.Raw))
 			if err != nil {
@@ -1079,7 +1079,7 @@ func mergeAssistantTurn(previous, next string) (string, bool) {
 			out = updated
 		}
 	}
-	return out, true
+	return string(out), true
 }
 
 // mergeAssistantContent 合并两段正文, 形态不一致时报告不可合并。
