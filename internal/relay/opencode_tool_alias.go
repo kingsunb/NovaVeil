@@ -458,34 +458,16 @@ type ocOfficialToolTarget struct {
 // buildOfficialToolTargets 从已转成 Chat 的客户端工具声明建官方名映射。
 // 只登记客户端确实声明的等价名; 未声明的官方名保持透传。
 func buildOfficialToolTargets(body []byte) map[string]ocOfficialToolTarget {
-	tools := gjson.GetBytes(body, "tools")
-	if !tools.IsArray() {
-		return nil
-	}
 	client := make(map[string]ocOfficialToolTarget)
-	for _, tool := range tools.Array() {
+	for _, tool := range gjson.GetBytes(body, "tools").Array() {
 		if tool.Get("type").String() != "function" {
 			continue
 		}
-		name := tool.Get("function.name").String()
-		if name == "" || ocToolIsWireName(name) {
-			continue
-		}
-		schema := tool.Get("function.parameters")
-		target := ocOfficialToolTarget{clientName: name, schema: schema}
-		if schema.IsObject() {
-			target.hasSchema = true
-			target.properties = make(map[string]struct{})
-			schema.Get("properties").ForEach(func(key, _ gjson.Result) bool {
-				target.properties[key.String()] = struct{}{}
-				return true
-			})
-			target.required = make(map[string]struct{})
-			for _, required := range schema.Get("required").Array() {
-				target.required[required.String()] = struct{}{}
-			}
-		}
-		client[name] = target
+		ocAddClientToolTarget(client, tool.Get("function.name").String(), tool.Get("function.parameters"))
+	}
+	// 旧版 functions 同样登记, 响应侧官方名才能回映
+	for _, function := range gjson.GetBytes(body, "functions").Array() {
+		ocAddClientToolTarget(client, function.Get("name").String(), function.Get("parameters"))
 	}
 	if len(client) == 0 {
 		return nil
@@ -507,6 +489,27 @@ func buildOfficialToolTargets(body []byte) map[string]ocOfficialToolTarget {
 		targets["todowrite"] = t
 	}
 	return targets
+}
+
+// ocAddClientToolTarget 登记单个客户端声明的工具及其参数白名单。
+func ocAddClientToolTarget(client map[string]ocOfficialToolTarget, name string, schema gjson.Result) {
+	if name == "" || ocToolIsWireName(name) {
+		return
+	}
+	target := ocOfficialToolTarget{clientName: name, schema: schema}
+	if schema.IsObject() {
+		target.hasSchema = true
+		target.properties = make(map[string]struct{})
+		schema.Get("properties").ForEach(func(key, _ gjson.Result) bool {
+			target.properties[key.String()] = struct{}{}
+			return true
+		})
+		target.required = make(map[string]struct{})
+		for _, required := range schema.Get("required").Array() {
+			target.required[required.String()] = struct{}{}
+		}
+	}
+	client[name] = target
 }
 
 const ocWebFetchDefaultPrompt = "Return the page content."

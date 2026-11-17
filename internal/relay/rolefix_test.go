@@ -199,3 +199,20 @@ func TestMergeAssistantTurns(t *testing.T) {
 		t.Fatal("工具调用应并入同一回合")
 	}
 }
+
+// TestMergeAssistantTurnsKeepsLegacyFunctionCall 合并时保留旧版 function_call。
+func TestMergeAssistantTurnsKeepsLegacyFunctionCall(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"user","content":"hi"},
+		{"role":"assistant","content":"calling"},
+		{"role":"assistant","function_call":{"name":"read","arguments":"{}"}}
+	]}`)
+	out := mergeAssistantTurns(body)
+	rows := gjson.GetBytes(out, "messages").Array()
+	if len(rows) != 2 {
+		t.Fatalf("应合并为 2 条, 实际 %d", len(rows))
+	}
+	if got := rows[1].Get("function_call.name").String(); got != "read" {
+		t.Fatalf("function_call 应保留: %s", rows[1].Raw)
+	}
+}

@@ -168,3 +168,20 @@ func TestTitleRequestWithToolsForwarded(t *testing.T) {
 		t.Fatalf("上游应被调用一次, 实际 %d 次", got)
 	}
 }
+
+// TestIsTitleGenerationRequestResponsesInput 锁定 Responses 协议标题请求识别。
+// 2.x 客户端的标题指令在 instructions, 消息在 input, 与 Chat 的 messages 不同。
+func TestIsTitleGenerationRequestResponsesInput(t *testing.T) {
+	body := []byte(`{"model":"m","instructions":"You generate a descriptive title for this conversation.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"fix the build"}]}]}`)
+	if !isTitleGenerationRequest(body) {
+		t.Fatal("Responses 标题请求应被识别")
+	}
+}
+
+// TestIsTitleGenerationRequestResponsesTurn 反过来: 含对话轮次不算标题请求。
+func TestIsTitleGenerationRequestResponsesTurn(t *testing.T) {
+	body := []byte(`{"model":"m","instructions":"You generate a descriptive title for this conversation.","input":[{"type":"message","role":"user","content":"hi"},{"type":"message","role":"assistant","content":"hello"}]}`)
+	if isTitleGenerationRequest(body) {
+		t.Fatal("含 assistant 轮次不应判为标题请求")
+	}
+}

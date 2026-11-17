@@ -253,3 +253,16 @@ func TestEnsureOfficialToolsetConvertsLegacyFunctions(t *testing.T) {
 		t.Fatal("旧版工具应转换为 tools 条目")
 	}
 }
+
+// TestBuildOfficialToolTargetsLegacyFunctions 旧版 functions 同样登记官方名映射。
+func TestBuildOfficialToolTargetsLegacyFunctions(t *testing.T) {
+	body := []byte(`{"model":"m","functions":[{"name":"Bash","description":"d","parameters":{"type":"object","properties":{"command":{"type":"string"}}}}]}`)
+	targets := buildOfficialToolTargets(body)
+	target, ok := targets["bash"]
+	if !ok {
+		t.Fatalf("bash 应映射到旧版声明的 Bash: %v", targets)
+	}
+	if target.clientName != "Bash" || !target.hasSchema {
+		t.Fatalf("target 异常: %+v", target)
+	}
+}

@@ -1055,6 +1055,19 @@ func mergeAssistantTurn(previous, next string) (string, bool) {
 		}
 		out = updated
 	}
+	// 旧版 function_call 最多一条, 两侧都有则放弃合并
+	previousCall := gjson.Get(previous, "function_call")
+	nextCall := gjson.Get(next, "function_call")
+	if previousCall.Exists() && nextCall.Exists() {
+		return "", false
+	}
+	if !previousCall.Exists() && nextCall.Exists() {
+		updated, err := sjson.SetRawBytes(out, "function_call", []byte(nextCall.Raw))
+		if err != nil {
+			return "", false
+		}
+		out = updated
+	}
 	calls := make([]string, 0, 4)
 	for _, call := range gjson.Get(previous, "tool_calls").Array() {
 		calls = append(calls, call.Raw)

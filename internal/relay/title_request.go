@@ -33,41 +33,66 @@ var titleInstructionMarkers = []string{
 // errTitleRequestRejected 分组策略拒绝标题类请求的终态。
 var errTitleRequestRejected = errors.New("title generation request rejected by group policy")
 
+// titleRequestMessage 是归一化后的标题判定输入。
+type titleRequestMessage struct {
+	role string
+	text string
+}
+
 // isTitleGenerationRequest 判定是否为客户端生成的标题类轻请求。
-// 前置条件: messages 非空且客户端未声明工具。
+// 前置条件: 消息非空且客户端未声明工具。
 // 系统角色的指令型标记直接成立, 泛用标记需消息不超过两条。
 // 免费档整形会注入官方系统提示与工具, 故必须用客户端原始正文判定。
 func isTitleGenerationRequest(body []byte) bool {
-	messages := gjson.GetBytes(body, "messages")
-	if !messages.IsArray() {
-		return false
-	}
-	items := messages.Array()
-	if len(items) == 0 {
+	items, ok := titleRequestMessages(body)
+	if !ok || len(items) == 0 {
 		return false
 	}
 	if tools := gjson.GetBytes(body, "tools"); tools.IsArray() && len(tools.Array()) > 0 {
 		return false
 	}
 	// 已出现对话轮次说明是 agent 流量, 非全新标题请求
-	for _, msg := range items {
-		switch msg.Get("role").String() {
+	for _, item := range items {
+		switch item.role {
 		case "assistant", "tool", "function":
 			return false
 		}
 	}
 	light := len(items) <= titleRequestMaxMessages
-	for _, msg := range items {
-		text := messageText(msg)
+	for _, item := range items {
 		// 系统提示声明生成标题, 不看条数
-		if isInstructionRole(msg.Get("role").String()) && containsTitleMarker(text, titleInstructionMarkers) {
+		if isInstructionRole(item.role) && containsTitleMarker(item.text, titleInstructionMarkers) {
 			return true
 		}
-		if light && containsTitleMarker(text, titleRequestMarkers) {
+		if light && containsTitleMarker(item.text, titleRequestMarkers) {
 			return true
 		}
 	}
 	return false
+}
+
+// titleRequestMessages 归一化 Chat messages 与 Responses input。
+// Responses 的标题指令可能在 instructions, 一并纳入判定。
+func titleRequestMessages(body []byte) ([]titleRequestMessage, bool) {
+	if messages := gjson.GetBytes(body, "messages"); messages.IsArray() {
+		out := make([]titleRequestMessage, 0, len(messages.Array()))
+		for _, message := range messages.Array() {
+			out = append(out, titleRequestMessage{role: message.Get("role").String(), text: messageText(message)})
+		}
+		return out, true
+	}
+	input := gjson.GetBytes(body, "input")
+	if !input.IsArray() {
+		return nil, false
+	}
+	out := make([]titleRequestMessage, 0, len(input.Array())+1)
+	if instructions := gjson.GetBytes(body, "instructions"); instructions.Type == gjson.String && instructions.String() != "" {
+		out = append(out, titleRequestMessage{role: "system", text: instructions.String()})
+	}
+	for _, item := range input.Array() {
+		out = append(out, titleRequestMessage{role: item.Get("role").String(), text: messageText(item)})
+	}
+	return out, true
 }
 
 // isInstructionRole 报告角色是否承载系统级指令。
