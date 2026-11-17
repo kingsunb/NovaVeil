@@ -133,7 +133,7 @@ func SessionIDFromSignal(signal string, v1Lane bool) string {
 		return signal
 	}
 	sum := sha256.Sum256(saltedSessionSeed(signal))
-	mixed := sessionTimePart(signal)<<12 | uint64(sum[5])&0xff
+	mixed := sessionClockMillis(signal)<<12 | uint64(sum[5])&0xff
 	inverted := ^mixed & 0xFFFFFFFFFFFF
 	hexPart := hex.EncodeToString([]byte{
 		byte(inverted >> 40), byte(inverted >> 32), byte(inverted >> 24),
