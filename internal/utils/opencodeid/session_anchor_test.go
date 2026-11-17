@@ -127,3 +127,35 @@ func TestDeriveSessionIDForAccount(t *testing.T) {
 		t.Fatal("带账号时官方号不得原样透传")
 	}
 }
+
+// TestSessionIDFromSignalOfficialShape 锁定 2.3.0 官方形态: 序号段位 11..8 为零
+// 使 hex 第 10 位恒为 f(descendingTimePartPattern 的实际来源), 上游按此校验。
+func TestSessionIDFromSignalOfficialShape(t *testing.T) {
+	pattern := regexp.MustCompile(`^ses_[0-9a-f]{9}f[c-f][0-9a-f][0-9A-Za-z]{14}$`)
+	now := time.Now().UnixMilli()
+	for _, signal := range []string{"shape-a", "shape-b", "shape-c"} {
+		id := SessionIDFromSignal(signal, false)
+		if !pattern.MatchString(id) {
+			t.Fatalf("派生号不满足官方 descending 形态: %q", id)
+		}
+		m := pattern.FindStringSubmatch(id)
+		raw, err := hex.DecodeString(m[1])
+		if err != nil {
+			t.Fatalf("解析时间段: %v", err)
+		}
+		var inverted uint64
+		for _, b := range raw {
+			inverted = inverted<<8 | uint64(b)
+		}
+		val := (^inverted & 0xFFFFFFFFFFFF) >> 12
+		// 时间段应接近当前毫秒(纪元折叠后取最接近 now 的解释)。
+		era := uint64(1) << 36
+		best := val
+		if d := now - best; d > era/2 {
+			best += ((d / era) + 1) * era
+		}
+		if best > now+24*3600*1000 || best < now-24*3600*1000 {
+			t.Fatalf("时间段偏离当前时间超过一天: signal=%q val=%d now=%d", signal, best, now)
+		}
+	}
+}

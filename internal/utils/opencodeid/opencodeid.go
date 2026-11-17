@@ -123,31 +123,45 @@ var (
 )
 
 // SessionIDFromSignal 由信号确定性派生官方 ses_ 会话号。
-// v1Lane=true 按小时锚(v1 原始策略); false 按天锚(v2: UTC 日−哈希偏移至多 30 天)。
-// 同一信号恒定派生同一号, 时间新鲜度与确定性兼得。
-// 种子混入进程盐, 重启后同一信号派生新号。
-// 官方合法号不受盐影响, 原样返回。
+// 对齐官方 2.3.0 算法(二进制反编译): 时间段 = 真实毫秒 ×4096 + 同毫秒序号,
+// 位反后取 48 位 hex; 序号必须小于 256(位 11..8 为零), 否则 hex 第 10 位
+// 不是 f, 上游形态校验直接 429。随机段由信号哈希确定性派生。
+// 时间取信号首次解析时刻(缓存), 同一信号在进程内恒定; 缓存超龄刷新,
+// 时间保持新鲜, 重启后派生新号(官方同款语义)。官方合法号原样返回。
 func SessionIDFromSignal(signal string, v1Lane bool) string {
 	if officialSessionPattern.MatchString(signal) && descendingTimePartPattern.MatchString(signal[4:16]) {
 		return signal
 	}
 	sum := sha256.Sum256(saltedSessionSeed(signal))
-	var inverted uint64
-	if v1Lane {
-		anchor := uint64(time.Now().UnixMilli()/sessionAnchorMillis*sessionAnchorMillis) << 12
-		mixed := anchor | uint64(sum[5])&0xfff
-		inverted = ^mixed & 0xFFFFFFFFFFFF
-	} else {
-		offsetDays := uint64(sum[5]%31) * sessionDayMillis
-		anchor := (uint64(time.Now().UTC().Truncate(24*time.Hour).UnixMilli()) - offsetDays) << 12
-		inverted = ^anchor & 0xFFFFFFFFFFFF
-	}
+	mixed := sessionTimePart(signal)<<12 | uint64(sum[5])&0xff
+	inverted := ^mixed & 0xFFFFFFFFFFFF
 	hexPart := hex.EncodeToString([]byte{
 		byte(inverted >> 40), byte(inverted >> 32), byte(inverted >> 24),
 		byte(inverted >> 16), byte(inverted >> 8), byte(inverted),
 	})
 	return "ses_" + hexPart + base62Fixed(sum[6:16], 14)
 }
+
+// sessionClockMaxAge 缓存时间的最大年龄, 超龄刷新保持时间新鲜。
+const sessionClockMaxAgeMillis = 3600 * 1000
+
+// sessionDayMillis 旧窗口测试引用的天毫秒数。
+const sessionDayMillis = 24 * 3600 * 1000
+
+// sessionClockMillis 缓存信号首次解析时的毫秒时间。
+func sessionClockMillis(signal string) uint64 {
+	now := uint64(time.Now().UnixMilli())
+	if v, ok := sessionClock.Load(signal); ok {
+		if cached, _ := v.(uint64); now >= cached && now-cached < sessionClockMaxAgeMillis {
+			return cached
+		}
+	}
+	sessionClock.Store(signal, now)
+	return now
+}
+
+// sessionClock 缓存每个信号的解析时间, 会话号在进程内保持稳定。
+var sessionClock sync.Map
 
 // processSalt 进程盐, 重启重铸防跨号复用。
 var (
@@ -177,22 +191,6 @@ func saltedSessionSeed(signal string) []byte {
 	seed = append(seed, 0)
 	seed = append(seed, signal...)
 	return seed
-}
-
-const sessionAnchorMillis = 3600 * 1000
-
-const sessionDayMillis = 24 * 3600 * 1000
-
-// descendingTimePart 取反 48 位时间部分, 落在官方 descending 形态。
-func descendingTimePart(hash []byte) string {
-	current := (uint64(hash[0])<<28 | uint64(hash[1])<<20 | uint64(hash[2])<<12 |
-		uint64(hash[3])<<4 | uint64(hash[4])>>4) << 12
-	current |= 1
-	inverted := ^current & 0xFFFFFFFFFFFF
-	return hex.EncodeToString([]byte{
-		byte(inverted >> 40), byte(inverted >> 32), byte(inverted >> 24),
-		byte(inverted >> 16), byte(inverted >> 8), byte(inverted),
-	})
 }
 
 // base62Fixed 把字节串编码成定宽 Base62。
