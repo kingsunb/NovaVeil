@@ -415,7 +415,7 @@ describe("<SettingsPage /> SyncSection 自动同步间隔", () => {
 describe("<SettingsPage /> 上下文密度", () => {
   it("列出密度并可清除单条记录", async () => {
     const user = userEvent.setup();
-    const fetchMock = vi.fn((url: string) => {
+    const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
       if (url.includes("/setting/token-density/list")) {
         return Promise.resolve(
           jsonOk([
