@@ -14,6 +14,16 @@ func stickyTestItem(id int) model.GroupItem {
 	return model.GroupItem{ID: id, GroupID: 1, ChannelModel: &model.ChannelModel{ChannelID: 100 + id, Name: "m"}, Priority: id}
 }
 
+// stubStickyChannels 隔离渠道查询全局桩, 避免用例受真实库影响。
+func stubStickyChannels(t *testing.T) {
+	t.Helper()
+	old := channelLookupFunc
+	channelLookupFunc = func(id int) (model.Channel, error) {
+		return model.Channel{ID: id, Enabled: true}, nil
+	}
+	t.Cleanup(func() { channelLookupFunc = old })
+}
+
 // resetStickyState 清空粘合与路由全局状态, 避免用例间相互污染。
 // 顺带归零顺带清理的节流时间戳: 生产上清理按 60s 间隔节流, 用例依赖
 // "bind 立即清理已删除成员残留"的语义, 归零后首次 bind 必然触发清理。
@@ -49,6 +59,7 @@ func stickyTestGroup(seconds int, items ...model.GroupItem) model.Group {
 }
 
 func TestSessionSticky(t *testing.T) {
+	stubStickyChannels(t)
 	t.Run("命中", func(t *testing.T) {
 		resetStickyState()
 		group := stickyTestGroup(300, stickyTestItem(11), stickyTestItem(12))
@@ -226,6 +237,7 @@ func TestSessionScopeKeyIsolatesAPIKeyAndConsole(t *testing.T) {
 }
 
 func TestSessionStickyScopedKeysDoNotShareMember(t *testing.T) {
+	stubStickyChannels(t)
 	resetStickyState()
 	group := stickyTestGroup(300, stickyTestItem(11), stickyTestItem(12))
 	bindSessionSticky(group, sessionScopeKey(1, "room"), 11)
@@ -242,6 +254,7 @@ func TestSessionStickyScopedKeysDoNotShareMember(t *testing.T) {
 }
 
 func TestSessionStickyRejectsOverlongKeyAndTotalCap(t *testing.T) {
+	stubStickyChannels(t)
 	resetStickyState()
 	group := stickyTestGroup(300, stickyTestItem(11))
 	bindSessionSticky(group, strings.Repeat("s", maxStickyKeyBytes+1), 11)
