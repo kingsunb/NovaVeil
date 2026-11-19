@@ -26,14 +26,13 @@ const suspiciousZeroEstimateSlack = 8192
 //     input 报 0 可能是全部命中缓存的真实口径, 不修复;
 //   - 平凡请求豁免: 请求体不足 suspiciousZeroMinBodyBytes 字节, 或解析不出带非空文本的 messages
 //     (如空 ping 探活), 属正常现象, 不修复;
-//   - 其余情况(含 usage 为 nil 的失败请求)一律以请求体字节数近似估算输入 token
-//     (est = max(1, len/3)), 并以请求体字节数派生的上界夹击防异常放大,
-//     重算 TotalTokens = est + CompletionTokens。失败请求上游不回 usage, 但请求量确实
-//     发出去了, 估算是日志里唯一能给出的输入规模。
+//   - 其余情况(含 usage 为 nil 的失败请求)一律按当前模型密度估算输入 token,
+//     并以请求体字节数派生的上界夹击防异常放大, 重算 TotalTokens。
+//     失败请求上游不回 usage, 但请求量确实发出去了, 估算是日志里唯一能给出的输入规模。
 //
 // 返回值为深拷贝, 不改动调用方传入的原对象; 不修复时原样透传入参指针。
 // 请求体参数为 string: 热路径上避免了 string→[]byte 的整包拷贝(gjson.Get 直接按字符串扫描)。
-func sanitizeUsage(usage *llm.Usage, requestBody string) (*llm.Usage, bool) {
+func sanitizeUsage(usage *llm.Usage, requestBody string, density float64) (*llm.Usage, bool) {
 	if usage != nil && usage.PromptTokens > 0 {
 		return usage, false
 	}
@@ -63,7 +62,11 @@ func sanitizeUsage(usage *llm.Usage, requestBody string) (*llm.Usage, bool) {
 	fixed.PromptModalityTokenDetails = slices.Clone(fixed.PromptModalityTokenDetails)
 	fixed.CompletionModalityTokenDetails = slices.Clone(fixed.CompletionModalityTokenDetails)
 
-	estimated := max(int64(1), int64(len(requestBody))/3)
+	if density <= 0 {
+		density = defaultTokenDensity
+	}
+	estimated := int64(scaleBaseTokens(estimateRequestTokensText(requestBody), density))
+	estimated = max(int64(1), estimated)
 	estimated = min(estimated, int64(len(requestBody))*2+suspiciousZeroEstimateSlack)
 	fixed.PromptTokens = estimated
 	fixed.TotalTokens = estimated + fixed.CompletionTokens

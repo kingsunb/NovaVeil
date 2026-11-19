@@ -412,6 +412,50 @@ describe("<SettingsPage /> SyncSection 自动同步间隔", () => {
   });
 });
 
+describe("<SettingsPage /> 上下文密度", () => {
+  it("列出密度并可清除单条记录", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes("/setting/token-density/list")) {
+        return Promise.resolve(
+          jsonOk([
+            {
+              channel_id: 7,
+              channel_name: "opencode-free",
+              model: "deepseek-v4.1-flash-free",
+              density: 0.87,
+              sample_count: 2,
+              updated_at: "2026-11-19T03:00:00Z",
+            },
+          ]),
+        );
+      }
+      return Promise.resolve(jsonOk(null));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<SettingsPage />, { wrapper: Wrapper });
+
+    await user.click(screen.getByRole("button", { name: "上下文密度" }));
+    expect(
+      await screen.findByText("deepseek-v4.1-flash-free"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("0.8700")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "清除" }));
+    await user.click(screen.getByRole("button", { name: "再次点击确认" }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url).includes("/setting/token-density/delete") &&
+            init?.method === "POST",
+        ),
+      ).toBe(true);
+    });
+  });
+});
+
 describe("<SettingsPage /> 开关可访问名", () => {
   it("对话留存与转换追踪开关有可读名称", async () => {
     const user = userEvent.setup();

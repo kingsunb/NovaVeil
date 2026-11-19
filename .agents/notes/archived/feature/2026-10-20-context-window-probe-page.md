@@ -1,6 +1,7 @@
 # Agent Note: 上下文容量探测页（按档位探测并回填）
 
 Status: implemented
+Archived: 2026-11-19
 
 ## 问题
 

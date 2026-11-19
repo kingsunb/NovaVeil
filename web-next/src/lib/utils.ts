@@ -16,6 +16,18 @@ export function formatNumber(n: number, opts: Intl.NumberFormatOptions = {}) {
   return new Intl.NumberFormat("zh-CN", opts).format(n);
 }
 
+/** 窗口数值短串: 十进制, 最多三位小数; 131072 → "131.072K", 1_000_000 → "1M"。 */
+export function formatWindowTokens(n: number): string {
+  if (n >= 1_000_000) return `${Number((n / 1_000_000).toFixed(3))}M`;
+  if (n >= 1_000) return `${Number((n / 1_000).toFixed(3))}K`;
+  return String(n);
+}
+
+/** 精确 token 文案(千分位): 131072 → "131,072 token"。 */
+export function formatExactTokens(n: number): string {
+  return `${n.toLocaleString("en-US")} token`;
+}
+
 /**
  * 把 Unix 秒数格式化为本地 datetime-local 输入可用的 "YYYY-MM-DDTHH:mm"。
  * datetime-local 输入不包含时区，浏览器按本地时间解析；这里用本地时间组件拼装，

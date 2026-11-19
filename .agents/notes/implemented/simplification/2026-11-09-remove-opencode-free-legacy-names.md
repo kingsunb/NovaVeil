@@ -13,7 +13,7 @@ Status: implemented
    - 只查 `builtin = true` 且名称命中旧名的渠道行；`builtin = false` 的同名自建渠道不动。
    - 按映射把 `OpenCode Free` 的 `opencode_proxy_accounts` 行迁到 `OpenCode Free V2`，把 `OpenCode Free Old` 的行迁到 `OpenCode Free V1`。复制时 `ID` 置 0、`channel_id` 改目标，使用 GORM `clause.OnConflict{DoNothing: true}` 保留目标已有同 `(channel_id, key_id, account)` 账号的统计与冷却状态；复制后删除源渠道的账号行。
    - 按迁移 024 与 `op.ChannelDel` 的口径级联：清引用旧渠道模型的 `Group.active_item_id`（置 0），删 `GroupItem`、`ModelEvalRank`，再删 `ChannelModel` 与 `Channel`。迁移可重复执行，第二次为空操作。
-3. 旧渠道的评估与探测历史（`ModelEval`、`ModelEvalStats`、`ModelEvalQueueTask`、`ContextProbeRecord`）不在 028 的清理范围，沿用现有删除口径；这些行可能继续引用已删除的渠道 ID。
+3. 旧渠道的评估历史（`ModelEval`、`ModelEvalStats`、`ModelEvalQueueTask`）不在 028 的清理范围，沿用现有删除口径；这些行可能继续引用已删除的渠道 ID。上下文探测历史 `ContextProbeRecord` 已由迁移 031 随功能删除。
 
 ## 升级顺序与孤儿账号
 
@@ -40,7 +40,7 @@ Status: implemented
 ## 后果
 
 - **收益**：源码与渠道列表只剩 V2/V1 与备用/账号池，旧名不再被启动补建；旧渠道的代理账号迁到对应保留渠道后继续参与账号池与体检；目标已有账号的统计不被旧数据覆盖。
-- **代价与已知上限**：028 不可逆删除旧渠道行、模型与分组成员关系，以及旧渠道的生效成员指针；目标缺失时账号成为不可达孤儿且不会自动重迁移；`ModelEval`、`ModelEvalStats`、`ModelEvalQueueTask`、`ContextProbeRecord` 可能保留指向已删除渠道 ID 的历史行；`builtin = false` 的同名自建渠道不受影响。重访信号：线上出现旧渠道账号未迁移、`opencode_proxy_accounts` 出现指向已删除渠道的孤儿行，或需要清理评估与探测历史时。
+- **代价与已知上限**：028 不可逆删除旧渠道行、模型与分组成员关系，以及旧渠道的生效成员指针；目标缺失时账号成为不可达孤儿且不会自动重迁移；`ModelEval`、`ModelEvalStats`、`ModelEvalQueueTask` 可能保留指向已删除渠道 ID 的历史行（`ContextProbeRecord` 已由迁移 031 删除）；`builtin = false` 的同名自建渠道不受影响。重访信号：线上出现旧渠道账号未迁移、`opencode_proxy_accounts` 出现指向已删除渠道的孤儿行，或需要清理评估历史时。
 
 ## 验证
 

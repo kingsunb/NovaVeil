@@ -82,32 +82,6 @@ export interface ChannelModelLimit {
   context_window?: number;
 }
 
-/** 一次上下文容量探测的结论。 */
-export interface ContextProbeResult {
-  tokens: number;
-  accepted: boolean;
-  status: number;
-  detail: string;
-  latency_ms: number;
-  /** 上游报告的实际输入 token 数（响应 usage 或拒绝体）；0 表示未取到。 */
-  actual_tokens: number;
-}
-
-/** 探测历史记录。 */
-export interface ContextProbeRecord {
-  id: number;
-  channel_id: number;
-  channel_name: string;
-  model_name: string;
-  tokens: number;
-  accepted: boolean;
-  status: number;
-  detail: string;
-  latency_ms: number;
-  actual_tokens: number;
-  created_at: string;
-}
-
 export interface CustomHeader {
   header_key: string;
   header_value: string;
@@ -698,6 +672,16 @@ export type SettingKey =
 export interface SettingItem {
   key: SettingKey;
   value: string;
+}
+
+/** 渠道模型的上游 token 密度观测值。 */
+export interface TokenDensityRecord {
+  channel_id: number;
+  channel_name: string;
+  model: string;
+  density: number;
+  sample_count: number;
+  updated_at: string;
 }
 
 /** 一键填充渠道自定义 Header 的命名模板（对应后端 model.HeaderTemplate）。 */

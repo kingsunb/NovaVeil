@@ -8,7 +8,9 @@ import {
   formatDatetimeLocal,
   formatDuration,
   formatElapsedWithFirst,
+  formatExactTokens,
   formatNumber,
+  formatWindowTokens,
   MODEL_RULE,
   NAME_RULE,
   timeAgo,
@@ -57,6 +59,18 @@ describe("formatBytes", () => {
     expect(formatBytes(1024)).toBe("1.0 KB");
     expect(formatBytes(1024 * 1024)).toBe("1.0 MB");
     expect(formatBytes(1024 * 1024 * 1024)).toBe("1.0 GB");
+  });
+});
+
+describe("formatWindowTokens / formatExactTokens", () => {
+  it("窗口值按 K/M 缩写并去掉尾随零", () => {
+    expect(formatWindowTokens(999)).toBe("999");
+    expect(formatWindowTokens(131072)).toBe("131.072K");
+    expect(formatWindowTokens(1_000_000)).toBe("1M");
+  });
+
+  it("精确 token 文案保留千分位", () => {
+    expect(formatExactTokens(131072)).toBe("131,072 token");
   });
 });
 

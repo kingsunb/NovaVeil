@@ -34,7 +34,7 @@ WARP 出口被改成一组编号稳定的槽位：`slot N` 在进程生命周期
 - 网络失败（无上游 HTTP 状态码且非取消）才异步 `POST /penalize?egress=`；有 HTTP 状态码的 400/401/500/502 等不再误 penalize 出口。HTTP 标准库 CONNECT 非 200 只保留原因短语，503 文本是 `Service Unavailable`，因此新增 `isWarpSlotUnavailable` 只在无状态码分支识别它；Bun HTTP 代理的 `proxy refused CONNECT: 503 ...` 由 `isWarpProxyRejection` 覆盖；`502 Bad Gateway` 不匹配，按网络失败惩罚。
 - WARP 模板必须把 `{account}` 放在用户名。解析后校验 `resolved.User != nil`、`Username() == proxyAccount`、且 `resolved.String()` 不再含占位符；失败返回 `errWarpProxyTemplateInvalid`，不静默退化为轮询。`warpControlBase` 解析失败返回 `errWarpProxyInvalid`，不把可能含密码的原始 URL 带进错误响应。
 - `HasAccountPlaceholder` 同时识别字面量 `{account}` 与百分号转义的大小写组合（`%7Baccount%7D`、`%7baccount%7d` 等），避免小写转义漏掉槽位分支。
-- 辅助路径不解析 WARP 的 `{account}`：`helper.ResolveChannelProxyTemplate` 对 WARP 置 `ChannelProxy = nil`（直连/系统代理）；`effectiveChannelForKey` 保留槽位模板；`effectiveProbeChannel`、`effectiveTestChannel`、`probeOnceWithAccount`、`prepareAccountProbe`、`ListOpencodeAccountStates`、`AutoProbeOpencodeAccounts` 对 WARP 返回哨兵或跳过；模型同步、辅助抓取、渠道测试、账号体检、上下文探测都不生成未知槽位、不写库。
+- 辅助路径不解析 WARP 的 `{account}`：`helper.ResolveChannelProxyTemplate` 对 WARP 置 `ChannelProxy = nil`（直连/系统代理）；`effectiveChannelForKey` 保留槽位模板；`effectiveProbeChannel`、`effectiveTestChannel`、`probeOnceWithAccount`、`prepareAccountProbe`、`ListOpencodeAccountStates`、`AutoProbeOpencodeAccounts` 对 WARP 返回哨兵或跳过；模型同步、辅助抓取、渠道测试、账号体检都不生成未知槽位、不写库。
 
 ### 槽位契约
 

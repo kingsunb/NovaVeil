@@ -627,7 +627,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     const urls: string[] = [];
     const keyedChannel = eligibleChannel({
       id: 11,
-      name: "OpenCode Free V1 账号池",
+      name: "OpenCode Free V2 账号池",
       enabled: false,
       keyed: true,
       channel_proxy: "",
@@ -662,7 +662,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
     const deleteBodies: Array<Record<string, unknown>> = [];
     const keyedPoolChannel = eligibleChannel({
       id: 12,
-      name: "OpenCode Free V1 账号池",
+      name: "OpenCode Free V2 账号池",
       keyed: true,
       keys: [
         { id: "key-a", key_masked: "sk-****a", remark: "主 Key" },
@@ -749,7 +749,7 @@ describe("<ProxyAccountsPage /> 账号体检", () => {
   it("keyed 渠道 keys 为 null 时不崩溃", async () => {
     const keyedChannel = eligibleChannel({
       id: 13,
-      name: "OpenCode Free V1 账号池",
+      name: "OpenCode Free V2 账号池",
       enabled: false,
       keyed: true,
       channel_proxy: "",

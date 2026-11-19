@@ -23,7 +23,6 @@ export const loadChannelsPage = createPageLoader(() => import("@/pages/Channels"
 export const loadCustomModelsPage = createPageLoader(() => import("@/pages/CustomModels"));
 export const loadGroupsPage = createPageLoader(() => import("@/pages/Groups"));
 export const loadModelEvalPage = createPageLoader(() => import("@/pages/ModelEval"));
-export const loadContextProbePage = createPageLoader(() => import("@/pages/ContextProbe"));
 export const loadProxyAccountsPage = createPageLoader(() => import("@/pages/ProxyAccounts"));
 export const loadMaskPage = createPageLoader(() => import("@/pages/Mask"));
 export const loadKeysPage = createPageLoader(() => import("@/pages/Keys"));
@@ -38,7 +37,6 @@ const navigationLoaders = new Map([
   ["/custom-models", loadCustomModelsPage.preload],
   ["/groups", loadGroupsPage.preload],
   ["/model-eval", loadModelEvalPage.preload],
-  ["/context-probe", loadContextProbePage.preload],
   ["/proxy-accounts", loadProxyAccountsPage.preload],
   ["/mask", loadMaskPage.preload],
   ["/keys", loadKeysPage.preload],

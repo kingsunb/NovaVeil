@@ -34,6 +34,9 @@ func openMigration028DB(t *testing.T) *gorm.DB {
 	if err := database.AutoMigrate(&model.OpencodeProxyAccount{}); err != nil {
 		t.Fatalf("create account schema: %v", err)
 	}
+	if err := database.AutoMigrate(&model.TokenDensity{}); err != nil {
+		t.Fatalf("create density schema: %v", err)
+	}
 	return database
 }
 
@@ -127,6 +130,11 @@ func TestDeleteRetiredOpencodeFreeLegacyChannels(t *testing.T) {
 			 VALUES(?, '', ?, ?, ?)`,
 			account.channelID, account.account, time.Now(), account.successCount)
 	}
+	for _, channelID := range []int{1, 2, 12} {
+		execMigration028(t, database,
+			"INSERT INTO token_densities(channel_id, model, density) VALUES(?, 'm', 1)",
+			channelID)
+	}
 
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := deleteRetiredOpencodeFreeLegacyChannels(database); err != nil {
@@ -151,6 +159,9 @@ func TestDeleteRetiredOpencodeFreeLegacyChannels(t *testing.T) {
 	}
 	if got, want := migration028Accounts(t, database), []string{"10:a", "10:dup", "11:x", "12:custom"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("accounts = %v, want %v", got, want)
+	}
+	if got, want := pluckMigration028Ints(t, database, "SELECT channel_id FROM token_densities ORDER BY channel_id"), []int{12}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("densities = %v, want %v", got, want)
 	}
 	if got, want := pluckMigration028Ints(t, database,
 		"SELECT success_count FROM opencode_proxy_accounts WHERE channel_id = 10 AND account = 'dup'"), []int{99}; !reflect.DeepEqual(got, want) {
@@ -202,7 +213,26 @@ func TestDeleteRetiredOpencodeFreeLegacyChannelsWithoutTarget(t *testing.T) {
 	if got, want := pluckMigration028Ints(t, database, "SELECT id FROM model_eval_ranks ORDER BY id"), []int{2002}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("model_eval_ranks = %v, want %v", got, want)
 	}
-	if got, want := migration028Accounts(t, database), []string{"1:a", "12:custom"}; !reflect.DeepEqual(got, want) {
+	if got, want := migration028Accounts(t, database), []string{"12:custom"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("accounts = %v, want %v", got, want)
+	}
+}
+
+func TestDeleteRetiredOpencodeFreeOldWithoutV1(t *testing.T) {
+	database := openMigration028DB(t)
+	execMigration028(t, database, "INSERT INTO channels(id, name, builtin) VALUES(1, 'OpenCode Free Old', 1)")
+	execMigration028(t, database, "INSERT INTO channel_models(id, channel_id, name) VALUES(101, 1, 'm')")
+	execMigration028(t, database,
+		`INSERT INTO opencode_proxy_accounts(channel_id, key_id, account, last_success_at, success_count)
+		 VALUES(1, '', 'old-account', ?, 7)`, time.Now())
+
+	if err := deleteRetiredOpencodeFreeLegacyChannels(database); err != nil {
+		t.Fatalf("migration: %v", err)
+	}
+	if got := pluckMigration028Ints(t, database, "SELECT id FROM channels"); len(got) != 0 {
+		t.Fatalf("channels = %v, want none", got)
+	}
+	if got := migration028Accounts(t, database); len(got) != 0 {
+		t.Fatalf("accounts = %v, want none", got)
 	}
 }

@@ -160,10 +160,19 @@ func updateChannel(c *gin.Context) {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
 	}
+	var oldBaseURL string
+	if req.BaseURL != nil {
+		if old, err := op.ChannelGet(req.ID); err == nil {
+			oldBaseURL = old.BaseURL
+		}
+	}
 	channel, err := op.ChannelUpdate(&req, c.Request.Context())
 	if err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if req.BaseURL != nil && oldBaseURL != channel.BaseURL {
+		relay.InvalidateChannelTokenDensity(channel.ID)
 	}
 	resp.Success(c, channelAdminSummary(*channel))
 }
@@ -196,6 +205,7 @@ func deleteChannel(c *gin.Context) {
 	}
 	// 多 Key 渠道删除后同步清理轮询游标与 Key 级冷却记录, 防止条目累积或同 ID 重建被残留冷却误伤。
 	relay.CleanupChannelKeyState(id)
+	relay.InvalidateChannelTokenDensity(id)
 	resp.Success(c, nil)
 }
 

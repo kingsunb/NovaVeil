@@ -563,7 +563,7 @@ func ocProbeOne(ctx context.Context, channel model.Channel, modelName, displayNa
 	defer cancel()
 	probe, err := probeOnceWithAccount(probeCtx, channel, modelName, keyID, account, func(format llm.APIFormat) (*httpclient.Request, error) {
 		return ocProbeRawRequest(format, channel, modelName, displayName, projectID, ocProbeRandomQuestion(), ocProbeChannelMaxOutput(channel, modelName))
-	}, false)
+	})
 	switch {
 	case err != nil && probe == nil:
 		result.Detail = err.Error()

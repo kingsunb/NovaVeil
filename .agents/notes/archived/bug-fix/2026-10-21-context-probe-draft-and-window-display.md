@@ -1,6 +1,7 @@
 # Agent Note: 上下文探测窗口草稿与分组窗口展示
 
 Status: implemented
+Archived: 2026-11-19
 
 ## 问题
 

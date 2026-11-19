@@ -18,7 +18,7 @@ OpenCode 免费档的 `{account}` 是出口代理账号，不是真正的上游�
 - 多 Key 轮换分支只在没有代理账号拒绝时处理 401/429。`proxyAccount != ""` 的 403/429 跳过 Key 冷却，进入同一成员内的换号分支。
 - 换号分支用同一个 `opencodeAccountRetries` 预算处理 403/429，上限仍为 `ocProxyMaxRetries = 3`。换号期间不记路由失败、不设 `exclude`、不清会话粘合、不写成员冷却或半开；耗尽后把最后账号写入 `opencodeAccountPinned`，随后回落既有成员失败路径。
 - 非 OpenCode 渠道或未使用代理账号的 429 保持原语义：多 Key 渠道冷却当前 Key 并轮换，单 Key 渠道按成员失败处理。
-- 容量探测复用同一账号池：`context_probe.go` 遇到 429 也冷却当前账号，但探测仍不换号，保持单发诊断语义。
+- 账号体检复用同一账号池：`test_probe.go` 遇到 429 也冷却当前账号，但体检仍不换号，保持单发诊断语义。上下文探测入口已随探测页删除。
 
 403 的换号实现与预算见 [OpenCode 免费档 403 时直接换代理账号重试](2026-10-22-opencode-403-account-switch.md)，多 Key 优先级见 [多 Key OpenCode 渠道代理账号拒绝不冷却 Key](2026-10-22-opencode-403-multikey-priority.md)，账号池落库规则见 [按出口 IP 轮换代理账号池](../feature/2026-10-20-opencode-free-proxy-ip-pool.md)。
 

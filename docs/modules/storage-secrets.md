@@ -6,7 +6,7 @@
 
 ### 表与方言
 
-- AutoMigrate 建 18 张表：User、Channel、ChannelModel、ModelEval / ModelEvalStats / ModelEvalRank / ModelEvalQueueTask（评估 4 张）、Group、GroupItem、APIKey、Setting、LoginAttempt、ErrorLog、ClientStat、UsageBucket、OpencodeProxyAccount、ContextProbeRecord、MigrationRecord。
+- AutoMigrate 建 18 张表：User、Channel、ChannelModel、ModelEval / ModelEvalStats / ModelEvalRank / ModelEvalQueueTask（评估 4 张）、Group、GroupItem、APIKey、Setting、LoginAttempt、ErrorLog、ClientStat、UsageBucket、OpencodeProxyAccount、TokenDensity、MigrationRecord。
 - SQLite（glebarez 纯 Go）按 WAL 单写者收缩连接池并设 busy_timeout；MySQL / PostgreSQL 连接池 100；Postgres 在迁移完成后执行 `DEALLOCATE ALL` 与 `DISCARD ALL` 清理陈旧预编译计划与会话状态。
 
 ### 迁移

@@ -103,21 +103,23 @@ func startTestRequest(clientModel string, rawBody []byte, target RoundTarget, ca
 	mu.Lock()
 	defer mu.Unlock()
 	request := &RequestState{
-		ID:            idSeq.Add(1),
-		Status:        StatusRunning,
-		StartedAt:     time.Now(),
-		Model:         clientModel,
-		ClientIP:      testProbeClientIP,
-		TargetChannel: target.ChannelName,
-		TargetModel:   target.Model,
-		KeyLabel:      target.KeyLabel,
-		ClientFormat:  target.ClientFormat,
-		UpstreamType:  target.UpstreamType,
-		RelayMode:     "converted",
-		ProxyAddr:     target.ProxyAddr,
-		body:          truncatePreview(string(rawBody)),
-		cancel:        cancel,
-		stopCh:        make(chan struct{}),
+		ID:              idSeq.Add(1),
+		Status:          StatusRunning,
+		StartedAt:       time.Now(),
+		Model:           clientModel,
+		ClientIP:        testProbeClientIP,
+		TargetChannel:   target.ChannelName,
+		TargetChannelID: target.ChannelID,
+		TargetModel:     target.Model,
+		TargetBaseURL:   target.BaseURL,
+		KeyLabel:        target.KeyLabel,
+		ClientFormat:    target.ClientFormat,
+		UpstreamType:    target.UpstreamType,
+		RelayMode:       "converted",
+		ProxyAddr:       target.ProxyAddr,
+		body:            truncatePreview(string(rawBody)),
+		cancel:          cancel,
+		stopCh:          make(chan struct{}),
 	}
 	if target.Passthrough {
 		request.RelayMode = "passthrough"
@@ -153,7 +155,8 @@ func finishTestRequest(request *RequestState, responseBody string, usage *llm.Us
 	request.cancel = nil
 	request.responseBody = truncatePreview(responseBody)
 	// 失败/无 usage 的测试请求也按请求体估算输入量, 避免日志里恒为 0/0。
-	sanitized, estimated := sanitizeUsage(usage, request.body)
+	density := modelTokenDensity(request.TargetChannelID, request.TargetBaseURL, request.TargetModel)
+	sanitized, estimated := sanitizeUsage(usage, request.body, density)
 	if sanitized != nil {
 		request.Usage = *sanitized
 		request.UsageEstimated = estimated
@@ -482,6 +485,7 @@ func testRequestTarget(channel model.Channel, modelName, keyLabel string) (llm.A
 	return format, channelModel, RoundTarget{
 		ChannelID:    channel.ID,
 		ChannelName:  channel.Name,
+		BaseURL:      channel.BaseURL,
 		Model:        modelName,
 		KeyLabel:     keyLabel,
 		ClientFormat: clientFormatLabel(format),

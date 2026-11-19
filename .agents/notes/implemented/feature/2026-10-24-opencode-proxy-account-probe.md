@@ -8,9 +8,9 @@ Status: implemented
 
 ## Decision
 
-### 钉号探测（`internal/relay/context_probe.go`）
+### 钉号探测（`internal/relay/test_probe.go`）
 
-`probeOnce` 抽出 `probeOnceWithAccount(ctx, channel, modelName, tokens, account)`：account 为空沿用池内选号（原行为不变），非空时强制用该账号探测。拿到 HTTP 响应时结论（Status/Detail/Latency）随 result 返回而非丢弃——`probeOnce` 包装层保持旧契约（err 时 result=nil），`ProbeContextWindow` 调用方无感知。成功/403/429 的池回填逻辑原样复用：**体检结果与转发共享同一套池状态**。`channel_proxy` 模板解析失败时探测直接报错（不回显模板原文，避免代理凭据进日志与台账），不带着未替换的 `{account}` 占位符出站。
+`probeOnceWithAccount(ctx, channel, modelName, keyID, account, buildRaw)`：account 为空沿用池内选号（原行为不变），非空时强制用该账号探测。拿到 HTTP 响应时结论（Status/Detail/Latency）随 result 返回而非丢弃。成功/403/429 的池回填逻辑原样复用：**体检结果与转发共享同一套池状态**。`channel_proxy` 模板解析失败时探测直接报错（不回显模板原文，避免代理凭据进日志与台账），不带着未替换的 `{account}` 占位符出站。上下文探测页已于 2026-11-19 删除，账号体检继续复用该 helper。
 
 ### 批量体检（`internal/relay/opencode_account_probe.go`）
 
@@ -36,7 +36,7 @@ Status: implemented
 
 生成/粘贴的账号**探测前即落账**（`op.UpsertOpencodeGeneratedAccounts`，source=generated），探测结论同步回写（`SaveOpencodeProbeResult`），台账长期保存。`GET /channel/proxy-accounts?filter=` 返回派生视图：可用=未冷却且（最近探测健康，或 7 天内有转发成功且该成功晚于最近一次非健康体检）；今日未测试=今日既无体检也无成功（原「未测试」口径已被 [今日未测试笔记](2026-10-31-opencode-account-untested-today.md) 取代）；不可用=冷却中、最近探测被拒，或最近探测为网络错误且之后没有更晚的真实成功；网络错误（基础设施故障，不代表账号被封）同时计入不可用并保留独立筛选可复测；**历史可用=累计成功过（success_count > 0，不依赖 last_success_at——存量库有旧版冷却落库伪造的非零最近成功时间，按时间判会把从未成功的账号误入历史可用）**。`DELETE /channel/proxy-accounts` 删除台账账号并同步清理进程内池。自动体检：设置键 `opencode_account_auto_probe`（默认开启，台账为空时空转；不进 DefaultSettings，随缓存初始化惰性补种），后台任务每 24 小时跑一轮，只测距上次体检超过周期的账号（最早优先，单渠道单轮上限与单次体检对齐，30000），健康探测会清除既有冷却（复用成功回填）。
 
-**成功/失败计数按来源拆分**：台账新增 `real_success_count` / `real_failure_count` / `probe_success_count` 三列——下游真实转发在 handler 回填处计成功与失败（客户端取消/管理端中止不算失败，403/429 同时计失败并冷却），体检探测（账号体检与上下文探测）只计体检成功；`success_count` 仍为两路合计，成功天数口径不变。**成功落库同时清除库内 cooldown_until**（与池内回填语义对齐；旧行为只清内存不清库，台账页会在冷却期持续显示「健康但不可用」且重启后回退）。台账列表默认按「真实成功 + 体检成功」降序、同数按账号名升序。转发选号「体检健康或近 7 天真实成功优先、历史可用次之、当天未测试再次、当天已测非健康最后」由 `TestOpencodeRelayPrefersVerifiedAccountAndCountsRealTraffic`、`TestOcProxyCandidateTier` 与 `TestOcProxyPickFallsBackByTier` 锁定，口径见 [可用分层与统一 UTC 冷却](../bug-fix/2026-11-08-opencode-account-tier-and-utc-cooldown.md)。
+**成功/失败计数按来源拆分**：台账新增 `real_success_count` / `real_failure_count` / `probe_success_count` 三列——下游真实转发在 handler 回填处计成功与失败（客户端取消/管理端中止不算失败，403/429 同时计失败并冷却），账号体检探测只计体检成功；`success_count` 仍为两路合计，成功天数口径不变。**成功落库同时清除库内 cooldown_until**（与池内回填语义对齐；旧行为只清内存不清库，台账页会在冷却期持续显示「健康但不可用」且重启后回退）。台账列表默认按「真实成功 + 体检成功」降序、同数按账号名升序。转发选号「体检健康或近 7 天真实成功优先、历史可用次之、当天未测试再次、当天已测非健康最后」由 `TestOpencodeRelayPrefersVerifiedAccountAndCountsRealTraffic`、`TestOcProxyCandidateTier` 与 `TestOcProxyPickFallsBackByTier` 锁定，口径见 [可用分层与统一 UTC 冷却](../bug-fix/2026-11-08-opencode-account-tier-and-utc-cooldown.md)。
 
 **多对话指纹稳定性（同日取证）**：同一问题在 v1(1.19.4)/v2(2.1.4) 各跑 3 次独立对话——主请求与命名请求正文全部逐字节一致；头部仅会话四件套与 v1 档 msg_ id 随对话变化，`x-opencode-project`/UA/Accept 恒定。据此把 v2 档 `b3`/`traceparent` 的 trace 段改为**进程级稳定值**（官方客户端同一安装内跨对话恒定，实抓 8 小时不变），span 段保持逐请求随机——旧行为逐请求换 trace-id 属可识别的非官方特征。
 
@@ -51,7 +51,7 @@ Status: implemented
 ## Consequences
 
 - **收益**：冷启动不再逐个试错；N 个账号一次并发体检后健康号即时可被转发优先复用；被拒号立即进入 24h 冷却，转发路径不会撞它们；体检流量与真实客户端流量同形，上游无法按请求形态区别对待。
-- **代价与已知上限**：每账号消耗一次真实免费请求（客户端形态正文约 22k 字节、输入约 9k token，上游实报用量进分桶，估算值不进）；同步接口在大批量时页面需等待（前端已按 200 一键分批）；探测与上下文探测共用请求日志面板，大批量体检会产生同量级日志条目。
+- **代价与已知上限**：每账号消耗一次真实免费请求（客户端形态正文约 22k 字节、输入约 9k token，上游实报用量进分桶，估算值不进）；同步接口在大批量时页面需等待（前端已按 200 一键分批）；体检请求会进入请求日志面板，大批量体检会产生同量级日志条目。
 - **重访信号**：需要定时自动补池；或官方客户端改版导致模板漂移（重抓方式见 Verification 的抓包上游说明）。
 
 ## Verification

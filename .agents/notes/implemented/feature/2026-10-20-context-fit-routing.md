@@ -42,13 +42,13 @@ Status: implemented
 - 手动值存 `channels.model_limits`，同步只重建 `channel_models`（`ChannelUpdate` 只传 `ID` 与 `Models`），所以手动值不会被同步冲掉。
 - 空值或 0 表示「未定义人工窗口」：路由不拦，前端徽章回落到同步元数据展示。
 
-窗口来源：渠道编辑器「按模型配置」手填、探测页每行直接填写/批量定义、探测结果行「应用」。三者写同一字段；探测页入口与密度校准的取舍见 [上下文窗口手工定义与统一实测密度](2026-10-21-context-window-manual-limits-and-uniform-density.md)。
+窗口来源：渠道编辑器「按模型配置」手填。密度估算已改为真实流量校准，见 [上下文 token 密度改由真实流量校准](2026-11-19-context-token-density-from-upstream-usage.md)。
 
 前端模型行的 `xxxK ctx` 徽章显示生效值（人工值优先，否则同步元数据）。
 
 ### 前端（`web-next/src/pages/Groups.tsx`）
 
-分组 Relay 配置区在「回显请求模型名」之后新增「上下文窗口过滤」开关，描述里注明窗口需要人工定义（渠道编辑器或探测页），同步目录值不参与过滤。
+分组 Relay 配置区在「回显请求模型名」之后新增「上下文窗口过滤」开关，描述里注明窗口需要人工定义（渠道编辑器），同步目录值不参与过滤。
 
 ## 备选方案
 
@@ -68,6 +68,6 @@ Status: implemented
 - `grep -n "contextFitsWindow\|estimateModelTokens" internal/relay/handler.go` 只应有上下文过滤与错误文案两处调用。
 - `ContextWindow` 为 0 的成员在开关开启时仍被选中（放行分支）。
 - 全部成员窗口都不足时，客户端收到「没有候选模型的上下文窗口能容纳当前请求（请求约 X token，候选集最大窗口 Y token）」，带量化提示方便调用方主动截断；而非「暂无可用渠道」。
-- 窗口值只信人工值的三个入口: 编辑器手填、探测页直接填写/批量定义、探测「应用」。同步目录带来的窗口是文档值, 未经实测, **不参与过滤**(未验证不拦, 宁可放行也不基于猜测误拒); 它仍在前端展示。`effectiveContextWindow` 无人工值即返回 0(放行)。
-- 估算与探测共用一套尺子: `contextFitsWindow` 走 `estimateModelTokens`, 在基准口径(ASCII 4 字符/token, 非 ASCII 每字 1)之上乘以实测密度比(按「上游端点:模型」缓存于 `tokenDensityCache`, 探测实测写入, 进程内有效)。所有渠道同一规则, 不设白名单; 未实测的模型维持基准口径。聚合粒度是端点而非渠道 ID: OpenCode Free/2/3 同为 opencode.ai/inference, 测一个三个全部跟进; Free Old 走 zen 端点, 单独一份。拒绝消息里的「请求约 X token」也用同一估算。
+- 窗口值只信人工值：渠道编辑器手填。同步目录带来的窗口是文档值, 未经实测, **不参与过滤**(未验证不拦, 宁可放行也不基于猜测误拒); 它仍在前端展示。`effectiveContextWindow` 无人工值即返回 0(放行)。
+- 估算与真实流量共用一套尺子: `contextFitsWindow` 走 `estimateModelTokens`, 在基准口径(ASCII 4 字符/token, 非 ASCII 每字 1)之上乘以真实流量学到的密度比(按「渠道 ID:模型」落库并在 `tokenDensityCache` 作 L1, 成功请求的 `usage.prompt_tokens` 校准: 前 10 条确定, 之后每天 3 条验证, 重启后从数据库恢复)。所有渠道同一规则, 不设白名单; 未观测的模型维持默认密度 `4/7.1`。密度按渠道隔离, 同一渠道的模型各自学习。拒绝消息里的「请求约 X token」也用同一估算。
 - 分组配置 JSON 里 `context_fit_enabled` 缺省为 false，旧分组行为不变。

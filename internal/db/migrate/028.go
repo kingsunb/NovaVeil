@@ -65,7 +65,9 @@ func deleteRetiredOpencodeFreeLegacyChannels(db *gorm.DB) error {
 				return fmt.Errorf("查找 OpenCode 旧名渠道的迁移目标 %s 失败: %w", targetName, err)
 			}
 			if targetID == 0 {
-				// 目标缺失时保留账号, 避免数据丢失。
+				if err := deleteOpencodeLegacyProxyAccounts(tx, row.ID); err != nil {
+					return fmt.Errorf("删除 OpenCode 旧名渠道 %s 的代理账号失败: %w", row.Name, err)
+				}
 				continue
 			}
 			if err := migrateOpencodeLegacyProxyAccounts(tx, row.ID, targetID); err != nil {
@@ -93,6 +95,11 @@ func deleteRetiredOpencodeFreeLegacyChannels(db *gorm.DB) error {
 		if err := tx.Where("channel_id IN ?", channelIDs).Delete(&model.ChannelModel{}).Error; err != nil {
 			return fmt.Errorf("删除 OpenCode 旧名渠道模型失败: %w", err)
 		}
+		if tx.Migrator().HasTable("token_densities") {
+			if err := tx.Where("channel_id IN ?", channelIDs).Delete(&model.TokenDensity{}).Error; err != nil {
+				return fmt.Errorf("删除 OpenCode 旧名渠道密度失败: %w", err)
+			}
+		}
 		if err := tx.Where("id IN ?", channelIDs).Delete(&model.Channel{}).Error; err != nil {
 			return fmt.Errorf("删除 OpenCode 旧名渠道失败: %w", err)
 		}
@@ -111,6 +118,14 @@ func opencodeLegacyTargetChannelID(tx *gorm.DB, name string) (int, error) {
 		return 0, nil
 	}
 	return ids[0], nil
+}
+
+// 删除旧渠道账号。
+func deleteOpencodeLegacyProxyAccounts(tx *gorm.DB, channelID int) error {
+	if !tx.Migrator().HasTable(&model.OpencodeProxyAccount{}) {
+		return nil
+	}
+	return tx.Where("channel_id = ?", channelID).Delete(&model.OpencodeProxyAccount{}).Error
 }
 
 // 复制台账, 冲突时保留目标行。

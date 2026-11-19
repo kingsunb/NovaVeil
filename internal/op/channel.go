@@ -199,6 +199,7 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 
 	var selectFields []string
 	updates := model.Channel{ID: req.ID}
+	baseURLChanged := req.BaseURL != nil && *req.BaseURL != existingChannel.BaseURL
 	var sortUpdateVal *int
 	if req.Name != nil {
 		selectFields = append(selectFields, "name")
@@ -388,6 +389,12 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 				return fmt.Errorf("更新渠道失败: %w", err)
 			}
 		}
+		// Base URL 变更后旧密度失效。
+		if baseURLChanged {
+			if err := tx.Where("channel_id = ?", req.ID).Delete(&model.TokenDensity{}).Error; err != nil {
+				return fmt.Errorf("重置渠道密度失败: %w", err)
+			}
+		}
 		// 启用状态变化即接管渠道, 清标记。
 		if req.Enabled != nil && *req.Enabled != existingChannel.Enabled {
 			if err := tx.Model(&model.Channel{}).Where("id = ?", req.ID).Update("auto_disabled_until", nil).Error; err != nil {
@@ -559,7 +566,7 @@ func nextUTCZero(now time.Time) time.Time {
 	return time.Date(utc.Year(), utc.Month(), utc.Day()+1, 0, 0, 0, 0, time.UTC)
 }
 
-// ChannelDel 删除渠道及其模型，关联分组成员与评估排序由应用层级联清理。
+// ChannelDel 删除渠道及派生数据。
 func ChannelDel(id int, ctx context.Context) error {
 	channelCacheWriteMu.Lock()
 	defer channelCacheWriteMu.Unlock()
@@ -584,6 +591,14 @@ func ChannelDel(id int, ctx context.Context) error {
 			}
 			if err := deleteEvalRanksByChannelModels(tx, modelIDs); err != nil {
 				return err
+			}
+		}
+		if err := tx.Where("channel_id = ?", id).Delete(&model.TokenDensity{}).Error; err != nil {
+			return fmt.Errorf("删除渠道密度失败: %w", err)
+		}
+		if tx.Migrator().HasTable("opencode_proxy_accounts") {
+			if err := tx.Where("channel_id = ?", id).Delete(&model.OpencodeProxyAccount{}).Error; err != nil {
+				return fmt.Errorf("删除渠道账号失败: %w", err)
 			}
 		}
 		if err := tx.Delete(&model.Channel{}, id).Error; err != nil {
@@ -905,23 +920,25 @@ func syncChannelModels(tx *gorm.DB, channelID int, requested []model.ChannelMode
 			continue
 		}
 		if err := tx.Create(&model.ChannelModel{
-			ChannelID:       channelID,
-			Name:            name,
-			Source:          source,
-			UpstreamProtocol: protocol,
-			ContextWindow:   requestedModel.ContextWindow,
-			MaxOutput:       requestedModel.MaxOutput,
-			Reasoning:       requestedModel.Reasoning,
-			ToolCall:        requestedModel.ToolCall,
-			InputModalities: requestedModel.InputModalities,
+			ChannelID:          channelID,
+			Name:               name,
+			Source:             source,
+			UpstreamProtocol:   protocol,
+			ContextWindow:      requestedModel.ContextWindow,
+			MaxOutput:          requestedModel.MaxOutput,
+			Reasoning:          requestedModel.Reasoning,
+			ToolCall:           requestedModel.ToolCall,
+			InputModalities:    requestedModel.InputModalities,
 			MaxReasoningEffort: requestedModel.MaxReasoningEffort,
 		}).Error; err != nil {
 			return fmt.Errorf("创建渠道模型失败: %w", err)
 		}
 	}
 	deletedModelIDs := make([]int, 0, len(existingByName))
-	for _, channelModel := range existingByName {
+	deletedModelNames := make([]string, 0, len(existingByName))
+	for name, channelModel := range existingByName {
 		deletedModelIDs = append(deletedModelIDs, channelModel.ID)
+		deletedModelNames = append(deletedModelNames, name)
 	}
 	if len(deletedModelIDs) == 0 {
 		return nil
@@ -934,6 +951,9 @@ func syncChannelModels(tx *gorm.DB, channelID int, requested []model.ChannelMode
 	}
 	if err := deleteEvalRanksByChannelModels(tx, deletedModelIDs); err != nil {
 		return err
+	}
+	if err := tx.Where("channel_id = ? AND model IN ?", channelID, deletedModelNames).Delete(&model.TokenDensity{}).Error; err != nil {
+		return fmt.Errorf("删除渠道模型密度失败: %w", err)
 	}
 	if err := tx.Delete(&model.ChannelModel{}, deletedModelIDs).Error; err != nil {
 		return fmt.Errorf("删除渠道模型失败: %w", err)

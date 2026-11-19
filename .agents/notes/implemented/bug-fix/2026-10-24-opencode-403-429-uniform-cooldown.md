@@ -10,7 +10,7 @@ Status: implemented
 
 ## 决定
 
-- 403 与 429 视为同一类出口拒绝：业务路径（`handler.go`）与容量探测（`context_probe.go`）在本轮使用了代理账号且上游状态码为 403/429 时，统一调用 `markOpencodeProxyRejected`，冷却 `ocProxyRejectedCooldown = 24h`。探测路径仍单发、不换号。
+- 403 与 429 视为同一类出口拒绝：业务路径（`handler.go`）与账号体检（`test_probe.go`）在本轮使用了代理账号且上游状态码为 403/429 时，统一调用 `markOpencodeProxyRejected`。冷却时长后续改为「距下一个 UTC 零点」，见 [OpenCode 免费档账号分层与统一 UTC 冷却](./2026-11-08-opencode-account-tier-and-utc-cooldown.md)；上下文探测调用点已随探测页删除。
 - 冷却账号记录到本地沿用既有机制：`markOpencodeProxyCooldown` 异步 upsert 进 `opencode_proxy_accounts` 表（`cooldown_until`），进程重启后由 `loadOpencodeProxyPool` 恢复；403 现在也走该路径，形状门禁 403 不再漏记。
 - 撤销 403 二分类：删除 `isOpencodeNetworkAbuse` / `isOpencodeNetworkAbuseText` / `markOpencodeProxyAbuseBlock` / `markOpencodeProxyForbidden` 与 12h、15min 常量，只留一个拒绝口径。
 - 其余语义不变：同成员换号预算 `ocProxyMaxRetries = 3`、多 Key 渠道不冷却 Key、不记成员失败、不设 `exclude`、不清会话粘合；非 OpenCode 渠道的 429 仍按 Key 限额语义冷却 Key。

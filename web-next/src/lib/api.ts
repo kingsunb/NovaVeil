@@ -9,8 +9,6 @@ import type {
   ChannelUpdateRequest,
   ChannelImportResult,
   ClientStats,
-  ContextProbeRecord,
-  ContextProbeResult,
   DBDump,
   BuildInfo,
   GroupClearCooldownResult,
@@ -31,6 +29,7 @@ import type {
   SettingItem,
   StopAllResult,
   StopAllState,
+  TokenDensityRecord,
   TokenTrendPoint,
   TokenTrendRange,
   UsageDetail,
@@ -1130,25 +1129,6 @@ export const api = {
     http<EvalStatsList>("/model-eval/stats", { signal }),
   listEvalRanks: (signal?: AbortSignal) =>
     http<EvalRankList>("/model-eval/rank/list", { signal }),
-  /** 按指定 token 规模探测渠道模型能否接受该长度的请求。 */
-  probeModelContext: (channelId: number, model: string, tokens: number, signal?: AbortSignal) =>
-    http<ContextProbeResult>("/model-eval/probe-context", {
-      method: "POST",
-      body: { channel_id: channelId, model, tokens },
-      signal,
-    }),
-  /** 把手动定义或探测结果写入渠道按模型限制；contextWindow 传 0 表示清除。 */
-  applyModelContext: (channelId: number, model: string, contextWindow: number) =>
-    http<null>("/model-eval/apply-context", {
-      method: "POST",
-      body: { channel_id: channelId, model, context_window: contextWindow },
-    }),
-  /** 读取探测历史。 */
-  listContextProbeRecords: (channelId?: number, signal?: AbortSignal) => {
-    const query = new URLSearchParams();
-    if (channelId) query.set("channel_id", String(channelId));
-    return http<ContextProbeRecord[]>(`/model-eval/probe-history?${query}`, { signal });
-  },
   getEvalRankContent: (id: number, signal?: AbortSignal) =>
     http<EvalRankContent>(`/model-eval/rank/content/${id}`, { signal }),
   moveEvalRank: (id: number, direction: -1 | 1) =>
@@ -1271,6 +1251,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ key, value }),
     }),
+  listTokenDensities: () =>
+    http<TokenDensityRecord[]>("/setting/token-density/list"),
+  deleteTokenDensity: (channelID: number, model: string) =>
+    http<void>("/setting/token-density/delete", {
+      method: "POST",
+      body: JSON.stringify({ channel_id: channelID, model }),
+    }),
+  clearTokenDensities: () =>
+    http<void>("/setting/token-density/clear", { method: "POST" }),
   testProxy: (url: string) =>
     http<ProxyTestResult>("/setting/proxy/test", {
       method: "POST",

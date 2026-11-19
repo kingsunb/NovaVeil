@@ -1,6 +1,7 @@
 # Agent Note: 上下文窗口清理按模型名大小写不敏感
 
 Status: implemented
+Archived: 2026-11-19
 
 ## 问题
 

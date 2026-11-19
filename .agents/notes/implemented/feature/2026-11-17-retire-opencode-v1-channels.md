@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> 后续：V1 曾在 [v2.3 对齐](../bug-fix/2026-11-17-opencode-v23-client-alignment.md) 中恢复一条，已被 [彻底删除 OpenCode Free V1 渠道](../bug-fix/2026-11-19-remove-restored-opencode-free-v1.md) 重新下线；该篇另补迁移 32 清理被种子补回的存量行。
+
 ## 问题
 
 1.9.5 是 opencode 1.x 的最后一个版本，官方已不再为 1.x 客户端提供免费模型。Nova 此前出厂四条 v1 渠道：`OpenCode Free V1`、`OpenCode Free V1 账号池`（keyed）、`OpenCode Free V1 备用1`、`OpenCode Free V1 备用2`。它们打同一个 `/inference` 端点、只靠 `opencode_lane="v1"` 区分请求形态，官方停售后这些渠道只会稳定失败。

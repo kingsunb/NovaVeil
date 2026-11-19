@@ -47,7 +47,7 @@ Status: implemented
 ## 验证
 
 ```sh
-cd web-next && pnpm test -- Chat.test.tsx Logs.test.tsx ContextProbe.test.tsx field.test.tsx button.test.tsx segmented-control.test.tsx AppShell.test.tsx
+cd web-next && pnpm test -- Chat.test.tsx Logs.test.tsx field.test.tsx button.test.tsx segmented-control.test.tsx AppShell.test.tsx
 cd web-next && pnpm typecheck
 cd web-next && pnpm lint
 ```

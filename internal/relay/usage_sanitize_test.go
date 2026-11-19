@@ -20,6 +20,10 @@ const paddedNoMessagesBody = `{"stream":false,"temperature":0.7,"metadata":{"cli
 // paddedEmptyTextBody 超过平凡阈值且带 messages 但文本全为空, 同样按平凡请求豁免。
 const paddedEmptyTextBody = `{"model":"m","messages":[{"role":"user","content":""}],"metadata":{"client":"probe","padding":"bbbbbbbbbbbbbbbbbb"}}`
 
+func expectedSanitizedPrompt(body string) int64 {
+	return int64(scaleBaseTokens(estimateRequestTokensText(body), defaultTokenDensity))
+}
+
 // TestSanitizeUsageRules 表驱动覆盖 sanitizeUsage 的全部判定分支:
 // 短路放行、缓存豁免、平凡请求豁免与非平凡零输入的本地估算。
 func TestSanitizeUsageRules(t *testing.T) {
@@ -31,7 +35,7 @@ func TestSanitizeUsageRules(t *testing.T) {
 		wantEstimate int64                    // 修复时期望的输入估算值。
 		wantDetail   *llm.PromptTokensDetails // 修复后应保留的输入明细, nil 表示不校验。
 	}{
-		{"nil 用量按请求体估算", nil, nonTrivialSanitizeBody, true, int64(len(nonTrivialSanitizeBody)) / 3, nil},
+		{"nil 用量按请求体估算", nil, nonTrivialSanitizeBody, true, expectedSanitizedPrompt(nonTrivialSanitizeBody), nil},
 		{"正常正值不修复", &llm.Usage{PromptTokens: 12, CompletionTokens: 34, TotalTokens: 46}, nonTrivialSanitizeBody, false, 0, nil},
 		{"缓存读命中豁免", &llm.Usage{PromptTokensDetails: &llm.PromptTokensDetails{CachedTokens: 100}}, nonTrivialSanitizeBody, false, 0, nil},
 		{"缓存写命中豁免", &llm.Usage{PromptTokensDetails: &llm.PromptTokensDetails{WriteCachedTokens: 100}}, nonTrivialSanitizeBody, false, 0, nil},
@@ -45,13 +49,13 @@ func TestSanitizeUsageRules(t *testing.T) {
 			usage:        &llm.Usage{CompletionTokens: 9, TotalTokens: 9, PromptTokensDetails: &llm.PromptTokensDetails{AudioTokens: 3}},
 			body:         nonTrivialSanitizeBody,
 			repaired:     true,
-			wantEstimate: int64(len(nonTrivialSanitizeBody)) / 3,
+			wantEstimate: expectedSanitizedPrompt(nonTrivialSanitizeBody),
 			wantDetail:   &llm.PromptTokensDetails{AudioTokens: 3},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, estimated := sanitizeUsage(tc.usage, tc.body)
+			got, estimated := sanitizeUsage(tc.usage, tc.body, 0)
 			if !tc.repaired {
 				if estimated {
 					t.Fatalf("%s 不应打标, 实际已打标", tc.name)
@@ -88,16 +92,26 @@ func TestSanitizeUsageRules(t *testing.T) {
 	}
 }
 
-// TestSanitizeUsageHugeBodyNotClamped 构造超大请求体验证估算不被上界夹击:
-// 公式 est = len/3 远低于上界 len*2+8192, 结果必须精确等于 len/3。
+// TestSanitizeUsageHugeBodyNotClamped 构造超大请求体验证估算不被上界夹击。
 func TestSanitizeUsageHugeBodyNotClamped(t *testing.T) {
 	huge := `{"messages":[{"role":"user","content":"` + strings.Repeat("字", 1<<20) + `"]}]}`
-	got, estimated := sanitizeUsage(&llm.Usage{}, huge)
+	got, estimated := sanitizeUsage(&llm.Usage{}, huge, 0)
 	if !estimated {
 		t.Fatal("超大非平凡零输入请求应打标")
 	}
-	if want := int64(len(huge)) / 3; got.PromptTokens != want {
-		t.Fatalf("超大请求体的估算应等于 len/3 = %d, 实际 %d", want, got.PromptTokens)
+	if want := expectedSanitizedPrompt(huge); got.PromptTokens != want {
+		t.Fatalf("超大请求体的估算应为 %d, 实际 %d", want, got.PromptTokens)
+	}
+}
+
+// TestSanitizeUsageUsesGivenDensity 验证估算随模型观测密度变化。
+func TestSanitizeUsageUsesGivenDensity(t *testing.T) {
+	got, estimated := sanitizeUsage(&llm.Usage{}, nonTrivialSanitizeBody, 1)
+	if !estimated {
+		t.Fatal("非平凡零输入应打标")
+	}
+	if want := int64(estimateRequestTokensText(nonTrivialSanitizeBody)); got.PromptTokens != want {
+		t.Fatalf("密度 1 时估算应为 %d, 实际 %d", want, got.PromptTokens)
 	}
 }
 
@@ -105,7 +119,7 @@ func TestSanitizeUsageHugeBodyNotClamped(t *testing.T) {
 func TestSanitizeUsageDeepCopy(t *testing.T) {
 	details := &llm.PromptTokensDetails{AudioTokens: 2}
 	original := &llm.Usage{PromptTokensDetails: details}
-	fixed, estimated := sanitizeUsage(original, nonTrivialSanitizeBody)
+	fixed, estimated := sanitizeUsage(original, nonTrivialSanitizeBody, 0)
 	if !estimated {
 		t.Fatal("非平凡零输入应打标")
 	}
@@ -142,7 +156,7 @@ func TestMarkSucceededSanitizesSuspiciousZeroInput(t *testing.T) {
 	upstreamUsage := &llm.Usage{CompletionTokens: 7}
 	request.markSucceeded("{}", upstreamUsage)
 
-	estimate := int64(len(nonTrivialSanitizeBody)) / 3
+	estimate := expectedSanitizedPrompt(nonTrivialSanitizeBody)
 	if !request.UsageEstimated {
 		t.Fatal("非平凡零输入请求应打 usage_estimated 标记")
 	}

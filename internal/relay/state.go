@@ -94,18 +94,20 @@ type RequestState struct {
 
 	UsageEstimated bool `json:"usage_estimated,omitempty"` // 终态用量是否因上游上报可疑零输入而经本地估算修复, 面板据此区分真实上报与估算值。
 
-	Round         int         `json:"round"`                    // 最新一轮循环的递增序号, 人工中止按此匹配以免误杀下一轮。
-	TargetChannel string      `json:"target_channel"`           // 最新一轮选中的渠道名称。
-	TargetModel   string      `json:"target_model"`             // 最新一轮实际请求上游的模型名称。
-	KeyLabel      string      `json:"key_label,omitempty"`      // 最新一轮使用的渠道 Key 标签: "#序号(备注)", 多 Key 渠道用于定位具体凭据, 旧式单 Key 为空。
-	ThinkingLevel string      `json:"thinking_level,omitempty"` // 最新一轮实际注入上游的思考等级, 未配置为空。
-	ClientFormat  string      `json:"client_format"`            // 下游(客户端)请求协议。
-	UpstreamType  string      `json:"upstream_type"`            // 最新一轮上游渠道的协议类型。
-	RelayMode     string      `json:"relay_mode"`               // 最新一轮转发方式: passthrough 同协议透传, converted 跨协议转换。
-	ProxyAddr     string      `json:"proxy_addr,omitempty"`     // 最新一轮使用的渠道代理完整地址(密码打码, 含 {account} 解析出的别名); 未走渠道代理为空。
-	AccountProbe  bool        `json:"account_probe,omitempty"`  // 账号体检请求标记: 仅日志展示, 不计入统计。
-	Masked        bool        `json:"masked,omitempty"`         // 本次请求是否执行了脱敏(请求体占位符替换), 面板据此展示脱敏标记。
-	MaskMatches   []MaskMatch `json:"mask_matches,omitempty"`   // 脱敏命中明细, 仅在脱敏发生时有值; 旧版本/开关关闭/未命中时为空, 前端据此决定是否渲染命中区(文档 07 §3.1)。
+	Round           int         `json:"round"`                    // 最新一轮循环的递增序号, 人工中止按此匹配以免误杀下一轮。
+	TargetChannel   string      `json:"target_channel"`           // 最新一轮选中的渠道名称。
+	TargetChannelID int         `json:"-"`                        // 最新一轮渠道主键，仅用于密度校准。
+	TargetModel     string      `json:"target_model"`             // 最新一轮实际请求上游的模型名称。
+	TargetBaseURL   string      `json:"-"`                        // 最新一轮上游端点，仅用于密度校准。
+	KeyLabel        string      `json:"key_label,omitempty"`      // 最新一轮使用的渠道 Key 标签: "#序号(备注)", 多 Key 渠道用于定位具体凭据, 旧式单 Key 为空。
+	ThinkingLevel   string      `json:"thinking_level,omitempty"` // 最新一轮实际注入上游的思考等级, 未配置为空。
+	ClientFormat    string      `json:"client_format"`            // 下游(客户端)请求协议。
+	UpstreamType    string      `json:"upstream_type"`            // 最新一轮上游渠道的协议类型。
+	RelayMode       string      `json:"relay_mode"`               // 最新一轮转发方式: passthrough 同协议透传, converted 跨协议转换。
+	ProxyAddr       string      `json:"proxy_addr,omitempty"`     // 最新一轮使用的渠道代理完整地址(密码打码, 含 {account} 解析出的别名); 未走渠道代理为空。
+	AccountProbe    bool        `json:"account_probe,omitempty"`  // 账号体检请求标记: 仅日志展示, 不计入统计。
+	Masked          bool        `json:"masked,omitempty"`         // 本次请求是否执行了脱敏(请求体占位符替换), 面板据此展示脱敏标记。
+	MaskMatches     []MaskMatch `json:"mask_matches,omitempty"`   // 脱敏命中明细, 仅在脱敏发生时有值; 旧版本/开关关闭/未命中时为空, 前端据此决定是否渲染命中区(文档 07 §3.1)。
 	// MaskMatchesTruncated 命中明细是否因条数/字节上限被裁剪, true 表示当前为摘要而非全量(文档 07 §3.1 第 5 点、design §2.1.3)。
 	MaskMatchesTruncated bool            `json:"mask_matches_truncated,omitempty"`
 	Sending              bool            `json:"sending"`            // 最新一轮是否仍在等待上游响应。
@@ -330,6 +332,7 @@ type RoundTarget struct {
 	MemberID      int    // 本轮使用的分组成员 ID。
 	ChannelID     int    // 本轮选中的渠道 ID。
 	ChannelName   string // 本轮选中的渠道名称。
+	BaseURL       string // 本轮上游端点。
 	Model         string // 实际请求上游的模型名称。
 	KeyLabel      string // 本轮使用的渠道 Key 标签: "#序号(别名)", 旧式单 Key 为空。
 	ThinkingLevel string // 注入的思考等级, 未配置为空。
@@ -376,7 +379,9 @@ func (r *RequestState) startRound(cancel context.CancelFunc, target RoundTarget)
 
 	r.Round++
 	r.TargetChannel = target.ChannelName
+	r.TargetChannelID = target.ChannelID
 	r.TargetModel = target.Model
+	r.TargetBaseURL = target.BaseURL
 	r.KeyLabel = target.KeyLabel
 	r.ThinkingLevel = target.ThinkingLevel
 	r.ClientFormat = target.ClientFormat
@@ -624,7 +629,11 @@ func (r *RequestState) markCanceled(err error, responseBody string, usage *llm.U
 // 阶段间窗口内面板可经由 RequestBody/ResponseBody 拉取完整报文。
 // 与零输出重试(errZeroOutput)的整轮无效判定互不干扰: 那是轮次级判定, 这里是请求级定稿。
 func (r *RequestState) finish(body, responseBody string, status Status, class ErrClass, errText string, usage *llm.Usage) {
-	usage, estimated := sanitizeUsage(usage, body)
+	density := modelTokenDensity(r.TargetChannelID, r.TargetBaseURL, r.TargetModel)
+	usage, estimated := sanitizeUsage(usage, body, density)
+	if status == StatusSuccess && !estimated && !r.AccountProbe && usage != nil && usage.PromptTokens > 0 {
+		observeTokenDensity(r.TargetChannelID, r.TargetBaseURL, r.TargetModel, usage.PromptTokens, body)
+	}
 	// 对话留存: 截断前零拷贝移交完整报文引用(字符串不可变), 编码与落盘全部异步。
 	record := model.ConversationRecord{
 		RequestID:    r.ID,

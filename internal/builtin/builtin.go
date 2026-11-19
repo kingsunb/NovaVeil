@@ -56,7 +56,6 @@ func init() {
 //     后端 OpencodeCompat 机制负责注入 x-opencode-session。
 //   - OpenCode Free V2 备用1 / 备用2：V2 的同构副本，供实例单独挂
 //     resin/WARP 代理做出出口隔离与容灾。
-//   - OpenCode Free V1：1.x 已停售，仅保留一条供旧客户端复现与对照。
 //   - AI Horde Free：社区志愿算力，OpenAI Compatible 匿名端点；匿名 key 固定为
 //     0000000000，队列式响应较慢，不保证工具调用。
 //   - Pollinations Free：免 key OpenAI Compatible 端点，模型列表较大，
@@ -129,26 +128,6 @@ var BuiltinFreeChannels = []model.Channel{
 		Key:            "public",
 		OpencodeCompat: true,
 		OpencodeLane:   "v2",
-		Models: []model.ChannelModel{
-			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "hy3-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "nemotron-3-ultra-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "nemotron-3.5-lightning-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "laguna-s-2.1-free", UpstreamProtocol: model.UpstreamProtocolChat},
-			{Name: "muse-spark-1.2-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
-			{Name: "muse-spark-1.3-contributor-free", UpstreamProtocol: model.UpstreamProtocolResponses},
-		},
-	},
-	// V1 兼容渠道: 1.19.5 已停售, 仅供旧客户端复现与对照。
-	// 请求标识统一为 cli(v2 同款), 不再使用 desktop。
-	{
-		Name:           "OpenCode Free V1",
-		Type:           model.ChannelProviderOpenAI,
-		BaseURL:        "https://opencode.ai/inference",
-		Key:            "public",
-		OpencodeCompat: true,
-		OpencodeLane:   "v1",
 		Models: []model.ChannelModel{
 			{Name: "deepseek-v4-flash-free", UpstreamProtocol: model.UpstreamProtocolChat},
 			{Name: "mimo-v2.5-free", UpstreamProtocol: model.UpstreamProtocolChat},

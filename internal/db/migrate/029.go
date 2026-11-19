@@ -58,6 +58,16 @@ func deleteRetiredOpencodeFreeV1Channels(db *gorm.DB) error {
 		if err := tx.Where("channel_id IN ?", channelIDs).Delete(&model.ChannelModel{}).Error; err != nil {
 			return fmt.Errorf("删除 v1 渠道模型失败: %w", err)
 		}
+		if tx.Migrator().HasTable("token_densities") {
+			if err := tx.Where("channel_id IN ?", channelIDs).Delete(&model.TokenDensity{}).Error; err != nil {
+				return fmt.Errorf("删除 v1 渠道密度失败: %w", err)
+			}
+		}
+		if tx.Migrator().HasTable("opencode_proxy_accounts") {
+			if err := tx.Where("channel_id IN ?", channelIDs).Delete(&model.OpencodeProxyAccount{}).Error; err != nil {
+				return fmt.Errorf("删除 v1 渠道账号失败: %w", err)
+			}
+		}
 		if err := tx.Where("id IN ?", channelIDs).Delete(&model.Channel{}).Error; err != nil {
 			return fmt.Errorf("删除 v1 渠道失败: %w", err)
 		}

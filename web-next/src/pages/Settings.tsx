@@ -16,6 +16,7 @@ import {
   type GroupTestResult,
   type ProxyEntry,
   type ProxyTestResult,
+  type TokenDensityRecord,
 } from "@/lib/types";
 import {
   Card,
@@ -84,6 +85,7 @@ type Section =
   | "prompt-environment"
   | "retention"
   | "usage-retention"
+  | "context-density"
   | "tester"
   | "sync"
   | "backup"
@@ -100,6 +102,7 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "prompt-environment", label: "提示词环境" },
   { id: "retention", label: "错误日志保留" },
   { id: "usage-retention", label: "用量保留" },
+  { id: "context-density", label: "上下文密度" },
   { id: "tester", label: "模型测试" },
   { id: "sync", label: "上游模型同步" },
   { id: "backup", label: "备份" },
@@ -138,6 +141,7 @@ export default function SettingsPage() {
         {active === "prompt-environment" && <PromptEnvironmentSection />}
         {active === "retention" && <RetentionSection />}
         {active === "usage-retention" && <UsageRetentionSection />}
+        {active === "context-density" && <ContextDensitySection />}
         {active === "tester" && <TesterSection />}
         {active === "sync" && <SyncSection />}
         {active === "backup" && <BackupSection />}
@@ -1558,6 +1562,149 @@ function TestMessageField({
   );
 }
 
+// ---------------- 上下文密度 ----------------
+
+function formatDensityTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "-"
+    : date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function ContextDensitySection() {
+  const queryClient = useQueryClient();
+  const { data: rows = [], isLoading } = useQuery<TokenDensityRecord[]>({
+    queryKey: ["token-densities"],
+    queryFn: api.listTokenDensities,
+  });
+  const remove = useMutation({
+    mutationFn: ({
+      channelID,
+      model,
+    }: {
+      channelID: number;
+      model: string;
+    }) => api.deleteTokenDensity(channelID, model),
+    onSuccess: () => {
+      toast.success("已清除该密度");
+      void queryClient.invalidateQueries({ queryKey: ["token-densities"] });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const clear = useMutation({
+    mutationFn: api.clearTokenDensities,
+    onSuccess: () => {
+      toast.success("已清除全部密度");
+      void queryClient.invalidateQueries({ queryKey: ["token-densities"] });
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>上下文密度</CardTitle>
+          <CardDescription>
+            真实请求成功后自动学习上游 token 密度，供路由过滤、上下文拦截与日志估算共用
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-ink-muted">
+            密度 = 上游 prompt token / 本地基准估算；前 10 条确定，之后每天前 3 条验证
+          </p>
+          <ConfirmButton
+            tone="destructive"
+            label="清除全部"
+            loadingLabel="清除中…"
+            loading={clear.isPending}
+            disabled={rows.length === 0}
+            onConfirm={() => clear.mutate()}
+          />
+        </div>
+        {isLoading ? (
+          <p className="py-4 text-center text-xs text-ink-muted">加载中…</p>
+        ) : rows.length === 0 ? (
+          <p className="py-4 text-center text-xs text-ink-muted">
+            暂无已学习的密度，真实请求成功后会出现在这里
+          </p>
+        ) : (
+          <div className="overflow-hidden rounded-md border border-border">
+            <div className="max-h-96 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-card">
+                  <tr className="border-b border-border bg-card/40 text-left text-xs text-ink-muted">
+                    <th scope="col" className="px-3 py-1.5 font-medium">
+                      渠道
+                    </th>
+                    <th scope="col" className="px-3 py-1.5 font-medium">
+                      模型
+                    </th>
+                    <th scope="col" className="px-3 py-1.5 text-right font-medium">
+                      密度
+                    </th>
+                    <th scope="col" className="px-3 py-1.5 text-right font-medium">
+                      样本数
+                    </th>
+                    <th scope="col" className="px-3 py-1.5 font-medium">
+                      更新时间
+                    </th>
+                    <th scope="col" className="px-3 py-1.5 text-right font-medium">
+                      操作
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr
+                      key={`${row.channel_id}:${row.model}`}
+                      className="border-b border-border/40 last:border-b-0"
+                    >
+                      <td className="px-3 py-1.5 text-ink">
+                        {row.channel_name || `#${row.channel_id}`}
+                      </td>
+                      <td className="mono px-3 py-1.5 text-ink">{row.model}</td>
+                      <td className="num px-3 py-1.5 text-right text-ink">
+                        {row.density.toFixed(4)}
+                      </td>
+                      <td className="num px-3 py-1.5 text-right text-ink-muted">
+                        {row.sample_count}
+                      </td>
+                      <td className="px-3 py-1.5 text-xs text-ink-muted">
+                        {formatDensityTime(row.updated_at)}
+                      </td>
+                      <td className="px-3 py-1.5 text-right">
+                        <ConfirmButton
+                          tone="destructive"
+                          label="清除"
+                          loadingLabel="清除中…"
+                          loading={
+                            remove.isPending &&
+                            remove.variables?.channelID === row.channel_id &&
+                            remove.variables?.model === row.model
+                          }
+                          onConfirm={() =>
+                            remove.mutate({
+                              channelID: row.channel_id,
+                              model: row.model,
+                            })
+                          }
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ---------------- 模型测试 ----------------
 
 /**
@@ -1939,6 +2086,7 @@ function BackupSection() {
       qc.invalidateQueries({ queryKey: ["log-errors"] });
       qc.invalidateQueries({ queryKey: ["log-stop-all-state"] });
       qc.invalidateQueries({ queryKey: ["model-eval"] });
+      qc.invalidateQueries({ queryKey: ["token-densities"] });
     },
     onError: (e: Error) => toast.error(e.message || "导入失败"),
   });

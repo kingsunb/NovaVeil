@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -27,52 +26,7 @@ func init() {
 		AddRoute(router.NewRoute("/list", http.MethodGet).Handle(listModelEvals)).
 		AddRoute(router.NewRoute("/stats", http.MethodGet).Handle(listModelEvalStats)).
 		AddRoute(router.NewRoute("/history/clear-failures", http.MethodPost).Handle(clearModelEvalFailures)).
-		AddRoute(router.NewRoute("/probe-context", http.MethodPost).Handle(probeModelContext)).
-		AddRoute(router.NewRoute("/probe-history", http.MethodGet).Handle(listContextProbeRecords)).
-		AddRoute(router.NewRoute("/apply-context", http.MethodPost).Handle(applyModelContext)).
 		AddRoute(router.NewRoute("/:id", http.MethodGet).Handle(getModelEval))
-}
-
-// contextProbeRequest 是一次上下文容量探测请求。
-type contextProbeRequest struct {
-	ChannelID int    `json:"channel_id" binding:"required"`
-	Model     string `json:"model" binding:"required"`
-	Tokens    int    `json:"tokens" binding:"required"`
-}
-
-// probeModelContext 按指定规模探测渠道模型能否接受该长度的请求。
-func probeModelContext(c *gin.Context) {
-	var request contextProbeRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
-		return
-	}
-	record := &model.ContextProbeRecord{
-		ChannelID: request.ChannelID,
-		ModelName: request.Model,
-		Tokens:    request.Tokens,
-		CreatedAt: time.Now(),
-	}
-	channel, channelErr := op.ChannelGet(request.ChannelID)
-	if channelErr == nil {
-		record.ChannelName = channel.Name
-	}
-	result, err := relay.ProbeContextWindow(c.Request.Context(), request.ChannelID, request.Model, request.Tokens)
-	if err != nil {
-		detail := redactChannelCredentials(channel, err.Error())
-		record.Detail = detail
-		_ = op.SaveContextProbeRecord(record)
-		resp.ErrorExposed(c, http.StatusBadRequest, detail)
-		return
-	}
-	record.Accepted = result.Accepted
-	record.Status = result.Status
-	record.Detail = redactChannelCredentials(channel, result.Detail)
-	record.LatencyMS = result.LatencyMS
-	record.ActualTokens = result.ActualTokens
-	_ = op.SaveContextProbeRecord(record)
-	result.Detail = record.Detail
-	resp.Success(c, result)
 }
 
 // redactChannelCredentials 抹掉文本中的渠道密钥明文。
@@ -86,90 +40,6 @@ func redactChannelCredentials(channel model.Channel, text string) string {
 		}
 	}
 	return text
-}
-
-// listContextProbeRecords 返回探测历史, 供页面回看历次结果。
-func listContextProbeRecords(c *gin.Context) {
-	channelID, _ := strconv.Atoi(c.Query("channel_id"))
-	limit, _ := strconv.Atoi(c.Query("limit"))
-	rows, err := op.ListContextProbeRecords(channelID, limit)
-	if err != nil {
-		resp.ErrorExposed(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	resp.Success(c, rows)
-}
-
-// contextApplyRequest 把手动定义或探测结果写回按模型限制。
-type contextApplyRequest struct {
-	ChannelID     int    `json:"channel_id" binding:"required"`
-	Model         string `json:"model" binding:"required"`
-	ContextWindow *int   `json:"context_window" binding:"required"` // 0 表示清除人工窗口。
-}
-
-// applyContextMu 串行化窗口保存, 防整表覆盖丢更新。
-var applyContextMu sync.Mutex
-
-// applyModelContext 把手动定义或探测出的窗口写入渠道的 model_limits, 同步不会覆盖;
-// context_window 传 0 表示清除该模型的人工窗口。
-func applyModelContext(c *gin.Context) {
-	var request contextApplyRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
-		return
-	}
-	if *request.ContextWindow < 0 {
-		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidParam)
-		return
-	}
-	applyContextMu.Lock()
-	defer applyContextMu.Unlock()
-	channel, err := op.ChannelGet(request.ChannelID)
-	if err != nil {
-		resp.Error(c, http.StatusNotFound, err.Error())
-		return
-	}
-	limits := setModelContextWindow(channel.ModelLimits, request.Model, *request.ContextWindow)
-	if _, err := op.ChannelUpdate(&model.ChannelUpdateRequest{
-		ID:          request.ChannelID,
-		ModelLimits: &limits,
-	}, c.Request.Context()); err != nil {
-		resp.ErrorExposed(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	resp.Success(c, nil)
-}
-
-// setModelContextWindow 在按模型限制表中写入或清除人工窗口; 无其他配置时删除空条目。
-func setModelContextWindow(limits map[string]model.ChannelModelLimit, modelName string, window int) map[string]model.ChannelModelLimit {
-	next := make(map[string]model.ChannelModelLimit, len(limits)+1)
-	for name, limit := range limits {
-		next[name] = limit
-	}
-	keys := make([]string, 0, 1)
-	for name := range next {
-		if strings.EqualFold(name, modelName) {
-			keys = append(keys, name)
-		}
-	}
-	if len(keys) == 0 {
-		keys = append(keys, modelName)
-	}
-	for _, key := range keys {
-		limit := next[key]
-		if window > 0 {
-			value := window
-			limit.ContextWindow = &value
-		} else {
-			limit.ContextWindow = nil
-		}
-		if limit.ContextWindow == nil && limit.MaxOutput == nil && limit.ThinkingLevel == "" {
-			delete(next, key)
-		} else {
-			next[key] = limit
-		}
-	}
-	return next
 }
 
 // runModelEval 复用渠道测试的真实出站逻辑，仅模型评估入口保存评估历史。

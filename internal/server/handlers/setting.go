@@ -38,6 +38,19 @@ func init() {
 				Handle(setSetting),
 		).
 		AddRoute(
+			router.NewRoute("/token-density/list", http.MethodGet).
+				Handle(listTokenDensities),
+		).
+		AddRoute(
+			router.NewRoute("/token-density/delete", http.MethodPost).
+				Use(middleware.RequireJSON()).
+				Handle(deleteTokenDensity),
+		).
+		AddRoute(
+			router.NewRoute("/token-density/clear", http.MethodPost).
+				Handle(clearTokenDensities),
+		).
+		AddRoute(
 			router.NewRoute("/export", http.MethodPost).
 				Handle(exportDB),
 		).
@@ -54,6 +67,46 @@ func getSettingList(c *gin.Context) {
 		return
 	}
 	resp.Success(c, settings)
+}
+
+type tokenDensityDeleteRequest struct {
+	ChannelID int    `json:"channel_id" binding:"required"`
+	Model     string `json:"model" binding:"required"`
+}
+
+// listTokenDensities 返回密度列表。
+func listTokenDensities(c *gin.Context) {
+	rows, err := op.TokenDensityList(c.Request.Context())
+	if err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp.Success(c, rows)
+}
+
+// deleteTokenDensity 删除密度并清缓存。
+func deleteTokenDensity(c *gin.Context) {
+	var req tokenDensityDeleteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Error(c, http.StatusBadRequest, "请求参数错误")
+		return
+	}
+	if err := op.TokenDensityDelete(c.Request.Context(), req.ChannelID, req.Model); err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	relay.InvalidateTokenDensity(req.ChannelID, req.Model)
+	resp.Success(c, nil)
+}
+
+// clearTokenDensities 清空密度并清缓存。
+func clearTokenDensities(c *gin.Context) {
+	if err := op.TokenDensityClear(c.Request.Context()); err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	relay.ClearTokenDensityCache()
+	resp.Success(c, nil)
 }
 
 // getSetting 按 key 返回单条配置项（web-next RetentionField 等场景需要）。

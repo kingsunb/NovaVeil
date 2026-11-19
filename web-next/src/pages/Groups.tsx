@@ -21,7 +21,7 @@ import {
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
-import { formatExactTokens, formatWindowTokens } from "@/lib/context-probe";
+import { formatExactTokens, formatWindowTokens } from "@/lib/utils";
 import { zhCN } from "@/locales/zh-CN";
 import type { GroupRouteState } from "@/lib/types";
 import {

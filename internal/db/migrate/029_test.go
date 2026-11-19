@@ -23,6 +23,8 @@ func openMigration029DB(t *testing.T) *gorm.DB {
 		`CREATE TABLE groups (id INTEGER PRIMARY KEY, active_item_id INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE group_items (id INTEGER PRIMARY KEY, group_id INTEGER NOT NULL, channel_model_id INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE model_eval_ranks (id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, channel_model_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE token_densities (id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, model TEXT NOT NULL)`,
+		`CREATE TABLE opencode_proxy_accounts (id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, account TEXT NOT NULL DEFAULT '')`,
 	}
 	for _, statement := range schema {
 		if err := database.Exec(statement).Error; err != nil {
@@ -64,6 +66,12 @@ func TestDeleteRetiredOpencodeFreeV1Channels(t *testing.T) {
 	if err := database.Exec("INSERT INTO model_eval_ranks(id, channel_id, channel_model_id, position) VALUES(1, 2, 1, 0)").Error; err != nil {
 		t.Fatalf("seed eval rank: %v", err)
 	}
+	if err := database.Exec("INSERT INTO token_densities(id, channel_id, model) VALUES(1, 2, 'deepseek-v4-flash-free')").Error; err != nil {
+		t.Fatalf("seed token density: %v", err)
+	}
+	if err := database.Exec("INSERT INTO opencode_proxy_accounts(id, channel_id, account) VALUES(1, 2, 'acct')").Error; err != nil {
+		t.Fatalf("seed proxy account: %v", err)
+	}
 
 	if err := deleteRetiredOpencodeFreeV1Channels(database); err != nil {
 		t.Fatalf("migration failed: %v", err)
@@ -97,5 +105,17 @@ func TestDeleteRetiredOpencodeFreeV1Channels(t *testing.T) {
 	}
 	if ranks != 0 {
 		t.Fatalf("评估排序应被删除, 实际 %d", ranks)
+	}
+	for table, label := range map[string]string{
+		"token_densities":         "密度",
+		"opencode_proxy_accounts": "账号",
+	} {
+		var count int64
+		if err := database.Raw("SELECT COUNT(*) FROM " + table).Scan(&count).Error; err != nil {
+			t.Fatalf("count %s: %v", label, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s应被删除, 实际 %d", label, count)
+		}
 	}
 }

@@ -13,7 +13,7 @@ Status: implemented
 - 选号改为四级分层（数值越小越优先）：`ocProxyTierUsable=0` 为体检健康或近 7 天真实成功；`ocProxyTierHistory=1` 为曾成功但当前不满足可用层（超期或最近体检非健康）；`ocProxyTierUntested=2` 为 UTC 日未体检且无成功记录；`ocProxyTierFallback=3` 为 UTC 日已测且非健康。`ocProxyCandidateTier` 负责定层，`ocProxyCandidateBetter(a,b,now)` 先比层，同层再比连续失败少、已验证、最近成功。「当天」统一按 UTC 日界，与冷却重置对齐，台账的「今日已测」筛选与成功天数统计同口径。
 - `ocProxyUsable` 只保留「并发未满 + 未冷却」两个硬条件，让历史/未测试/当天失败层都能在可用池空时按层回退；不再因 7 天过期直接排除账号。
 - `ocProxyAccount` 增加 `lastProbeAt`、`lastProbeOutcome`、`successCount`，加载池时从 `opencode_proxy_accounts` 行恢复，重启后分层不丢。真实成功与体检成功都累加 `successCount`；体检成功同时写 `lastProbeAt=now`、`lastProbeOutcome=healthy`。新增 `markOpencodeProxyProbeOutcomeForKey`，体检落库后即时同步进程内池。最近体检为 `error` 或 `rejected` 且没有更晚的真实成功时，近期成功不能把账号留在可用层。
-- `opencodeRejectCooldown(now)` 一律返回距下一个 UTC 零点的时长（上限 24 小时），忽略 `Retry-After`；`markOpencodeProxyRejected*` 与 `markOpencodeProxyRateLimited*` 删除 `retryAfter` 参数，业务转发与上下文探测调用点同步收敛。
+- `opencodeRejectCooldown(now)` 一律返回距下一个 UTC 零点的时长（上限 24 小时），忽略 `Retry-After`；`markOpencodeProxyRejected*` 与 `markOpencodeProxyRateLimited*` 删除 `retryAfter` 参数，业务转发与账号体检调用点同步收敛。上下文探测调用点已随探测页删除。
 - 台账「可用」定义保持只认体检健康或真实成功；网络错误、被拒与冷却仍计入不可用。选号回退到历史/未测试层不改变台账展示。
 
 本决定取代 [429 冷却优先取 Retry-After](./2026-10-26-opencode-429-retry-after-cooldown.md) 的时长来源；403/429 同类处理、两会话计票、换号重试与 Key 不冷却等其余语义不变。旧篇仅保留当初采纳 `Retry-After` 的取证与理由，互链见该篇顶部。

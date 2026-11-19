@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> 部分取代：恢复 `OpenCode Free V1` 的决定已被 [彻底删除 OpenCode Free V1 渠道](2026-11-19-remove-restored-opencode-free-v1.md) 撤回；本篇其余 v2.3 对齐决定不变。
+
 ## 问题
 
 上游 opencode 已发布 v2.3.0（2026-11-13），Nova 的免费档指纹仍停在 2.2.6。旧注释还写着「v2 客户端实抓两个头都发」，但 2.2.6 之后官方可能改了头集，Nova 按旧观测发送 `x-opencode-request` 属于多带头。

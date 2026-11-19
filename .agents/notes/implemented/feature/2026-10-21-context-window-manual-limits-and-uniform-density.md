@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> 密度来源已由探测改为真实流量校准，见 [上下文 token 密度改由真实流量校准](2026-11-19-context-token-density-from-upstream-usage.md)；本文关于手动窗口、默认密度锚定与十进制单位的结论继续有效，探测页与探测写入密度的步骤已被取代。
+>
 > 现行窗口来源与未知窗口处理见 [上下文过滤跳过集合与同步窗口刷新](../bug-fix/2026-10-22-context-fit-skip-set-and-relay-mode.md)。
 
 ## 问题
@@ -18,9 +20,8 @@ Status: implemented
 ### 窗口只信人工值，按渠道 × 模型定义
 
 - 路由过滤仍只采信 `channels.model_limits[模型名].context_window`（人工覆盖）；同步目录写入的 `channel_models.context_window` 仅展示，不参与跳过。窗口未知（0）的成员始终放行，分组仍需打开 `context_fit_enabled`。
-- `/api/v1/model-eval/apply-context` 增加清除语义：`context_window` 传 0 删除该模型的人工窗口；只清窗口、不影响同条目的 `max_output` / `thinking_level`。
-- 窗口保存用进程内串行保护「读整表 → 改一个键 → 整表写回」, 避免两个页面并发保存不同模型互相覆盖。
-- 探测页每行提供窗口输入与保存/清除；勾选多个模型后可批量定义或批量清除。探测结果行的「应用」写同一字段，写回值仍是标称规模（1M 档写 1,000,000）。
+- 渠道编辑器逐模型保存人工窗口；字段留空或填 0 即删除该模型的人工窗口，只清窗口、不影响同条目的 `max_output` / `thinking_level`。
+- 窗口保存沿用渠道整表提交；编辑器在本地合并 `model_limits`，全空时删除条目。
 
 ### 分组页只在过滤开启时展示窗口
 
@@ -28,19 +29,18 @@ Status: implemented
 - 引用分组的成员不显示窗口：窗口由被引用分组的成员各自决定。
 - 被跳过与「停用」效果不同：跳过只对当次请求生效，不计失败次数、不写冷却；全部成员装不下时才向客户端报错。
 
-### 估算与探测共用实测密度
+### 估算与真实流量共用密度
 
 - 基准口径不变：ASCII 4 字符/token，非 ASCII 每字 1 token。
-- 删除 OpenCode 白名单，所有渠道同一规则：探测实测出密度比（上游实际 token ÷ 基准估算）后写入进程内缓存，键为「上游端点:模型」；路由过滤与后续探测构造共用这份密度，未实测的模型按默认密度 `defaultTokenDensity = 4/7.1`（语料实测锚定：上游对英文词文本约 7.1 字符/token，1,476,000 字符实测 206,104 token），手动窗口因此按上游实际口径过滤，重启后同样成立。
-- 探测首测按「标称 − 冗余」构造：1M 档留 2%（1,000,000 → 980,000），其余档位留 1,000 token；构造规模一律先按当前密度（未实测即默认密度）换算。
-- 每次探测拿到实测值就立即回写密度缓存；与标称值偏差超过 10%（1M 档即 100,000）时，用本次实测密度把目标改到容忍下限（标称 − 容差，1M 档 900,000）自动重测一次，并用重测密度覆盖缓存；重测失败保留首测结论，不把校准失败升级成探测失败。
-- 实测值优先取响应 `usage`，被拒时取拒绝体里的 `requested N tokens` 或 Anthropic `prompt is too long: N tokens`（大小写不敏感，在完整响应体上解析，截断只用于展示）；两者都拿不到就不写缓存、不重测。
-- 探测出站请求强制收敛输出预算（`max_tokens` / `max_output_tokens` = 1，并去掉 `reasoning_effort` / `reasoning` / `thinking`），避免渠道 `model_limits` 的 `max_output` 与 `thinking_level` 把探测变成大额输出。
+- 删除 OpenCode 白名单，所有渠道同一规则：真实成功请求的 `usage.prompt_tokens ÷ 基准估算` 落库并在进程内缓存，键为「渠道 ID:模型」；路由过滤与失败日志估算共用这份密度。
+- 未观测的模型按默认密度 `defaultTokenDensity = 4/7.1`（语料实测锚定：上游对英文词文本约 7.1 字符/token，1,476,000 字符实测 206,104 token），手动窗口因此按上游实际口径过滤。
+- 密度观测只采信成功、非测试、非账号体检且 prompt 非零的请求；基准不足 2000 token 不采信，避免模板固定开销放大倍率。
+- 每个「渠道:模型」前 10 个成功样本确定密度，首条直接初始化、后续 EWMA，权重 0.2，夹取 0.25..16；满 10 条后每天只验证前 3 条，偏差 3% 内不更新；密度落库保存，重启后从数据库恢复，设置页可清除。
+- 上下文探测页、单次构造/重测与探测写入密度的步骤已删除，替代说明见 [上下文 token 密度改由真实流量校准](2026-11-19-context-token-density-from-upstream-usage.md)。
 
 ### 十进制 token 单位
 
-- 1K = 1,000，1M = 1,000,000。
-- 探测档位 64K / 128K / 256K / 500K / 1M 对应 64,000 / 128,000 / 256,000 / 500,000 / 1,000,000；单次探测上限 1,000,000。
+- 1K = 1,000，1M = 1,000,000；人工窗口与目录展示都按十进制理解。
 
 ## 备选方案
 
@@ -54,15 +54,14 @@ Status: implemented
 
 ## 后果
 
-- **收益**：探测与路由同尺，且所有渠道遵循同一套实测规则；未实测默认密度锚定上游实际口径，手动窗口不必先探测即按实际容量过滤；1M 语义明确为 1,000,000；一批模型可直接批量定义窗口，不必逐个探测；密度缓存命中后后续探测更接近目标规模。
-- **代价与已知上限**：密度是进程内缓存，重启后实测值丢失、未实测模型回落默认密度 0.563（放行口径不变，实测偏离默认的模型需重测）；默认口径按英文词语料锚定，中文/代码为主的真实请求密度不同，偏差大的模型靠探测实测修正；密度取单次实测值，极小构造规模下模板固定开销会放大倍率；探测填充文本是英文词，与真实请求（中文、代码）的 token 分布仍有偏差；10% 容差是运营口径，边界模型可能多放过或提前拒绝约一成；只测输入容量，不覆盖输出预留；人工窗口逐模型维护，模型多时仍有配置成本。
-- **重访信号**：出现大量「探测结论与真实可用长度偏差明显」或「路由按实测密度误拦」的反馈时，考虑持久化密度、或改为按模型自动同步窗口后再让目录值参与过滤。
+- **收益**：路由、拒绝消息与日志估算同尺，且所有渠道遵循同一套规则；未观测默认密度锚定上游实际口径，手动窗口不必先探测即按接近实际的容量过滤；1M 语义明确为 1,000,000；真实成功请求会持续校准，无需额外消耗探测额度。
+- **代价与已知上限**：密度按渠道模型落库，重启后恢复；默认口径按英文词语料锚定，中文/代码为主的真实请求偏差靠观测修正，冷启动期可能偏松或偏严；只从成功请求学习，被本地误拦或持续被上游拒绝的模型学得慢；人工窗口逐模型维护，模型多时仍有配置成本。
+- **重访信号**：出现大量「日志估算与上游 usage 偏差明显」或「路由按观测密度误拦」的反馈时，考虑拆分固定开销与正文密度的两段模型。
 
 ## 验证
 
-- `grep -n "tokenDensityEnabledBaseURLs\|tokenDensityApplies" internal/` 无结果。
-- `grep -rn "defaultTokenDensity" internal/relay/` 仅命中 context_fit.go（定义与换算）、context_probe.go（兜底）与 context_probe_test.go（构造规模推导）。
-- `go test ./internal/relay/ -run 'ContextFit|ContextProbe|ProbeTarget|ProbeTolerance|ProbeRetry|ProbeConstructedTokens|BuildContextProbeText|EstimateModelTokens|EstimateRequestTokens|TestProbeContextWindowDensityAndRetry|TestClampProbeOutputBudget|TestParseRequestedOverflowTokens'`
-- `go test ./internal/server/handlers/ -run 'TestSetModelContextWindow|TestRedactChannelCredentials|TestApplyModelContextConcurrentSaves'`
-- `cd web-next && pnpm test src/pages/ContextProbe.test.tsx src/pages/Groups.test.tsx`
-- 手工：探测 1M 档后返回的 `actual_tokens` 应落在标称 ±10% 内；偏差过大时应看到按 900K 目标重测后的实测值。探测页定义/清除窗口后，渠道编辑器对应模型应同步显示或清空；分组「上下文窗口过滤」开关打开后，成员行出现窗口标注（未定义的显示「未定义窗口」），关闭后消失。
+- `grep -rn "defaultTokenDensity" internal/relay/` 仅命中 context_fit.go（定义与换算）与测试。
+- `go test ./internal/relay/ -run 'ContextFit|EstimateModelTokens|EstimateRequestTokens|SanitizeUsage|ObserveTokenDensity' -count=1`
+- `go test ./internal/server/handlers/ -run 'TestRedactChannelCredentials' -count=1`
+- `cd web-next && pnpm test src/pages/Groups.test.tsx`
+- 手工：基准估算超过 2000 token 的真实请求成功后，日志应出现 `token density <端点>:<模型> observed=... ewma=... prompt=... base=...`；渠道编辑器手动定义/清除窗口后，分组「上下文窗口过滤」开关打开时成员行出现窗口标注（未定义的显示「未定义窗口」），关闭后消失。

@@ -10,7 +10,6 @@ const TITLES: Record<string, string> = {
   "/custom-models": "自定义模型",
   "/groups": "分组",
   "/model-eval": "模型评估",
-  "/context-probe": "上下文探测",
   "/proxy-accounts": "账号体检",
   "/mask": "脱敏",
   "/chat": "对话",

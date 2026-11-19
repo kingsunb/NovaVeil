@@ -4,7 +4,7 @@ Status: implemented
 
 ## 问题
 
-账号体检以真实上游请求探测免费档账号，`finishTestRequest` 原先在 `AccountProbe` 为 true 时把上游真实上报的 usage 写入 `usage_buckets`，与真实转发同口径计 token 与 `request_count`。面板测试、逐 Key 测试、分组测试、模型评估和上下文探测都不写入，`docs/modules/relay.md` 与 [渠道测试生命周期](2026-09-28-channel-test-lifecycle-and-native-protocol.md) 也声明探针不计入用量分桶，账号体检因此成为唯一例外。
+账号体检以真实上游请求探测免费档账号，`finishTestRequest` 原先在 `AccountProbe` 为 true 时把上游真实上报的 usage 写入 `usage_buckets`，与真实转发同口径计 token 与 `request_count`。面板测试、逐 Key 测试、分组测试、模型评估都不写入（上下文探测已于 2026-11-19 删除），`docs/modules/relay.md` 与 [渠道测试生命周期](2026-09-28-channel-test-lifecycle-and-native-protocol.md) 也声明探针不计入用量分桶，账号体检因此成为唯一例外。
 
 后果是同一类诊断请求在 24h/7d/30d 窗口档抬高请求数与 token；`forever` 档的请求数取自进程累计 `relay.TotalRequestCount`（只算真实转发），token 却来自 `usage_buckets`，于是出现「请求数没涨、token 涨了」的口径撕裂。用户要求账号体检完全不进统计，只显示在日志。
 

@@ -171,6 +171,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		tooLargeContextHint := false                   // 413 正文是否同时指向上下文超限。
 		contextSkipped := make(map[int]bool)           // 上下文窗口装不下本请求而跳过的成员集合。
 		maxCandidateWindow := 0                        // 手动窗口候选的最大窗口值, 供拒绝消息给出量化提示。
+		maxCandidateTokens := 0                        // 最大窗口候选按当前密度估算的请求 token 数。
 		busyRejected := make(map[int]bool)             // 并发槽位满被本地准入拒绝的成员集合: 每成员满载一次即换下一优先级, 全部满载时终止请求。
 		rounds := 0                                    // 本请求已消耗的尝试轮次, 含引用链结构性跳过等一切循环路径。
 		startedAt := time.Now()                        // 请求进入转发循环的时刻, 用于整体安全截止时间判定。
@@ -263,6 +264,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 				if scan.maxWindow > maxCandidateWindow {
 					maxCandidateWindow = scan.maxWindow
+					maxCandidateTokens = scan.maxWindowTokens
 				}
 				allContextSkipped = scan.candidates > 0 && scan.fitting == 0
 				if len(scan.blockedRefs) > 0 {
@@ -301,10 +303,14 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			if item.ID == 0 {
 				candidateCount := routableCandidateCount(group)
 				if allContextSkipped || (candidateCount > 0 && len(contextSkipped) >= candidateCount) {
+					requestTokens := maxCandidateTokens
+					if requestTokens <= 0 {
+						requestTokens = estimateDefaultTokens(estimateRequestTokens(raw.Body))
+					}
 					detail := fmt.Errorf(
 						"%s（请求约 %d token，手动窗口最大值 %d token）",
 						errContextWindowTooSmall.Error(),
-						estimateDefaultTokens(estimateRequestTokens(raw.Body)),
+						requestTokens,
 						maxCandidateWindow,
 					)
 					request.markFailed(detail, "", nil)
@@ -450,21 +456,25 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 
 			// 上下文装不下时跳过该成员, 不计成员失败。
 			contextWindow := effectiveContextWindow(channel.ModelLimits, channelModel)
-			if relayConfig.ContextFitEnabled && !contextFitsWindow(raw.Body, contextWindow, channel.BaseURL, channelModel.Name) {
+			if relayConfig.ContextFitEnabled && !contextFitsWindow(raw.Body, contextWindow, channel.ID, channel.BaseURL, channelModel.Name) {
 				contextSkipped[item.ID] = true
 				if contextWindow > maxCandidateWindow {
 					maxCandidateWindow = contextWindow
+					maxCandidateTokens = estimateModelTokens(raw.Body, channel.ID, channel.BaseURL, channelModel.Name)
 				}
 				// 跳过不是失败, 整链占用须归还。
 				releaseRefChainHops(hops)
 				clearSessionStickyByItem(group.ID, item.ID)
 				if len(contextSkipped) >= routableCandidateCount(hops[0].group) {
 					// 报出请求规模与最大手动窗口, 调用方可据此截断请求或换模型。
-					// 与预扫拒绝同用未实测默认口径, 不随最后尝试成员的实测密度漂移。
+					requestTokens := maxCandidateTokens
+					if requestTokens <= 0 {
+						requestTokens = estimateDefaultTokens(estimateRequestTokens(raw.Body))
+					}
 					detail := fmt.Errorf(
 						"%s（请求约 %d token，手动窗口最大值 %d token）",
 						errContextWindowTooSmall.Error(),
-						estimateDefaultTokens(estimateRequestTokens(raw.Body)),
+						requestTokens,
 						maxCandidateWindow,
 					)
 					request.markFailed(detail, "", nil)
@@ -538,6 +548,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					MemberID:     item.ID,
 					ChannelID:    channel.ID,
 					ChannelName:  channel.Name,
+					BaseURL:      channel.BaseURL,
 					Model:        channelModel.Name,
 					KeyLabel:     channelKeyLabel(keyIndex, selectedKey),
 					ClientFormat: clientFormatLabel(format),
@@ -628,6 +639,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				MemberID:      item.ID,
 				ChannelID:     channel.ID,
 				ChannelName:   channel.Name,
+				BaseURL:       channel.BaseURL,
 				Model:         channelModel.Name,
 				KeyLabel:      channelKeyLabel(keyIndex, selectedKey),
 				ThinkingLevel: modelLimit.ThinkingLevel,

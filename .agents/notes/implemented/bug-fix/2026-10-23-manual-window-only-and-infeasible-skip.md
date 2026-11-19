@@ -18,7 +18,7 @@ Status: implemented
 
 本地全量拒绝文案改为说明“手动上下文窗口”，并给出请求估算与最大手动窗口。同步值不进入 `maxCandidateWindow`，也不会因为目录窗口较小而跳过成员。
 
-前端同步区分：手动值仍显示为参与过滤的窗口徽章；只有同步值时显示“同步 N（仅展示）”；两者都没有时显示“未填（不参与过滤）”。探测页明确说明保存的是手动窗口，会成为路由限制。
+前端同步区分：手动值仍显示为参与过滤的窗口徽章；只有同步值时显示“同步 N（仅展示）”；两者都没有时显示“未填（不参与过滤）”。手动窗口在渠道编辑器逐模型填写。
 
 ### 413 与上下文超限只对本次请求跳过
 
@@ -40,10 +40,10 @@ Status: implemented
 
 - **收益**：目录同步不再悄悄改变路由资格；未填手动窗口的成员不会被小目录值误拒。413 与上下文超限不再污染成员健康度，同一请求可继续尝试其它候选，下一个请求也仍会重新评估这些成员。
 - **代价与已知上限**：未填手动窗口的大请求会实际打到上游，增加一次可能被拒绝的调用；是否“装得下”完全依赖上游判定。请求级跳过只在单次请求内生效，不做跨请求缓存。混合原因终止时 413 优先于上下文超限与普通确定性 4xx。
-- **重访信号**：若大量请求因未填手动窗口反复收到 413，应优先完善探测与批量填写，而不是恢复同步目录值参与过滤。
+- **重访信号**：若大量请求因未填手动窗口反复收到 413，应优先完善窗口配置与批量填写流程，而不是恢复同步目录值参与过滤。
 
 ## 验证
 
 - `GOTOOLCHAIN=go1.26.10 go test ./internal/relay/... -run 'TestEffectiveContextWindowOnlyUsesManualValue|TestContextFitIgnoresSyncedWindowForFiltering|TestRequestTooLargeSkipsMemberWithoutCooldown|TestContextOverflowSkipsMemberWithoutCooldown|TestAllMembersRequestTooLargeReturns413WithoutCooldown|TestAllMembersContextOverflowReturns400WithoutCooldown|TestOrdinaryDeterministic400StillCoolsMembers' -count=1`
-- `cd web-next && pnpm exec vitest run src/pages/Groups.test.tsx src/pages/ContextProbe.test.tsx`
+- `cd web-next && pnpm exec vitest run src/pages/Groups.test.tsx`
 - 请求级不可用用例连续发送两次请求，断言 413/上下文超限成员两次都被尝试，证明没有跨请求冷却或失败累计。
