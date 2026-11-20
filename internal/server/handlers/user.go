@@ -59,9 +59,15 @@ func login(c *gin.Context) {
 		resp.Error(c, http.StatusBadRequest, resp.ErrInvalidJSON)
 		return
 	}
-	if err := op.UserVerify(user.Username, user.Password); err != nil {
-		loginLimiter.recordFailure(c.Request.Context(), ip)
-		resp.Error(c, http.StatusUnauthorized, resp.ErrUnauthorized)
+	token, maxAge, err := auth.GenerateLoginToken(user.Username, user.Password, user.Remember)
+	if err != nil {
+		if errors.Is(err, op.ErrInvalidCredentials) {
+			loginLimiter.recordFailure(c.Request.Context(), ip)
+			resp.Error(c, http.StatusUnauthorized, resp.ErrUnauthorized)
+		} else {
+			log.Errorf("failed to issue login token: %v", err)
+			resp.Error(c, http.StatusInternalServerError, resp.ErrDatabase)
+		}
 		return
 	}
 	// SEC-08/S-L6: 首次登录成功即删除一次性初始密码文件; 删除失败(极少数权限/IO
@@ -70,11 +76,6 @@ func login(c *gin.Context) {
 		log.Warnf("login succeeded but failed to remove initial password file: %v", err)
 	}
 	loginLimiter.reset(c.Request.Context(), ip)
-	token, maxAge, err := auth.GenerateJWTToken(user.Remember)
-	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, "签发登录令牌失败: "+err.Error())
-		return
-	}
 	middleware.SetAuthCookie(c, token, maxAge)
 	resp.Success(c, model.UserStatus{
 		Username:           user.Username,

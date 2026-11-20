@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -38,7 +40,7 @@ func TestMaskRoundtrip_CustomTerms(t *testing.T) {
 		t.Errorf("masked body still contains custom term 'ProjectAlpha': %s", result.Masked)
 	}
 	// 应包含占位符
-	if !contains(result.Masked, "{{TERM_") {
+	if !contains(result.Masked, "{{REDACTED_CUSTOM_SENSITIVE_TEXT_") {
 		t.Errorf("masked body should contain TERM placeholder: %s", result.Masked)
 	}
 
@@ -82,7 +84,7 @@ func TestRestoreNonStream_JSONEscapesSpecialCharacters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
-	if !strings.Contains(result.Masked, "{{TERM_") {
+	if !strings.Contains(result.Masked, "{{REDACTED_CUSTOM_SENSITIVE_TEXT_") {
 		t.Fatalf("masked body should contain TERM placeholder: %s", result.Masked)
 	}
 
@@ -111,7 +113,10 @@ func TestRestoreNonStream_NilMapping(t *testing.T) {
 // TestRestoreStreamEvent_NilMapping 验证流式还原映射表为 nil 时原样返回。
 func TestRestoreStreamEvent_NilMapping(t *testing.T) {
 	data := []byte(`{"choices":[{"delta":{"content":"hello"}}]}`)
-	out := restoreStreamEvent(data, llm.APIFormatOpenAIChatCompletion, nil)
+	out, err := restoreStreamEvent(data, llm.APIFormatOpenAIChatCompletion, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(out) != string(data) {
 		t.Errorf("nil mapping should be no-op, got: %s", out)
 	}
@@ -136,7 +141,10 @@ func TestRestoreStreamEvent_OpenAI(t *testing.T) {
 	// 模拟上游返回的 SSE 事件(含占位符)
 	data := []byte(`{"choices":[{"delta":{"content":"建议 ` + placeholder + ` 核对"}}]}`)
 	restorer := mask.NewStreamRestorer(mapping)
-	out := restoreStreamEvent(data, llm.APIFormatOpenAIChatCompletion, restorer)
+	out, err := restoreStreamEvent(data, llm.APIFormatOpenAIChatCompletion, restorer)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !contains(string(out), "张三") {
 		t.Errorf("restored event should contain original '张三': %s", out)
 	}
@@ -159,7 +167,10 @@ func TestRestoreStreamEvent_Anthropic(t *testing.T) {
 
 	data := []byte(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"联系` + placeholder + `确认"}}`)
 	restorer := mask.NewStreamRestorer(mapping)
-	out := restoreStreamEvent(data, llm.APIFormatAnthropicMessage, restorer)
+	out, err := restoreStreamEvent(data, llm.APIFormatAnthropicMessage, restorer)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !contains(string(out), "王五") {
 		t.Errorf("restored Anthropic event should contain '王五': %s", out)
 	}
@@ -174,23 +185,155 @@ func TestRestoreStreamEvent_NoContentField(t *testing.T) {
 
 	data := []byte(`{"choices":[{"delta":{},"finish_reason":"stop"}]}`)
 	restorer := mask.NewStreamRestorer(mapping)
-	out := restoreStreamEvent(data, llm.APIFormatOpenAIChatCompletion, restorer)
+	out, err := restoreStreamEvent(data, llm.APIFormatOpenAIChatCompletion, restorer)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(out) != string(data) {
 		t.Errorf("event without content field should be unchanged: %s", out)
 	}
 }
 
-// TestFlushStreamRestorerWrapsChannels 验证流终止时各通道残留按字段写回:
-// default → content, reasoning → reasoning_content, tool-N → tool_calls.N.function.arguments(审计 REL-04)。
+func TestRestoreStreamEvent_InterleavedToolIndices(t *testing.T) {
+	mapping := mask.NewSessionStore().GetOrCreate("")
+	first := mapping.Recall("张三", "TERM")
+	second := mapping.Recall("李四", "TERM")
+	for _, indices := range [][2]int{{0, 1}, {3, 9}} {
+		t.Run(fmt.Sprintf("%d-%d", indices[0], indices[1]), func(t *testing.T) {
+			restorer := mask.NewStreamRestorer(mapping)
+			fragments := []struct {
+				index int
+				text  string
+			}{
+				{indices[0], `{"name":"` + first[:len(first)/2]},
+				{indices[1], `{"name":"` + second[:len(second)/2]},
+				{indices[1], second[len(second)/2:] + `"}`},
+				{indices[0], first[len(first)/2:] + `"}`},
+			}
+			got := make(map[int]string)
+			for _, fragment := range fragments {
+				data := []byte(fmt.Sprintf(`{"choices":[{"delta":{"tool_calls":[{"index":%d,"function":{"arguments":%q}}]}}]}`, fragment.index, fragment.text))
+				out, err := restoreStreamEvent(data, llm.APIFormatOpenAIChatCompletion, restorer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				calls := gjson.GetBytes(out, "choices.0.delta.tool_calls").Array()
+				if len(calls) != 1 || int(calls[0].Get("index").Int()) != fragment.index {
+					t.Fatalf("tool identity changed: %s", out)
+				}
+				got[fragment.index] += calls[0].Get("function.arguments").String()
+			}
+			for index, want := range map[int]string{indices[0]: `{"name":"张三"}`, indices[1]: `{"name":"李四"}`} {
+				if got[index] != want {
+					t.Fatalf("tool %d arguments = %q, want %q", index, got[index], want)
+				}
+			}
+			if remaining := restorer.PendingChannels(); len(remaining) != 0 {
+				t.Fatalf("unexpected pending channels: %v", remaining)
+			}
+		})
+	}
+}
+
+func TestRestoreStreamEvent_MixedPendingChannels(t *testing.T) {
+	mapping := mask.NewSessionStore().GetOrCreate("")
+	placeholder := mapping.Recall("张三", "TERM")
+	restorer := mask.NewStreamRestorer(mapping)
+	for i, fragment := range []string{placeholder[:len(placeholder)/2], placeholder[len(placeholder)/2:]} {
+		data := []byte(fmt.Sprintf(`{"choices":[{"delta":{"content":%q,"reasoning_content":%q,"tool_calls":[{"index":7,"function":{"arguments":%q}}]}}]}`, fragment, fragment, fragment))
+		out, err := restoreStreamEvent(data, llm.APIFormatOpenAIChatCompletion, restorer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := ""
+		if i == 1 {
+			want = "张三"
+		}
+		for _, path := range []string{"choices.0.delta.content", "choices.0.delta.reasoning_content", "choices.0.delta.tool_calls.0.function.arguments"} {
+			if got := gjson.GetBytes(out, path).String(); got != want {
+				t.Fatalf("fragment %d field %s = %q, want %q", i, path, got, want)
+			}
+		}
+	}
+}
+
+func TestRestoreStreamEvent_RejectsInvalidToolIndex(t *testing.T) {
+	for _, index := range []string{"", `"0"`, "null", "true", "-1", "0.5", "1.0", "1e0", "9223372036854775808"} {
+		t.Run(index, func(t *testing.T) {
+			field := ""
+			if index != "" {
+				field = `"index":` + index + ","
+			}
+			data := []byte(`{"choices":[{"delta":{"tool_calls":[{"index":2,"function":{"arguments":"{{first"}},{` + field + `"function":{"arguments":"{{second"}}]}}]}`)
+			restorer := mask.NewStreamRestorer(nil)
+			out, err := restoreStreamEvent(data, llm.APIFormatOpenAIChatCompletion, restorer)
+			if err == nil || out != nil {
+				t.Fatalf("invalid index %q returned data=%s err=%v", index, out, err)
+			}
+			if !strings.Contains(err.Error(), "tool_calls[1].index") {
+				t.Fatalf("error must locate invalid tool index: %v", err)
+			}
+			if remaining := restorer.PendingChannels(); len(remaining) != 0 {
+				t.Fatalf("invalid event changed tool buffers: %v", remaining)
+			}
+		})
+	}
+	data := []byte(`{"choices":[{"delta":{"content":"{{pending","tool_calls":[{"function":{"arguments":"bad"}}]}}]}`)
+	if _, err := restoreStreamEvent(data, llm.APIFormatOpenAIChatCompletion, mask.NewStreamRestorer(nil)); err == nil {
+		t.Fatal("pending content must not bypass tool index validation")
+	}
+}
+
+func TestForwardMaskedStreamRejectsInvalidToolIndex(t *testing.T) {
+	setupFailoverTest(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		frames := []string{
+			`{"id":"mask-index","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ready {{pending"}}]}`,
+			`{"id":"mask-index","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"function":{"arguments":"invalid-tool"}}]}}]}`,
+			`{"id":"mask-index","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			"[DONE]",
+		}
+		if _, err := fmt.Fprint(w, "data: "+strings.Join(frames, "\n\ndata: ")+"\n\n"); err != nil {
+			t.Errorf("write upstream stream: %v", err)
+		}
+	}))
+	defer upstream.Close()
+	channel := createIntegrationChannel(t, "mask-index", model.ChannelProviderOpenAI, upstream.URL, "mask-index-model")
+	group := createIntegrationGroup(t, "mask-index", hardeningGroupConfig(), integrationLeafItem(t, channel, "mask-index-model"))
+	mapping := mask.NewSessionStore().GetOrCreate("")
+	original := requestMask
+	requestMask = func(body []byte, _ string, _ bool) ([]byte, *mask.Mapping, []mask.Match, error) {
+		return body, mapping, nil, nil
+	}
+	t.Cleanup(func() { requestMask = original })
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"stream":true}`, group.Name)
+	expectedID := nextRequestID()
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("committed stream status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	frames := parseSSEFrames(t, recorder.Body.Bytes())
+	if len(frames) != 1 || gjson.Get(frames[0].data, "choices.0.delta.content").String() != "ready " {
+		t.Fatalf("invalid frame and pending flush must be withheld: %+v", frames)
+	}
+	state := requestStateOf(t, expectedID)
+	if state.Status != StatusFailed || !strings.Contains(state.Error, "tool_calls[0].index") {
+		t.Fatalf("invalid tool identity must fail stream: %s %q", state.Status, state.Error)
+	}
+}
+
 func TestFlushStreamRestorerWrapsChannels(t *testing.T) {
 	r := mask.NewStreamRestorer(nil)
 	_ = r.PushChannel(mask.DefaultChannel, []byte("text {{incomplete"))
 	_ = r.PushChannel(mask.ReasoningChannel, []byte("think {{x"))
 	_ = r.PushChannel(mask.ToolChannelPrefix+"0", []byte(`{"a":"{{y`))
+	_ = r.PushChannel(mask.ToolChannelPrefix+"7", []byte(`{"a":"{{z`))
 
 	frames := flushStreamRestorer(r, llm.APIFormatOpenAIChatCompletion)
-	if len(frames) != 3 {
-		t.Fatalf("frames = %d, want 3", len(frames))
+	if len(frames) != 4 {
+		t.Fatalf("frames = %d, want 4", len(frames))
 	}
 	if got := gjson.GetBytes(frames[0], "choices.0.delta.content").String(); got != "{{incomplete" {
 		t.Errorf("default channel not wrapped as content delta: %s", frames[0])
@@ -200,6 +343,18 @@ func TestFlushStreamRestorerWrapsChannels(t *testing.T) {
 	}
 	if got := gjson.GetBytes(frames[2], "choices.0.delta.tool_calls.0.function.arguments").String(); got != "{{y" {
 		t.Errorf("tool channel not wrapped as tool_calls.0.function.arguments delta: %s", frames[2])
+	}
+	for i, index := range []int64{0, 7} {
+		calls := gjson.GetBytes(frames[i+2], "choices.0.delta.tool_calls").Array()
+		if len(calls) != 1 || !calls[0].Get("index").Exists() || calls[0].Get("index").Int() != index {
+			t.Fatalf("flush must contain one tool with index %d: %s", index, frames[i+2])
+		}
+	}
+	if got := gjson.GetBytes(frames[3], "choices.0.delta.tool_calls.0.function.arguments").String(); got != "{{z" {
+		t.Errorf("nonzero tool arguments routed incorrectly: %s", frames[3])
+	}
+	if remaining := flushStreamRestorer(r, llm.APIFormatOpenAIChatCompletion); len(remaining) != 0 {
+		t.Fatalf("flush repeated pending data: %s", remaining)
 	}
 
 	// Anthropic 只支持正文字段, 非默认通道残留不输出。
@@ -385,7 +540,7 @@ func TestTruncateMaskMatches(t *testing.T) {
 		in := []mask.Match{
 			{Label: "PHONE", Original: "13800138000", Placeholder: "{{PHONE_abcd12}}"},
 			{Label: "EMAIL", Original: "a@example.com", Placeholder: "{{EMAIL_ef3456}}"},
-			{Label: "TERM", Original: "内部代号A", Placeholder: "{{TERM_qw3rty}}"},
+			{Label: "TERM", Original: "内部代号A", Placeholder: "{{REDACTED_CUSTOM_SENSITIVE_TEXT_qw3rty}}"},
 		}
 		got, truncated := truncateMaskMatches(in)
 		if truncated {

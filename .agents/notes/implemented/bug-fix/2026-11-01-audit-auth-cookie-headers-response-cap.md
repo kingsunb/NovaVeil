@@ -34,6 +34,7 @@ Status: implemented
 - **收益**：改密口令爆破受 15 分钟 5 次的窗口约束，多副本与重启后依然有效；认证 cookie 只在 `/api` 路径发送；分拆部署的安全头与 Go 侧一致；异常上游的大响应在 64 MiB 处失败，不再无限占用内存。
 - **代价与已知上限**：改密在数据库不可用时 fail-close，这是复用登录限速的必然结果；存量 `Path=/` 的旧 cookie 会保留到浏览器过期（登出或改密轮换 JWT 密钥后其 token 立即失效，但浏览器仍会继续携带该 cookie 直到过期）；`Path=/api` 的 cookie 不区分端口；HSTS 在明文监听上被浏览器忽略，只有外层终止 TLS 并透传响应头时才生效；合法非流式响应超过 64 MiB 会被判失败，重访信号是出现真实的大响应场景；`changeUsername` 的数据库错误不再回显具体原因，排查只能看服务端日志。
 - 关联实现：[请求体预算](./2026-09-22-relay-body-budget-sticky-mask-stream.md)、[Cookie Secure 与管理 API 限速](./2026-09-21-cookie-secure-behind-tls-proxy-and-admin-api-limiting.md)。
+- 已建立的管理流也绑定令牌到期及本进程密钥撤销信号，见 [认证状态与管理流](2026-11-20-auth-secret-generation-and-stream-lifetime.md)。
 
 ## 验证
 

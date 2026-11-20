@@ -200,6 +200,9 @@ var ErrUsernameUnchanged = errors.New("username unchanged")
 // ErrPasswordValidation 表示新密码未通过强度校验, 调用方应返回 400 而非 500。
 var ErrPasswordValidation = errors.New("password validation failed")
 
+// 用户名或密码校验失败。
+var ErrInvalidCredentials = errors.New("用户名或密码错误")
+
 // ErrInitialPasswordFileCleanupFailed 表示改密已事务提交成功(新密码与新 JWT 密钥均已落库),
 // 但一次性初始密码文件删除失败。调用方应视为改密成功: 密码已生效, 仅遗留一个需运维清理
 // 的文件, 不能让客户端误以为改密未发生。
@@ -242,6 +245,9 @@ func UserChangePassword(oldPassword, newPassword string) error {
 		return ErrIncorrectOldPassword
 	}
 
+	jwtSecretMu.Lock()
+	defer jwtSecretMu.Unlock()
+
 	// 事务内原子完成: 新密码 hash 计算、用户表更新、JWT 密钥轮换。三者同生共死,
 	// 任一失败整体回滚, 不再出现"JWT 已轮换 + 缓存已改, 而 DB 用户表仍是旧值"的分裂。
 	var newPasswordHash, newSecret string
@@ -280,7 +286,7 @@ func UserChangePassword(oldPassword, newPassword string) error {
 	// 重启后从 DB 重载的状态与提交前 API 返回的结果一致。
 	userCache.Password = newPasswordHash
 	userCache.MustChangePassword = false
-	settingCache.Set(model.SettingKeyAuthJWTSecret, newSecret)
+	authJWTSecretPublishLocked(newSecret)
 
 	// 初始密码文件清理: 改密已提交成功, 文件删除失败作为"提交成功但清理失败"的独立结果,
 	// 不让客户端误以为改密没发生。先清空路径再尝试删除, 避免遗留路径在后续改密中重复失败。
@@ -313,6 +319,9 @@ func UserResetPassword(newPassword string, dataDir ...string) error {
 		return fmt.Errorf("加载管理员失败: %w", err)
 	}
 
+	jwtSecretMu.Lock()
+	defer jwtSecretMu.Unlock()
+
 	var newPasswordHash, newSecret string
 	if err := db.GetDB().Transaction(func(tx *gorm.DB) error {
 		hashed, e := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
@@ -344,7 +353,7 @@ func UserResetPassword(newPassword string, dataDir ...string) error {
 	user.Password = newPasswordHash
 	user.MustChangePassword = false
 	userCache = user
-	settingCache.Set(model.SettingKeyAuthJWTSecret, newSecret)
+	authJWTSecretPublishLocked(newSecret)
 
 	initialPasswordFilePath = ""
 	path := filepath.Join(dir, initialPasswordFilename)
@@ -398,15 +407,29 @@ func UserConsumeInitialPasswordFile() error {
 func UserVerify(username, password string) error {
 	userMu.RLock()
 	defer userMu.RUnlock()
+	return userVerifyLocked(username, password)
+}
+
+// 校验凭据并读取同代密钥。
+func UserVerifyAndGetJWTSecret(username, password string) (string, error) {
+	userMu.RLock()
+	defer userMu.RUnlock()
+	if err := userVerifyLocked(username, password); err != nil {
+		return "", err
+	}
+	return AuthJWTSecretGet()
+}
+
+func userVerifyLocked(username, password string) error {
 	// 用户名与密码错误返回同一文案, 不向登录方区分两者, 压缩用户名枚举面;
 	// 用户名不匹配时也执行一次同代价的 bcrypt 比对, 抹平"用户名是否存在"
 	// 的响应时间差, 文案与时序侧信道一并封死。
 	if username != userCache.Username {
 		_ = userCache.ComparePassword(password)
-		return fmt.Errorf("用户名或密码错误")
+		return ErrInvalidCredentials
 	}
 	if err := userCache.ComparePassword(password); err != nil {
-		return fmt.Errorf("用户名或密码错误")
+		return ErrInvalidCredentials
 	}
 	return nil
 }

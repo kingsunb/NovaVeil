@@ -71,9 +71,9 @@ func getMaskRules(c *gin.Context) {
 
 // maskTestMatch 单次脱敏测试的命中明细。
 type maskTestMatch struct {
-	Label       string `json:"label"`       // 规则标签, 如 "PHONE"/"TERM", 取自占位符前缀。
+	Label       string `json:"label"`       // 规则标签, 如 "PHONE"/"TERM", 与配置开关 ID 一致。
 	Original    string `json:"original"`    // 命中原文。
-	Placeholder string `json:"placeholder"` // 替换占位符, 如 "{{PHONE_bcdfgh}}"。
+	Placeholder string `json:"placeholder"` // 替换占位符, 如 "{{REDACTED_PHONE_NUMBER_bcdfgh}}"。
 }
 
 // maskTestResult 脱敏测试响应: 脱敏后文本与命中明细, 仅供管理员预览, 绝不落库。

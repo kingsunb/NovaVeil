@@ -381,6 +381,11 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		return nil, fmt.Errorf("请求未包含任何需要更新的字段")
 	}
 
+	if baseURLChanged || req.Models != nil {
+		tokenDensityMu.Lock()
+		defer tokenDensityMu.Unlock()
+	}
+
 	var currentModels []model.ChannelModel
 	var channel model.Channel
 	err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -424,6 +429,11 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 	})
 	if err != nil {
 		return nil, err
+	}
+	if baseURLChanged {
+		invalidateChannelTokenDensity(req.ID)
+	} else if req.Models != nil {
+		invalidateMissingModelTokenDensity(req.ID, currentModels)
 	}
 	// DB 读回为密文; 解密后再进缓存, 确保转发/列表/导出路径拿到明文。
 	if err := openChannelForCache(&channel); err != nil {
@@ -577,6 +587,8 @@ func ChannelDel(id int, ctx context.Context) error {
 	if channel.Builtin {
 		return fmt.Errorf("内置渠道不允许删除；如不需要可先停用")
 	}
+	tokenDensityMu.Lock()
+	defer tokenDensityMu.Unlock()
 	var modelIDs []int
 	if err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&model.ChannelModel{}).Where("channel_id = ?", id).Pluck("id", &modelIDs).Error; err != nil {
@@ -608,6 +620,7 @@ func ChannelDel(id int, ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	invalidateChannelTokenDensity(id)
 	channelCache.Del(id)
 	channelModelCache.Del(modelIDs...)
 	if err := groupRefreshCache(ctx); err != nil {
@@ -651,6 +664,8 @@ func ChannelModelGet(id int) (model.ChannelModel, error) {
 func channelRefreshCache(ctx context.Context) error {
 	channelCacheWriteMu.Lock()
 	defer channelCacheWriteMu.Unlock()
+	tokenDensityMu.Lock()
+	defer tokenDensityMu.Unlock()
 	channels := []model.Channel{}
 	if err := db.GetDB().WithContext(ctx).Find(&channels).Error; err != nil {
 		log.Warnf("failed to get channels: %v", err)
@@ -675,6 +690,7 @@ func channelRefreshCache(ctx context.Context) error {
 	for _, channelModel := range channelModels {
 		channelModelMap[channelModel.ID] = channelModel
 	}
+	clear(tokenDensityCache)
 	channelCache.RefreshAll(channelMap)
 	channelModelCache.RefreshAll(channelModelMap)
 	return nil

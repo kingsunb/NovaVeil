@@ -4,9 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
-	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -315,8 +315,8 @@ func (t *bunSidecarTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	if err != nil {
 		return nil, fmt.Errorf("bun sidecar payload: %w", err)
 	}
-	if os.Getenv("NOVEIL_SIDECAR_DEBUG") != "" {
-		fmt.Fprintf(os.Stderr, "[sidecar-go] url=%s body_len=%d hdrs=%v\n", payload.URL, len(payload.Body), payload.Headers)
+	if bunSidecarDebugEnabled() {
+		fmt.Fprintln(os.Stderr, bunSidecarDebugSummary(req, payload.Headers, len(payload.Body)))
 	}
 	forward, err := http.NewRequestWithContext(req.Context(), http.MethodPost, sidecar.endpoint, bytes.NewReader(encoded))
 	if err != nil {
@@ -366,6 +366,18 @@ func bunSidecarErrorMessage(response *http.Response) string {
 		return payload.Error
 	}
 	return string(data)
+}
+
+func bunSidecarDebugEnabled() bool {
+	return os.Getenv("NOVEIL_SIDECAR_DEBUG") == "1"
+}
+
+func bunSidecarDebugSummary(req *http.Request, headers [][2]string, bodyBytes int) string {
+	names := make([]string, 0, len(headers))
+	for _, header := range headers {
+		names = append(names, header[0])
+	}
+	return fmt.Sprintf("[sidecar-go] origin=%s://%s body_len=%d hdr_names=%q", req.URL.Scheme, req.URL.Host, bodyBytes, names)
 }
 
 // bunSidecarHeaders 保留公共头官方拼写, 其余头统一小写。

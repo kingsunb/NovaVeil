@@ -23,7 +23,7 @@ func init() {
 		AddRoute(router.NewRoute("/queue/move-up", http.MethodPost).Handle(moveUpModelEvalQueue)).
 		AddRoute(router.NewRoute("/queue/stop", http.MethodPost).Handle(stopModelEvalQueue)).
 		AddRoute(router.NewRoute("/queue/clear", http.MethodPost).Handle(clearModelEvalQueue)).
-		AddRoute(router.NewRoute("/queue/stream", http.MethodGet).Handle(streamModelEvalQueue))
+		AddRoute(router.NewRoute("/queue/stream", http.MethodGet).Use(middleware.AuthStream()).Handle(streamModelEvalQueue))
 }
 
 func enqueueModelEvalQueue(c *gin.Context) {
@@ -109,6 +109,9 @@ func streamModelEvalQueue(c *gin.Context) {
 	prepareSSE(c)
 	snapshot, updates := eval.Subscribe()
 	defer eval.Unsubscribe(updates)
+	if c.Request.Context().Err() != nil {
+		return
+	}
 	if err := sse.Encode(c.Writer, sse.Event{Event: "queue", Data: snapshot}); err != nil {
 		return
 	}
@@ -121,12 +124,15 @@ func streamModelEvalQueue(c *gin.Context) {
 		case <-c.Request.Context().Done():
 			return
 		case <-heartbeat.C:
+			if c.Request.Context().Err() != nil {
+				return
+			}
 			if _, err := c.Writer.Write([]byte(": ping\n\n")); err != nil {
 				return
 			}
 			c.Writer.Flush()
 		case tasks, ok := <-updates:
-			if !ok {
+			if !ok || c.Request.Context().Err() != nil {
 				return
 			}
 			if err := sse.Encode(c.Writer, sse.Event{Event: "queue", Data: tasks}); err != nil {

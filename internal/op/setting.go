@@ -191,6 +191,9 @@ func SettingSetInt(key model.SettingKey, value int) error {
 }
 
 func settingRefreshCache(ctx context.Context) error {
+	jwtSecretMu.Lock()
+	defer jwtSecretMu.Unlock()
+
 	db := db.GetDB().WithContext(ctx)
 
 	var settings []model.Setting
@@ -233,7 +236,11 @@ func settingRefreshCache(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		settingCache.Set(setting.Key, plain)
+		if setting.Key == model.SettingKeyAuthJWTSecret {
+			authJWTSecretPublishLocked(plain)
+		} else {
+			settingCache.Set(setting.Key, plain)
+		}
 	}
 	// 初始化随机头规则解析缓存: 从当前设置值解析, 避免热路径首次请求冷加载。
 	if raw, ok := settingCache.Get(model.SettingKeyChannelRandomHeaders); ok {

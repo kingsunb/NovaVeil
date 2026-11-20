@@ -1,7 +1,7 @@
 // Package mask 实现 NovaVeil 的核心脱敏(脱敏)引擎: 占位符生成、规则匹配、
 // 多轮会话映射与流式还原。设计译自 maskit, 详见 docs/脱敏开发/。
 //
-// 占位符格式为 {{LABEL_6位辅音}}: LABEL 保留业务语义(模型能理解"这里原本是个电话号"),
+// 占位符含 REDACTED 类型名，说明原值已在本地脱敏。
 // 6 位纯辅音随机串彻底消除大模型对十六进制数做变异算术的诱因。
 package mask
 
@@ -16,13 +16,28 @@ import (
 // 模型不会尝试对它做算术(曾用 hex, 模型把 83fc6a 当 IP 子网前缀做算术)。
 const consonants = "bcdfghjklmnpqrstvwxz"
 
-// PlaceholderRe 匹配占位符 {{LABEL_后缀}}: LABEL 为 1-12 位大写字母/数字, 后缀为 6 位辅音。
-// 还原侧用此正则定位占位符; 脱敏侧用它切分文本以跳过已有占位符片段(防污染)。
-var PlaceholderRe = regexp.MustCompile(`\{\{([A-Z0-9]{1,12})_([bcdfghjklmnpqrstvwxz]{6})\}\}`)
+// 同时识别当前和历史占位符。
+var PlaceholderRe = regexp.MustCompile(`\{\{((?:REDACTED_[A-Z0-9](?:[A-Z0-9_]{0,40}[A-Z0-9])?)|[A-Z0-9]{1,12})_([bcdfghjklmnpqrstvwxz]{6})\}\}`)
 
-// labelSafeRe 剥离标签中的非字母数字字符(标签 ASCII 化)。内置规则标签本身是 ASCII;
-// 自定义中文标签归一为 TERM。
+// 上限保证新占位符不超过 62 字节。
+const maxPlaceholderTypeLength = 42
+
 var labelSafeRe = regexp.MustCompile(`[^A-Z0-9]+`)
+
+var placeholderTypeAliases = map[string]string{
+	"PRIVATE_KEY": "PEM" + "_PRIVATE_KEY", "CONNSTR": "CONNECTION_PASSWORD",
+	"PHONE": "PHONE_NUMBER", "EMAIL": "EMAIL_ADDRESS", "IDCARD": "CN_ID_NUMBER",
+	"CARD": "BANK_CARD_NUMBER", "SECRET": "CRED" + "ENTIAL", "JWT": "JWT_TOKEN",
+	"TOKEN": "BEARER" + "_TOKEN", "MAC": "MAC_ADDRESS", "USCC": "CN_UNIFIED_SOCIAL_CREDIT_CODE",
+	"TERM": "CUSTOM_SENSITIVE_TEXT", "WIF_KEY": "BITCOIN_WIF_PRIVATE_KEY",
+	"BIP32_KEY": "BIP32_EXTENDED_PRIVATE_KEY", "SOLANA_KEY": "SOLANA_PRIVATE_KEY",
+	"SOLANA_KEYPAIR": "SOLANA_PRIVATE_KEYPAIR", "STELLAR_KEY": "STELLAR_SECRET_SEED",
+	"SUI_KEY": "SUI_PRIVATE_KEY", "APTOS_KEY": "APTOS_PRIVATE_KEY",
+	"NOSTR_KEY": "NOSTR_PRIVATE_KEY", "AGE_KEY": "AGE_IDENTITY_KEY",
+	"ZCASH_KEY": "ZCASH_SPENDING_KEY", "NEAR_KEY": "NEAR_PRIVATE_KEY",
+	"SSN": "US_SSN", "IBAN": "IBAN_ACCOUNT", "IP": "PUBLIC_IPV4_ADDRESS",
+	"PASSPORT": "PASSPORT_NUMBER",
+}
 
 // randConsonant 用 crypto/rand 取一个辅音。拒绝 240-255 区间消除模 20 偏置(240=20*12)。
 // crypto/rand 失败属系统级故障, fail-closed 直接 panic, 由引擎 recover 转为拒绝请求。
@@ -48,22 +63,23 @@ func genSuffix() string {
 	return string(out)
 }
 
-// safeLabel 标签清洗: 转大写、剥非字母数字、截断 12 字符、空则归 TERM。
+// 生成可读的占位符类型名。
 func safeLabel(label string) string {
-	up := strings.ToUpper(label)
-	s := labelSafeRe.ReplaceAllString(up, "")
-	if len(s) > 12 {
-		s = s[:12]
+	s := strings.Trim(labelSafeRe.ReplaceAllString(strings.ToUpper(label), "_"), "_")
+	s = strings.TrimPrefix(s, "REDACTED_")
+	if alias, ok := placeholderTypeAliases[s]; ok {
+		s = alias
 	}
 	if s == "" {
-		s = "TERM"
+		s = "CUSTOM_SENSITIVE_TEXT"
 	}
-	return s
+	if len(s) > maxPlaceholderTypeLength {
+		s = strings.TrimRight(s[:maxPlaceholderTypeLength], "_")
+	}
+	return "REDACTED_" + s
 }
 
-// NewToken 生成形如 {{LABEL_xxxxxx}} 的占位符。label 经 safeLabel 清洗。
-// 不做查重(查重由 Mapping.Recall 在会话映射表上完成); 后缀恒为 6 位辅音,
-// 落在 PlaceholderRe 认得的范围内(曾用 token_hex(6) 产生 12 字符导致还原永久失败)。
+// 生成带类型名的随机占位符。
 func NewToken(label string) string {
 	return "{{" + safeLabel(label) + "_" + genSuffix() + "}}"
 }

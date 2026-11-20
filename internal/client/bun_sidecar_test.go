@@ -700,3 +700,44 @@ func TestBunSidecarProcessStreamSurvivesIdleGap(t *testing.T) {
 		t.Fatalf("流不得在空闲空档处被掐断: %v", readErr)
 	}
 }
+
+func TestBunSidecarDebugHidesCredentials(t *testing.T) {
+	target := &url.URL{
+		Scheme: "https", Host: "example.com", Path: "/fixture-path",
+		User:     url.UserPassword("fixture-user", "fixture-pass"),
+		RawQuery: "credential=fixture-query", Fragment: "fixture-fragment",
+	}
+	req := &http.Request{URL: target}
+	headers := [][2]string{
+		{"Authorization", "fixture-auth"},
+		{"X-Api-Key", "fixture-api"},
+		{"Cookie", "fixture-cookie"},
+		{"X-Custom-Credential", "fixture-custom"},
+		{"Content-Type", "application/json"},
+	}
+	summary := bunSidecarDebugSummary(req, headers, 123)
+	for _, value := range []string{"fixture-user", "fixture-pass", "fixture-path", "fixture-query", "fixture-fragment", "fixture-auth", "fixture-api", "fixture-cookie", "fixture-custom"} {
+		if strings.Contains(summary, value) {
+			t.Errorf("诊断日志暴露敏感值: %q", value)
+		}
+	}
+	for _, visible := range []string{"https://example.com", "Authorization", "X-Api-Key", "Cookie", "X-Custom-Credential", "Content-Type", "body_len=123"} {
+		if !strings.Contains(summary, visible) {
+			t.Errorf("诊断日志缺少字段: %s", visible)
+		}
+	}
+	if headers[0][1] != "fixture-auth" {
+		t.Fatal("日志处理不得改写实际请求头")
+	}
+}
+
+func TestBunSidecarDebugRequiresExplicitEnable(t *testing.T) {
+	for _, value := range []string{"", "0", "false", "true", "yes", "1"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("NOVEIL_SIDECAR_DEBUG", value)
+			if got := bunSidecarDebugEnabled(); got != (value == "1") {
+				t.Fatalf("诊断开关 %q: %v", value, got)
+			}
+		})
+	}
+}

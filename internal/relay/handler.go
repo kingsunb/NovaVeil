@@ -1150,7 +1150,14 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 				// 脱敏还原: SSE 事件增量文本占位符→原文, StreamRestorer 跨 chunk 缓冲拼接(文档 01 §3.2、03)。
 				if streamRestorer != nil {
-					event.Data = restoreStreamEvent(event.Data, format, streamRestorer)
+					restored, restoreErr := restoreStreamEvent(event.Data, format, streamRestorer)
+					if restoreErr != nil {
+						if firstErr == nil {
+							firstErr = fmt.Errorf("restore masked stream event: %w", restoreErr)
+						}
+						break
+					}
+					event.Data = restored
 				}
 				// 响应模型回显: 流式事件里的真实上游模型名改写回客户端请求的分组名。
 				if relayConfig.EchoResponseModel {
@@ -1193,7 +1200,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			disarmIdle()
 			// 脱敏流式还原: 流结束后 Flush 各通道残留 pending, 作为各自字段的最终 delta
 			// 事件写给客户端(默认正文通道、reasoning_content 通道与每个 tool-call 槽位独立成帧)。
-			if streamRestorer != nil {
+			if streamRestorer != nil && firstErr == nil && !polluted && !clientGone {
 				for _, flushData := range flushStreamRestorer(streamRestorer, format) {
 					if len(flushData) == 0 {
 						continue

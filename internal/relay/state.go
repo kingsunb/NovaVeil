@@ -72,7 +72,7 @@ const (
 type MaskMatch struct {
 	Label       string `json:"label"`       // 规则标签, 如 PHONE / EMAIL / SECRET / TERM
 	Original    string `json:"original"`    // 命中原文(被脱敏前的敏感片段)
-	Placeholder string `json:"placeholder"` // 替换占位符, 如 {{PHONE_bcdfgh}}
+	Placeholder string `json:"placeholder"` // 替换占位符, 如 {{REDACTED_PHONE_NUMBER_bcdfgh}}
 }
 
 // 客户端请求的完整进程内状态, 同时作为状态流的消息形状; 上半部分在请求到达时写入并在结束时定稿, 下半部分每轮循环覆盖。
@@ -122,6 +122,8 @@ type RequestState struct {
 	stopCh            chan struct{}      // 管理端整体终止信号: StopRequest 中 close 一次, wait/select 据此立即唤醒而非等定时器到期。
 	roundStartedAt    time.Time          // 最新一轮的开始时刻, 用于计算该轮尝试耗时。
 	lastOutputPublish time.Time          // 最近一次输出字符数的节流发布时刻, 把逐块累加收敛为至多 2Hz 的状态推送。
+
+	tokenDensity op.TokenDensitySnapshot
 }
 
 // AttemptRecord 一轮上游尝试的轨迹记录, 面板据此渲染请求的时间线。
@@ -374,6 +376,7 @@ func (r *RequestState) IsStopRequested() bool {
 // startRound 记录本轮选中的目标并进入上游请求, cancel 供人工中止本轮, 返回递增的轮次序号。
 // 同时追加一条尝试轨迹, 结束形态由 finishRound 回填。
 func (r *RequestState) startRound(cancel context.CancelFunc, target RoundTarget) int {
+	densitySnapshot := requestTokenDensitySnapshot(target.ChannelID, target.BaseURL, target.Model)
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -382,6 +385,7 @@ func (r *RequestState) startRound(cancel context.CancelFunc, target RoundTarget)
 	r.TargetChannelID = target.ChannelID
 	r.TargetModel = target.Model
 	r.TargetBaseURL = target.BaseURL
+	r.tokenDensity = densitySnapshot
 	r.KeyLabel = target.KeyLabel
 	r.ThinkingLevel = target.ThinkingLevel
 	r.ClientFormat = target.ClientFormat
@@ -632,7 +636,7 @@ func (r *RequestState) finish(body, responseBody string, status Status, class Er
 	density := modelTokenDensity(r.TargetChannelID, r.TargetBaseURL, r.TargetModel)
 	usage, estimated := sanitizeUsage(usage, body, density)
 	if status == StatusSuccess && !estimated && !r.AccountProbe && usage != nil && usage.PromptTokens > 0 {
-		observeTokenDensity(r.TargetChannelID, r.TargetBaseURL, r.TargetModel, usage.PromptTokens, body)
+		observeTokenDensity(r.tokenDensity, usage.PromptTokens, body)
 	}
 	// 对话留存: 截断前零拷贝移交完整报文引用(字符串不可变), 编码与落盘全部异步。
 	record := model.ConversationRecord{

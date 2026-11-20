@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/kingsunb/NovaVeil/internal/server/auth"
 	"github.com/kingsunb/NovaVeil/internal/server/middleware"
 )
 
@@ -67,5 +68,39 @@ func TestLoginSuccessResetsFailures(t *testing.T) {
 	}
 	if got := countAttempts(t, limiter.conn); got != 0 {
 		t.Fatalf("failure rows after login success = %d, want 0", got)
+	}
+	found := false
+	for _, cookie := range w.Result().Cookies() {
+		if cookie.Name == middleware.AuthCookieName {
+			found = true
+			if !auth.VerifyJWTToken(cookie.Value) {
+				t.Fatal("successful login must issue a valid token")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("successful login must set the auth cookie")
+	}
+}
+
+func TestLoginWrongCredentialsCountTowardLimit(t *testing.T) {
+	seedAdminUser(t, "correct-password-123")
+	limiter := useCredentialTestLimiter(t)
+	r := newLoginTestRouter()
+	const ip = "203.0.113.63"
+	for _, body := range []string{
+		`{"username":"admin","password":"wrong-password"}`,
+		`{"username":"wrong-user","password":"correct-password-123"}`,
+	} {
+		w := postCredentialJSON(t, r, "/api/v1/user/login", ip, body)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("invalid credentials status = %d, want 401", w.Code)
+		}
+		if w.Header().Get("Set-Cookie") != "" {
+			t.Fatal("invalid credentials must not set an auth cookie")
+		}
+	}
+	if got := countAttempts(t, limiter.conn); got != 2 {
+		t.Fatalf("credential failure rows = %d, want 2", got)
 	}
 }

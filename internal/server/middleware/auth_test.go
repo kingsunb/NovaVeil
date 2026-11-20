@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -281,6 +282,117 @@ func TestAfterPasswordChangeAllPathsAllowedOldTokensInvalid(t *testing.T) {
 	// 新 token 全站放行
 	if w := doRequest(r, http.MethodGet, "/api/v1/channel/list", newToken); w.Code != http.StatusOK {
 		t.Fatalf("protected path after change -> %d, want 200", w.Code)
+	}
+}
+
+func TestAuthStreamRejectsRevocationBeforeSubscription(t *testing.T) {
+	seedUser(t, "stream-registration-password", false)
+	token, _, err := auth.GenerateJWTToken(true)
+	if err != nil {
+		t.Fatalf("generate token: %v", err)
+	}
+	r := gin.New()
+	r.Use(Auth())
+	r.GET("/stream", func(c *gin.Context) {
+		if err := op.AuthJWTRotateSecret(); err != nil {
+			t.Fatalf("rotate secret: %v", err)
+		}
+		c.Next()
+	}, AuthStream(), func(c *gin.Context) {
+		t.Error("revoked session reached stream handler")
+	})
+	if w := doRequest(r, http.MethodGet, "/stream", token); w.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked stream status = %d, want 401", w.Code)
+	}
+}
+
+func TestAuthStreamReleasesRequestContext(t *testing.T) {
+	seedUser(t, "stream-cleanup-password", false)
+	token, _, err := auth.GenerateJWTToken(true)
+	if err != nil {
+		t.Fatalf("generate token: %v", err)
+	}
+	var streamContext context.Context
+	r := gin.New()
+	r.Use(Auth())
+	r.GET("/stream", AuthStream(), func(c *gin.Context) {
+		streamContext = c.Request.Context()
+		if _, ok := streamContext.Deadline(); !ok {
+			t.Error("stream context must carry the token expiry")
+		}
+		c.Status(http.StatusNoContent)
+	})
+	if w := doRequest(r, http.MethodGet, "/stream", token); w.Code != http.StatusNoContent {
+		t.Fatalf("stream status = %d, want 204", w.Code)
+	}
+	if streamContext == nil || streamContext.Err() != context.Canceled {
+		t.Fatal("returning stream must release its deadline context")
+	}
+}
+
+type blockedAuthStreamWriter struct {
+	*httptest.ResponseRecorder
+	entered     chan struct{}
+	interrupted chan struct{}
+	once        sync.Once
+}
+
+func (w *blockedAuthStreamWriter) Flush() {
+	close(w.entered)
+	<-w.interrupted
+}
+
+func (w *blockedAuthStreamWriter) SetWriteDeadline(deadline time.Time) error {
+	if !deadline.After(time.Now()) {
+		w.once.Do(func() { close(w.interrupted) })
+	}
+	return nil
+}
+
+func TestAuthStreamRevocationInterruptsBlockedFlush(t *testing.T) {
+	seedUser(t, "blocked-stream-password", false)
+	token, _, err := auth.GenerateJWTToken(true)
+	if err != nil {
+		t.Fatalf("generate token: %v", err)
+	}
+	r := gin.New()
+	r.Use(Auth())
+	r.GET("/stream", AuthStream(), func(c *gin.Context) {
+		c.Writer.Flush()
+	})
+	writer := &blockedAuthStreamWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		entered:          make(chan struct{}), interrupted: make(chan struct{}),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/stream", nil)
+	req.AddCookie(&http.Cookie{Name: AuthCookieName, Value: token})
+	ctx, cancel := context.WithCancel(req.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.ServeHTTP(writer, req.WithContext(ctx))
+	}()
+	t.Cleanup(func() {
+		cancel()
+		writer.once.Do(func() { close(writer.interrupted) })
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("blocked stream failed to stop during cleanup")
+		}
+	})
+	select {
+	case <-writer.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stream did not enter flush")
+	}
+	if err := op.AuthJWTRotateSecret(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("revocation must interrupt a blocked response flush")
 	}
 }
 

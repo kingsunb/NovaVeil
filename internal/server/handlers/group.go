@@ -52,6 +52,7 @@ func init() {
 		).
 		AddRoute(
 			router.NewRoute("/runtime/stream", http.MethodGet).
+				Use(middleware.AuthStream()).
 				Handle(streamGroupRuntime),
 		).
 		AddRoute(
@@ -86,6 +87,9 @@ func streamGroupRuntime(c *gin.Context) {
 	snapshot, updates := relay.OpenRouteStream()
 	defer relay.CloseRouteStream(updates)
 	for _, update := range snapshot {
+		if c.Request.Context().Err() != nil {
+			return
+		}
 		if err := sse.Encode(c.Writer, sse.Event{Event: "runtime", Data: update}); err != nil {
 			return
 		}
@@ -99,12 +103,15 @@ func streamGroupRuntime(c *gin.Context) {
 		case <-c.Request.Context().Done():
 			return
 		case <-heartbeat.C:
+			if c.Request.Context().Err() != nil {
+				return
+			}
 			if _, err := c.Writer.Write([]byte(": ping\n\n")); err != nil {
 				return
 			}
 			c.Writer.Flush()
 		case update, ok := <-updates:
-			if !ok {
+			if !ok || c.Request.Context().Err() != nil {
 				return
 			}
 			if err := sse.Encode(c.Writer, sse.Event{Event: "runtime", Data: update}); err != nil {

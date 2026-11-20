@@ -601,3 +601,66 @@ func TestUserChangePasswordDBFailureNoHalfUpdate(t *testing.T) {
 		t.Fatal("user must_change_password must be rolled back when JWT save fails")
 	}
 }
+
+func TestUserVerifyAndGetJWTSecretBindsCredentialGeneration(t *testing.T) {
+	resetTestUser(t, "snapshot-old-password", false)
+	initialPasswordFilePath = ""
+	verifiedSecret, err := UserVerifyAndGetJWTSecret("admin", "snapshot-old-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := UserChangePassword("snapshot-old-password", "snapshot-new-password"); err != nil {
+		t.Fatal(err)
+	}
+	currentSecret, err := AuthJWTSecretGet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verifiedSecret == currentSecret {
+		t.Fatal("old credentials must retain only the old signing secret")
+	}
+	for _, credentials := range [][2]string{
+		{"admin", "snapshot-old-password"},
+		{"other", "snapshot-new-password"},
+	} {
+		secret, err := UserVerifyAndGetJWTSecret(credentials[0], credentials[1])
+		if !errors.Is(err, ErrInvalidCredentials) || secret != "" {
+			t.Fatalf("invalid credentials returned a signing secret or wrong error: %v", err)
+		}
+	}
+	newSecret, err := UserVerifyAndGetJWTSecret("admin", "snapshot-new-password")
+	if err != nil || newSecret != currentSecret {
+		t.Fatalf("new credentials must use current state: %v", err)
+	}
+}
+
+func TestUserVerifyAndGetJWTSecretPropagatesStorageFailure(t *testing.T) {
+	resetTestUser(t, "read-failure-password", false)
+	before, err := AuthJWTStateGet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingCache.Del(model.SettingKeyAuthJWTSecret)
+	t.Cleanup(func() { settingCache.Set(model.SettingKeyAuthJWTSecret, before.Secret) })
+	queryCB := db.GetDB().Callback().Query()
+	const callbackName = "test_login_secret_read_failure"
+	if err := queryCB.Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Table == "settings" {
+			tx.Error = errInjectedDBFailure
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := queryCB.Remove(callbackName); err != nil {
+			t.Errorf("remove failing callback: %v", err)
+		}
+	})
+	secret, err := UserVerifyAndGetJWTSecret("admin", "read-failure-password")
+	if !errors.Is(err, errInjectedDBFailure) || errors.Is(err, ErrInvalidCredentials) || secret != "" {
+		t.Fatalf("storage failure must stay distinct from invalid credentials: %v", err)
+	}
+	if before.Revoked.Err() != nil {
+		t.Fatal("read failure must not revoke the active state")
+	}
+}

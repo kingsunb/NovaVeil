@@ -22,7 +22,7 @@ func TestEngine_CustomTermsWholeWord(t *testing.T) {
 	e := NewEngine(NewSessionStore())
 	res, err := e.Apply("the cat sat on the category", "s1", enable(), []CustomTerm{{Value: "cat"}})
 	require.NoError(t, err)
-	assert.Contains(t, res.Masked, "{{TERM_", "cat 应被整词替换")
+	assert.Contains(t, res.Masked, "{{REDACTED_CUSTOM_SENSITIVE_TEXT_", "cat 应被整词替换")
 	assert.Contains(t, res.Masked, "category", "category 不应被替换(词边界)")
 	assert.NotContains(t, res.Masked, " cat ")
 	// 还原往返。
@@ -35,7 +35,7 @@ func TestEngine_CustomTermsChineseNoBoundary(t *testing.T) {
 	// 中文词无 \\b 边界, 字面匹配。
 	res, err := e.Apply("我叫张三, 张三丰是另一个人", "s1", enable(), []CustomTerm{{Value: "张三"}})
 	require.NoError(t, err)
-	assert.Contains(t, res.Masked, "{{TERM_")
+	assert.Contains(t, res.Masked, "{{REDACTED_CUSTOM_SENSITIVE_TEXT_")
 	restored := RestoreString(res.Masked, res.Mapping)
 	assert.Equal(t, "我叫张三, 张三丰是另一个人", restored)
 }
@@ -45,8 +45,8 @@ func TestEngine_CustomTermsPriorityOverRegex(t *testing.T) {
 	// 自定义词优先于正则: 手机号作为自定义词应得 TERM 占位符, 不被 PHONE 规则再脱。
 	res, err := e.Apply("call 13800138000", "s1", enable("PHONE"), []CustomTerm{{Value: "13800138000"}})
 	require.NoError(t, err)
-	assert.Contains(t, res.Masked, "{{TERM_", "自定义词优先, 标签为 TERM")
-	assert.NotContains(t, res.Masked, "{{PHONE_", "不应被 PHONE 规则二次脱敏")
+	assert.Contains(t, res.Masked, "{{REDACTED_CUSTOM_SENSITIVE_TEXT_", "自定义词优先, 标签为 TERM")
+	assert.NotContains(t, res.Masked, "{{REDACTED_PHONE_NUMBER_", "不应被 PHONE 规则二次脱敏")
 	restored := RestoreString(res.Masked, res.Mapping)
 	assert.Equal(t, "call 13800138000", restored)
 }
@@ -56,7 +56,7 @@ func TestEngine_CustomTermsLongFirst(t *testing.T) {
 	// 长词优先: "category" 应整体替换, 不被 "cat" 拆碎。
 	res, err := e.Apply("the category", "s1", enable(), []CustomTerm{{Value: "cat"}, {Value: "category"}})
 	require.NoError(t, err)
-	assert.Contains(t, res.Masked, "{{TERM_")
+	assert.Contains(t, res.Masked, "{{REDACTED_CUSTOM_SENSITIVE_TEXT_")
 	assert.NotContains(t, res.Masked, "category")
 	assert.NotContains(t, res.Masked, "egory", "不应残留 category 被拆后的尾巴")
 }
@@ -103,7 +103,7 @@ func TestEngine_ConnStr_OnlyPasswordMasked(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, res.Masked, "postgres://user:", "scheme/user 保留")
 	assert.Contains(t, res.Masked, "@host:5432/x", "host 保留")
-	assert.Contains(t, res.Masked, "{{CONNSTR_", "密码被占位符替换")
+	assert.Contains(t, res.Masked, "{{REDACTED_CONNECTION_PASSWORD_", "密码被占位符替换")
 	assert.NotContains(t, res.Masked, "secretpw", "密码不应残留")
 	restored := RestoreString(res.Masked, res.Mapping)
 	assert.Equal(t, "db: postgres://user:secretpw@host:5432/x", restored)
@@ -114,7 +114,7 @@ func TestEngine_Secret_ValidatorRejectsPureAlpha(t *testing.T) {
 	// 含数字的值应脱敏。
 	res, err := e.Apply("password=abc123", "s1", enable("SECRET"), nil)
 	require.NoError(t, err)
-	assert.Contains(t, res.Masked, "password={{SECRET_")
+	assert.Contains(t, res.Masked, "password={{REDACTED_CREDENTIAL_")
 	// 纯字母值(方法名)应被校验函数拒绝, 不脱敏。
 	res2, err := e.Apply("token=getUserInfo", "s2", enable("SECRET"), nil)
 	require.NoError(t, err)
@@ -167,7 +167,7 @@ func TestEngine_MAC(t *testing.T) {
 	// 开关开启: 整体替换为占位符, 命中明细齐全, 还原往返一致。
 	res2, err := e.Apply("mac "+mac+" end", "s2", enable("MAC"), nil)
 	require.NoError(t, err)
-	assert.Contains(t, res2.Masked, "{{MAC_")
+	assert.Contains(t, res2.Masked, "{{REDACTED_MAC_ADDRESS_")
 	assert.NotContains(t, res2.Masked, mac)
 	var m *Match
 	for i := range res2.Matches {
@@ -207,7 +207,7 @@ func TestEngine_USCC(t *testing.T) {
 	// 开关开启: 替换为占位符, 还原往返一致。
 	res2, err := e.Apply("code "+code+" end", "s2", enable("USCC"), nil)
 	require.NoError(t, err)
-	assert.Contains(t, res2.Masked, "{{USCC_")
+	assert.Contains(t, res2.Masked, "{{REDACTED_CN_UNIFIED_SOCIAL_CREDIT_CODE_")
 	assert.NotContains(t, res2.Masked, code)
 	restored := RestoreString(res2.Masked, res2.Mapping)
 	assert.Equal(t, "code "+code+" end", restored)
@@ -232,7 +232,7 @@ func TestEngine_APIKey_StripePrefixMasked(t *testing.T) {
 		res, err := e.Apply("key "+key+" ok", "s1", enable("API_KEY"), nil)
 		require.NoError(t, err)
 		assert.NotContains(t, res.Masked, key, "凭据前缀应被脱敏(预检不得漏前缀)")
-		assert.Contains(t, res.Masked, "{{APIKEY_")
+		assert.Contains(t, res.Masked, "{{REDACTED_API_KEY_")
 	}
 }
 
@@ -242,12 +242,12 @@ func TestEngine_MAC_IPv6NotTruncated(t *testing.T) {
 	res, err := e.Apply("addr 11:22:33:44:55:66:77:88 end", "s1", enable("MAC"), nil)
 	require.NoError(t, err)
 	assert.Contains(t, res.Masked, "11:22:33:44:55:66:77:88", "IPv6 应原样保留")
-	assert.NotContains(t, res.Masked, "{{MAC_")
+	assert.NotContains(t, res.Masked, "{{REDACTED_MAC_ADDRESS_")
 
 	// 恰 6 组的正常 MAC 不受影响。
 	res2, err := e.Apply("mac 00:1A:2B:3C:4D:5E end", "s2", enable("MAC"), nil)
 	require.NoError(t, err)
-	assert.Contains(t, res2.Masked, "{{MAC_", "正常 MAC 仍应脱敏")
+	assert.Contains(t, res2.Masked, "{{REDACTED_MAC_ADDRESS_", "正常 MAC 仍应脱敏")
 	assert.NotContains(t, res2.Masked, "00:1A:2B:3C:4D:5E")
 }
 
@@ -319,13 +319,152 @@ func TestCustomTermTableDropsRemovedTerms(t *testing.T) {
 // TestEngine_IP_ExtraOctetNotMasked 五段点分串不得被截成合法 IPv4 脱敏。
 func TestEngine_IP_ExtraOctetNotMasked(t *testing.T) {
 	e := NewEngine(NewSessionStore())
-	res, err := e.Apply("公网 93.184.216.34", "s1", enable("IP"), nil)
+	address := strings.Join([]string{"93", "184", "216", "34"}, ".")
+	masked, err := e.Apply("公网 "+address, "public-ip", enable("IP"), nil)
 	require.NoError(t, err)
-	require.Contains(t, res.Masked, "{{IP_", "对照组: 标准公网 IPv4 应被脱敏")
+	assert.NotContains(t, masked.Masked, address, "公网 IPv4 应被脱敏")
+	assert.Contains(t, masked.Masked, "{{REDACTED_PUBLIC_IPV4_ADDRESS_", "占位符应说明完整类型")
 
-	res2, err := e.Apply("公网 93.184.216.34.5", "s2", enable("IP"), nil)
+	for _, invalid := range []string{address + ".5", "x" + address, address + "x", "v" + address} {
+		res, err := e.Apply(invalid, "invalid-"+invalid, enable("IP"), nil)
+		require.NoError(t, err)
+		assert.Equal(t, invalid, res.Masked, "相邻字段不能截半识别: %s", invalid)
+	}
+
+	for _, version := range []string{
+		"version=" + address, "build " + address, "release: " + address,
+		"版本号 " + address, "构建版本：" + address, "Chrome/" + address, "v13.37.42.7", "v " + address,
+	} {
+		res, err := e.Apply(version, "version-"+version, enable("IP"), nil)
+		require.NoError(t, err)
+		assert.Equal(t, version, res.Masked, "版本号不应识别为公网 IP: %s", version)
+	}
+
+	mixed := "version=" + address + " server=" + address
+	res, err := e.Apply(mixed, "mixed-version-and-ip", enable("IP"), nil)
 	require.NoError(t, err)
-	assert.Equal(t, "公网 93.184.216.34.5", res2.Masked, "多一段不得截半脱敏")
+	assert.Contains(t, res.Masked, "version="+address, "版本字段应保留")
+	assert.Contains(t, res.Masked, "{{REDACTED_PUBLIC_IPV4_ADDRESS_", "同一行的真实公网 IP 仍应脱敏")
+	assert.NotContains(t, res.Masked, "server="+address, "公网 IP 原文不应残留")
+
+	for _, quoted := range []string{
+		"version=\"" + address + "\"", "version = '" + address + "'", "构建版本：\"" + address + "\"",
+	} {
+		res, err := e.Apply(quoted, "quoted-version-"+quoted, enable("IP"), nil)
+		require.NoError(t, err)
+		assert.Equal(t, quoted, res.Masked, "带引号版本号不应识别为公网 IP: %s", quoted)
+	}
+
+	jsonBody := `{"version":"` + address + `","server":"` + address + `"}`
+	resJSON, err := e.Apply(jsonBody, "json-version-and-ip", enable("IP"), nil)
+	require.NoError(t, err)
+	assert.Contains(t, resJSON.Masked, `"version":"`+address+`"`, "JSON 版本字段应保留")
+	assert.Contains(t, resJSON.Masked, "{{REDACTED_PUBLIC_IPV4_ADDRESS_", "JSON 真实公网 IP 仍应脱敏")
+	assert.NotContains(t, resJSON.Masked, `"server":"`+address+`"`, "JSON 公网 IP 原文不应残留")
+}
+
+func TestEngine_IP_SentencePunctuation(t *testing.T) {
+	address := strings.Join([]string{"93", "184", "216", "34"}, ".")
+	for _, suffix := range []string{".", ". Next sentence", ".)", ".\n", "。"} {
+		t.Run(suffix, func(t *testing.T) {
+			e := NewEngine(NewSessionStore())
+			body := "Server: " + address + suffix
+			res, err := e.Apply(body, "sentence-ip", enable("IP"), nil)
+			require.NoError(t, err)
+			require.Len(t, res.Matches, 1)
+			assert.Equal(t, address, res.Matches[0].Original)
+			assert.Equal(t, "Server: "+res.Matches[0].Placeholder+suffix, res.Masked)
+			assert.Equal(t, body, RestoreString(res.Masked, res.Mapping))
+		})
+	}
+
+	for _, body := range []string{
+		address + ".5", address + ".5555", address + ".suffix", address + "._suffix",
+		"_" + address, address + "_", "version=" + address + ".",
+	} {
+		t.Run(body, func(t *testing.T) {
+			e := NewEngine(NewSessionStore())
+			res, err := e.Apply(body, "adjacent-ip", enable("IP"), nil)
+			require.NoError(t, err)
+			assert.Equal(t, body, res.Masked)
+			assert.Empty(t, res.Matches)
+		})
+	}
+}
+
+func TestEngine_IP_ContextWindow(t *testing.T) {
+	address := strings.Join([]string{"93", "184", "216", "34"}, ".")
+	for _, tc := range []struct {
+		name       string
+		key        string
+		prefix     string
+		wantMasked bool
+	}{
+		{name: "first_line_key", key: "version"},
+		{name: "key_at_window_edge", key: "version", prefix: strings.Repeat(" ", ipv4ContextWindow-len("version: "))},
+		{name: "key_cut_by_window", key: "version", prefix: strings.Repeat(" ", ipv4ContextWindow-len("version: ")+1), wantMasked: true},
+		{name: "key_outside_window", key: "version", prefix: strings.Repeat(" ", ipv4ContextWindow), wantMasked: true},
+		{name: "newline_stops_key", key: "version", prefix: "\n", wantMasked: true},
+		{name: "newline_outside_window", key: "version", prefix: "\n" + strings.Repeat(" ", ipv4ContextWindow), wantMasked: true},
+		{name: "local_version_after_newline", key: "server", prefix: "text\nversion="},
+		{name: "local_version_after_long_prefix", key: "server", prefix: strings.Repeat("x", 4096) + " version="},
+		{name: "version_on_previous_line", key: "server", prefix: "version=\n", wantMasked: true},
+		{name: "long_key_tail", key: strings.Repeat("x", 4096) + " version"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := NewEngine(NewSessionStore())
+			body, err := json.Marshal(map[string]string{tc.key: tc.prefix + address})
+			require.NoError(t, err)
+			res, err := e.Apply(string(body), tc.name, enable("IP"), nil)
+			require.NoError(t, err)
+			if tc.wantMasked {
+				require.Len(t, res.Matches, 1)
+				assert.NotContains(t, res.Masked, address)
+			} else {
+				assert.Empty(t, res.Matches)
+				assert.Equal(t, string(body), res.Masked)
+			}
+			assert.Equal(t, string(body), RestoreString(res.Masked, res.Mapping))
+		})
+	}
+}
+
+func TestEngine_IP_LongSingleLine(t *testing.T) {
+	e := NewEngine(NewSessionStore())
+	address := strings.Join([]string{"93", "184", "216", "34"}, ".")
+	const occurrences = 4096
+	body := "version=" + address + strings.Repeat(" server="+address+".", occurrences)
+	res, err := e.Apply(body, "long-ip-line", enable("IP"), nil)
+	require.NoError(t, err)
+	require.Len(t, res.Matches, 1)
+	assert.Equal(t, occurrences, strings.Count(res.Masked, res.Matches[0].Placeholder))
+	assert.Equal(t, 1, strings.Count(res.Masked, address))
+	assert.Equal(t, body, RestoreString(res.Masked, res.Mapping))
+}
+
+func BenchmarkEngine_IP_LongSingleLine(b *testing.B) {
+	address := strings.Join([]string{"93", "184", "216", "34"}, ".")
+	for _, tc := range []struct {
+		name        string
+		occurrences int
+	}{
+		{name: "128", occurrences: 128},
+		{name: "4096", occurrences: 4096},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			e := NewEngine(NewSessionStore())
+			body := strings.Repeat("server="+address+" ", tc.occurrences)
+			rules := enable("IP")
+			b.SetBytes(int64(len(body)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := e.Apply(body, "benchmark-ip-line", rules, nil); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
 // TestEngine_SSN_AdjacentDigitsNotMasked 相邻数字不得被截成 SSN 形状脱敏。
@@ -333,7 +472,7 @@ func TestEngine_SSN_AdjacentDigitsNotMasked(t *testing.T) {
 	e := NewEngine(NewSessionStore())
 	res, err := e.Apply("编号 321-54-9876 555-12-3456", "s1", enable("SSN"), nil)
 	require.NoError(t, err)
-	assert.Equal(t, 2, strings.Count(res.Masked, "{{SSN_"), "相邻两条 SSN 都应识别")
+	assert.Equal(t, 2, strings.Count(res.Masked, "{{REDACTED_US_SSN_"), "相邻两条 SSN 都应识别")
 
 	res2, err := e.Apply("订单 2024-01-2345", "s2", enable("SSN"), nil)
 	require.NoError(t, err)

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"math/big"
@@ -24,6 +25,19 @@ func GenerateJWTToken(remember bool) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
+	return generateJWTToken(secret, remember)
+}
+
+// 校验凭据并签发所属密钥的令牌。
+func GenerateLoginToken(username, password string, remember bool) (string, int, error) {
+	secret, err := op.UserVerifyAndGetJWTSecret(username, password)
+	if err != nil {
+		return "", 0, err
+	}
+	return generateJWTToken(secret, remember)
+}
+
+func generateJWTToken(secret string, remember bool) (string, int, error) {
 	now := time.Now()
 	claims := &jwt.RegisteredClaims{
 		IssuedAt:  jwt.NewNumericDate(now),
@@ -43,17 +57,25 @@ func GenerateJWTToken(remember bool) (string, int, error) {
 	return token, maxAge, nil
 }
 
-func VerifyJWTToken(token string) bool {
-	secret, err := op.AuthJWTSecretGet()
+// 已验证令牌的有效期与撤销信号。
+type Session struct {
+	ExpiresAt time.Time
+	Revoked   context.Context
+}
+
+// 校验令牌并返回会话生命周期。
+func VerifyJWTSession(token string) (Session, error) {
+	state, err := op.AuthJWTStateGet()
 	if err != nil {
-		return false
+		return Session{}, err
 	}
-	jwtToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+	claims := &jwt.RegisteredClaims{}
+	jwtToken, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (interface{}, error) {
 		// 钉死签名算法: 仅接受 HS256, 拒绝 alg=none/RS256/HS384/HS512 等。
 		if token.Method != jwt.SigningMethodHS256 {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
-		return []byte(secret), nil
+		return []byte(state.Secret), nil
 	},
 		// 强制要求 exp 声明: 无过期的 token 可永久凭据, 仅能靠轮换密钥撤销。
 		jwt.WithExpirationRequired(),
@@ -61,10 +83,22 @@ func VerifyJWTToken(token string) bool {
 		jwt.WithIssuer(conf.APP_NAME),
 		jwt.WithAudience(conf.APP_NAME),
 	)
-	if err != nil || !jwtToken.Valid {
-		return false
+	if err != nil {
+		return Session{}, err
 	}
-	return true
+	if !jwtToken.Valid {
+		return Session{}, jwt.ErrTokenInvalidClaims
+	}
+	if err := state.Revoked.Err(); err != nil {
+		return Session{}, err
+	}
+	return Session{ExpiresAt: claims.ExpiresAt.Time, Revoked: state.Revoked}, nil
+}
+
+// 校验令牌当前是否有效。
+func VerifyJWTToken(token string) bool {
+	_, err := VerifyJWTSession(token)
+	return err == nil
 }
 
 func GenerateAPIKey() (string, error) {

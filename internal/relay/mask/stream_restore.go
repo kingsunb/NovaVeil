@@ -13,7 +13,7 @@ const (
 	ReasoningChannel = "reasoning"
 	// ToolChannelPrefix tool-call arguments 按槽位缓冲的通道键前缀, 完整键为 tool-<index>。
 	ToolChannelPrefix = "tool-"
-	// pendingMax 占位符最长约 {{LABEL_6位}} ≈ 23 字节; pending 超过 64 字节仍未闭合,
+	// pendingMax 新格式占位符最长 62 字节; pending 超过 64 字节仍未闭合,
 	// 说明不是占位符(可能是代码里的 {{ 模板语法), 直接刷出避免无限缓冲。
 	pendingMax = 64
 )

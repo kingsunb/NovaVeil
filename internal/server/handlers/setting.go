@@ -95,7 +95,6 @@ func deleteTokenDensity(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	relay.InvalidateTokenDensity(req.ChannelID, req.Model)
 	resp.Success(c, nil)
 }
 
@@ -105,7 +104,6 @@ func clearTokenDensities(c *gin.Context) {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	relay.ClearTokenDensityCache()
 	resp.Success(c, nil)
 }
 

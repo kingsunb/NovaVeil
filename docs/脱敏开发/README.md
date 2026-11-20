@@ -48,7 +48,7 @@ NovaVeil 本身就是 LLM API 网关，客户端的 `base_url` 已经指向它�
 | maskit 能力 | maskit 源位置 | NovaVeil 移植方式 | 工作量 |
 |---|---|---|---|
 | 规则库（原参考 19 类） | `engine/transparent.py:52` RULES | 当前工作区收敛为 12 类，含新增 MAC/USCC；准确清单见 [02](02-规则引擎设计.md) | 已有源码 |
-| 占位符 `{{LABEL_6位辅音}}` | `transparent.py` 生成逻辑 | Go `crypto/rand` 生成 6 位辅音随机串 | 小 |
+| 占位符 `{{REDACTED_<类型>_<6位辅音>}}` | `transparent.py` 原始生成逻辑 | 新格式保留完整类型名并兼容旧格式 | 小 |
 | 请求体脱敏 | mitmproxy addon `request` 钩子 | `handler.go:88` 拿到请求体后、`sendPassthrough` 前插入 | 小 |
 | 非流式响应还原 | mitmproxy `response` 钩子 | `handler.go:552` `c.Writer.Write` 前还原 | 小 |
 | **流式 SSE 跨 chunk 还原** | `transparent.py` 缓冲拼接 | `handler.go:713/792` 写每个 event 前增量还原 | **大（最难）** |
@@ -65,9 +65,9 @@ NovaVeil 本身就是 LLM API 网关，客户端的 `base_url` 已经指向它�
 ```
 你的输入: 排查数据库 mysql://root:Pass123@192.168.1.50:3306  联系人李四 13800138000
   ↓ NovaVeil 本地脱敏（handler.go:88 插入点）
-上游收到: 排查数据库 {{CONNSTR_zkpmqx}}  联系人{{TERM_fnqtsw}} {{PHONE_bcdfgh}}
+上游收到: 排查数据库 mysql://root:{{REDACTED_CONNECTION_PASSWORD_zkpmqx}}@192.168.1.50:3306  联系人{{REDACTED_CUSTOM_SENSITIVE_TEXT_fnqtsw}} {{REDACTED_PHONE_NUMBER_bcdfgh}}
   ↓ 模型推理
-上游回答: 建议 {{TERM_fnqtsw}} 核对 {{CONNSTR_zkpmqx}} 的连通性
+上游回答: 建议 {{REDACTED_CUSTOM_SENSITIVE_TEXT_fnqtsw}} 核对 mysql://root:{{REDACTED_CONNECTION_PASSWORD_zkpmqx}}@192.168.1.50:3306 的连通性
   ↓ NovaVeil 本地还原（handler.go:552 / 713 插入点）
 你看到:  建议 李四 核对 mysql://root:Pass123@192.168.1.50:3306 的连通性
 ```
@@ -109,7 +109,7 @@ NovaVeil 本身就是 LLM API 网关，客户端的 `base_url` 已经指向它�
 
 1. **100% 本地运算零遥测**：脱敏与还原全部在本地进程内，严禁任何用户追踪/云端日志。
 2. **Fail-Closed 严格熔断**：脱敏管线未捕获异常或请求体超限时，立即回退阻断，**绝不放行未脱敏明文出网**。
-3. **占位符规范 `{{LABEL_6位辅音}}`**：后缀 6 位纯辅音随机串，消除大模型对十六进制做变异算术的诱因；跨请求滑动窗口复用保证多轮一致。
+3. **占位符规范 `{{REDACTED_<类型>_<6位辅音>}}`**：明确标记本地脱敏及被替换内容；后缀使用 6 位纯辅音随机串，多轮会话复用同一占位符。
 4. **流式中途无事件返回空**：严禁返回空字节导致 chunked 语法提前断连。
 5. **凭据安全红线（2026-09-17 决策翻转后的边界）**：凭据类命中与普通命中一致，命中原文片段现随命中明细下发（label+original+placeholder），受最多 128 条 / label 32 字符 / original 256 字符 / placeholder 64 字符 / 总 32KB 上限约束，超限置 `mask_matches_truncated` 截断标记；错误日志落库存 label+original+placeholder（不 redact 原文）。如需 preview + sha256，须另行评估预览泄露与低熵原文可枚举的风险。
 6. **安全拷贝兼容**：脱敏生成新切片，不原地改写 `raw.Body`，契合 `handler.go:88` 现有 `string(raw.Body)` 安全拷贝模式（原 `unsafe.String` 零拷贝已在安全审计 C-1 中改为安全拷贝）。

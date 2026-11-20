@@ -8,6 +8,8 @@ Status: implemented
 
 属于网关层请求脱敏的子决策，总决策见 [网关层脱敏](../feature/2026-09-10-gateway-native-request-masking.md)。
 
+当前生成格式与旧占位符兼容策略见[类型标签更新](./2026-11-19-redacted-placeholder-labels-and-ip-version-boundaries.md)。
+
 ## 决定
 
 占位符格式 `{{LABEL_6位辅音}}`：

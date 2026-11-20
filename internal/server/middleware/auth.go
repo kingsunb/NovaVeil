@@ -1,11 +1,14 @@
 package middleware
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/gin-gonic/gin"
 	"github.com/kingsunb/NovaVeil/internal/conf"
 	"github.com/kingsunb/NovaVeil/internal/keylimit"
@@ -15,6 +18,7 @@ import (
 )
 
 const (
+	authSessionContextKey = "auth_session"
 	// AuthCookieName 认证 cookie 名称
 	AuthCookieName = "auth"
 	// AuthCookiePath 认证 cookie 作用路径
@@ -36,12 +40,14 @@ func Auth() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if !auth.VerifyJWTToken(token) {
+		session, err := auth.VerifyJWTSession(token)
+		if err != nil {
 			ClearAuthCookie(c)
 			resp.Error(c, http.StatusUnauthorized, resp.ErrUnauthorized)
 			c.Abort()
 			return
 		}
+		c.Set(authSessionContextKey, session)
 		if op.UserGet().MustChangePassword && !mustChangePasswordWhitelist[c.Request.URL.Path] {
 			// 带机器可读标记头: 前端改密引导按头判定, 不再耦合 message 文案。
 			resp.ErrorMustChangePassword(c)
@@ -50,6 +56,46 @@ func Auth() gin.HandlerFunc {
 		}
 		// 管理 API 限速在鉴权成功后生效; 登录接口不经 Auth, 不受此限(审计 OLD-26)。
 		adminRateLimit(c)
+	}
+}
+
+// 令牌过期或撤销时终止管理流。
+func AuthStream() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		session := c.MustGet(authSessionContextKey).(auth.Session)
+		ctx, cancel := context.WithDeadline(c.Request.Context(), session.ExpiresAt)
+		stopRevocation := context.AfterFunc(session.Revoked, cancel)
+		defer stopRevocation()
+		defer cancel()
+		if session.Revoked.Err() != nil || ctx.Err() != nil {
+			ClearAuthCookie(c)
+			resp.Error(c, http.StatusUnauthorized, resp.ErrUnauthorized)
+			c.Abort()
+			return
+		}
+		c.Request = c.Request.WithContext(ctx)
+		writer := http.ResponseWriter(c.Writer)
+		for {
+			unwrapper, ok := writer.(interface{ Unwrap() http.ResponseWriter })
+			if !ok {
+				break
+			}
+			writer = unwrapper.Unwrap()
+		}
+		controller := http.NewResponseController(writer)
+		writeStopped := make(chan struct{})
+		stopWrite := context.AfterFunc(ctx, func() {
+			defer close(writeStopped)
+			if err := controller.SetWriteDeadline(time.Now()); err != nil && !errors.Is(err, http.ErrNotSupported) {
+				log.Errorf("failed to interrupt expired auth stream: %v", err)
+			}
+		})
+		defer func() {
+			if !stopWrite() {
+				<-writeStopped
+			}
+		}()
+		c.Next()
 	}
 }
 

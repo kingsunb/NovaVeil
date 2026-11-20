@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> 缓存写入顺序与失效契约见 [会话与密度缓存生命周期及 sidecar 诊断边界](../bug-fix/2026-11-20-session-density-cache-lifecycle-and-sidecar-diagnostics.md)；本文的真实流量采样与估算规则继续有效。
+
 ## 问题
 
 手动上下文窗口填的是上游真实 token 容量，但本地估算长期是另一把尺子：
@@ -26,7 +28,7 @@ Status: implemented
 - 满 10 条后每天只验证前 3 条成功请求；观测值与当前密度相差 `3%` 以内保持不变，超过 `3%` 直接更新。
 - 基准估算不足 `2000` token 的请求不参与校准，避免模板固定开销放大倍率。
 - 首次观测每个「渠道:模型」打一条 Info 日志，后续降为 Debug；日志同时给出 observed、EWMA、prompt 与 base，便于本地核对。
-- 密度先更新进程内 `sync.Map`（L1），释放更新锁后按「渠道:模型」串行落库；写入 `token_densities` 表（渠道 ID + 模型唯一），重启后从数据库恢复，不用重新学习。
+- 密度写入 `token_densities` 表（渠道 ID + 模型唯一），由 `internal/op/token_density.go` 统一管理缓存与落库；重启后从数据库恢复。写入顺序与生命周期契约见 [会话与密度缓存生命周期及 sidecar 诊断边界](../bug-fix/2026-11-20-session-density-cache-lifecycle-and-sidecar-diagnostics.md)。
 - 设置页「上下文密度」可查看已学习记录并逐条清除或全部清除；清除同时失效进程缓存，下一次成功请求重新初始化。
 - 渠道 Base URL 变更即清空该渠道全部密度，避免旧上游口径沿用到新端点；删除渠道或模型同样级联清理。
 
@@ -69,7 +71,7 @@ Status: implemented
 
 ## 验证
 
-- `go test ./internal/relay/... -run 'TestEstimateRequestTokens|TestObserveTokenDensity|TestEstimateModelTokens|TestContextFitsWindow|TestSanitizeUsage' -count=1`
+- `go test ./internal/relay/... -run 'TestEstimateRequestTokens|TestEstimateModelTokens|TestContextFitsWindow|TestContextDensity|TestSanitizeUsage' -count=1`
 - `go test ./internal/op/... -run 'TestTokenDensity' -count=1`
 - `cd web-next && pnpm typecheck`
 - 以 `log.level = info` 启动后发送一条基准估算超过 2000 token 的真实请求，日志应出现一次 `token density <渠道 ID>:<模型> observed=... ewma=... prompt=... base=... samples=... daily=...`；用 `usage.prompt_tokens / base` 可复核 observed。重启后设置页「上下文密度」应仍显示该记录。

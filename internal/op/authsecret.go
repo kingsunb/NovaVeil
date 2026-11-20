@@ -1,6 +1,7 @@
 package op
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -17,14 +18,35 @@ import (
 const jwtSecretBytes = 32
 
 var (
-	jwtSecretMu sync.Mutex
+	jwtSecretMu                       sync.Mutex
+	jwtSecretContext, jwtSecretCancel = context.WithCancel(context.Background())
 )
 
-// AuthJWTSecretGet 返回 JWT 签名密钥; 为空时生成 32 字节随机密钥并持久化到 settings KV
-func AuthJWTSecretGet() (string, error) {
+// 认证密钥及对应撤销信号。
+type AuthJWTState struct {
+	Secret  string
+	Revoked context.Context
+}
+
+// 原子读取密钥及撤销信号。
+func AuthJWTStateGet() (AuthJWTState, error) {
 	jwtSecretMu.Lock()
 	defer jwtSecretMu.Unlock()
 
+	secret, err := authJWTSecretGetLocked()
+	if err != nil {
+		return AuthJWTState{}, err
+	}
+	return AuthJWTState{Secret: secret, Revoked: jwtSecretContext}, nil
+}
+
+// AuthJWTSecretGet 返回 JWT 签名密钥; 为空时生成 32 字节随机密钥并持久化到 settings KV
+func AuthJWTSecretGet() (string, error) {
+	state, err := AuthJWTStateGet()
+	return state.Secret, err
+}
+
+func authJWTSecretGetLocked() (string, error) {
 	// 走内部 helper, 跳过 SettingGetString 对外的 JWT 密钥读取守卫, 防止
 	// 自身签名路径被自己拦截。
 	secret, err := settingGetInternal(model.SettingKeyAuthJWTSecret)
@@ -62,8 +84,17 @@ func authJWTSecretSave(secret string) error {
 	if err := authJWTSecretSaveTx(db.GetDB(), secret); err != nil {
 		return err
 	}
-	settingCache.Set(model.SettingKeyAuthJWTSecret, secret)
+	authJWTSecretPublishLocked(secret)
 	return nil
+}
+
+func authJWTSecretPublishLocked(secret string) {
+	previous, ok := settingCache.Get(model.SettingKeyAuthJWTSecret)
+	settingCache.Set(model.SettingKeyAuthJWTSecret, secret)
+	if !ok || previous != secret {
+		jwtSecretCancel()
+		jwtSecretContext, jwtSecretCancel = context.WithCancel(context.Background())
+	}
 }
 
 // authJWTSecretSaveTx 仅将新密钥写入 settings 表, 不触碰缓存, 供事务内调用: 由调用方

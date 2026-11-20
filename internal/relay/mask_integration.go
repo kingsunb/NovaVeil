@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -64,9 +66,9 @@ func applyRequestMask(body []byte, sessionKey string, groupMaskEnabled bool) ([]
 // op 层(错误日志)另有等价常量做 defense-in-depth, 两处数值必须同步。
 const (
 	maxMaskMatchesPerRequest     = 128       // 单请求命中明细条数上限, 约束 SSE 载荷与 DOM 节点数。
-	maxMaskMatchLabelBytes       = 32        // 单条 label 字节上限(safeLabel 已截 12, 32 宽裕)。
+	maxMaskMatchLabelBytes       = 32        // 单条规则 ID 字节上限(内置 ID 最长 14)。
 	maxMaskMatchOriginalBytes    = 256       // 单条命中原文字节上限, 足够定位 MAC/USCC/PHONE/EMAIL/密钥片段, 避免整段密文泄漏。
-	maxMaskMatchPlaceholderBytes = 64        // 单条占位符字节上限。
+	maxMaskMatchPlaceholderBytes = 64        // 单条占位符字节上限(新格式最长 62)。
 	maxMaskMatchesTotalBytes     = 32 * 1024 // 命中明细总字节硬上限。
 )
 
@@ -122,22 +124,20 @@ func restoreNonStream(body []byte, mapping *mask.Mapping) []byte {
 // sjson.SetBytes 自动处理 JSON 转义, 保证还原后的 JSON 结构合法。
 // reasoning_content 使用独立通道 "reasoning" 缓冲, 避免与 content 通道的 pending 混合。
 // tool_calls.N.function.arguments 按槽位独立缓冲还原(跨 chunk 拆分的占位符可闭合)。
-// 中途无内容返回原 data(不写出空事件, 避免断流)。
-func restoreStreamEvent(data []byte, format llm.APIFormat, restorer *mask.StreamRestorer) []byte {
+// 缓冲字段置空，保留事件其余字段。
+func restoreStreamEvent(data []byte, format llm.APIFormat, restorer *mask.StreamRestorer) ([]byte, error) {
 	if restorer == nil {
-		return data
+		return data, nil
 	}
 	// content / text 主文本字段: 使用默认通道。
 	if path := streamContentPath(data, format); path != "" {
 		text := gjson.GetBytes(data, path).String()
 		if text != "" {
 			restored := restorer.Push([]byte(text))
-			if len(restored) == 0 {
-				// 全部缓冲为 pending, 内容置空等后续 chunk 拼合; 事件本身仍写出(可能含 finish_reason 等)。
-				out, _ := sjson.SetBytes(data, path, "")
-				return out
+			out, err := sjson.SetBytes(data, path, string(restored))
+			if err != nil {
+				return nil, err
 			}
-			out, _ := sjson.SetBytes(data, path, string(restored))
 			data = out
 		}
 	}
@@ -146,30 +146,41 @@ func restoreStreamEvent(data []byte, format llm.APIFormat, restorer *mask.Stream
 		text := gjson.GetBytes(data, rcPath).String()
 		if text != "" {
 			restored := restorer.PushChannel(mask.ReasoningChannel, []byte(text))
-			if len(restored) == 0 {
-				out, _ := sjson.SetBytes(data, rcPath, "")
-				return out
+			out, err := sjson.SetBytes(data, rcPath, string(restored))
+			if err != nil {
+				return nil, err
 			}
-			out, _ := sjson.SetBytes(data, rcPath, string(restored))
 			data = out
 		}
 	}
 	// tool-call arguments: 按槽位独立缓冲还原。
-	data = restoreToolCallArgs(data, format, restorer)
-	return data
+	return restoreToolCallArgs(data, format, restorer)
 }
 
 // restoreToolCallArgs 还原 OpenAI Chat 流式 tool_calls 的 function.arguments 占位符。
 // arguments 是 JSON 字符串增量, 按 tool-call index 使用独立通道缓冲, 使跨 chunk 拆分的占位符可闭合。
-func restoreToolCallArgs(data []byte, format llm.APIFormat, restorer *mask.StreamRestorer) []byte {
+func restoreToolCallArgs(data []byte, format llm.APIFormat, restorer *mask.StreamRestorer) ([]byte, error) {
 	if format != llm.APIFormatOpenAIChatCompletion {
-		return data
+		return data, nil
 	}
 	toolCalls := gjson.GetBytes(data, "choices.0.delta.tool_calls")
-	if !toolCalls.Exists() || !toolCalls.IsArray() {
-		return data
+	if !toolCalls.Exists() || toolCalls.Type == gjson.Null {
+		return data, nil
+	}
+	if !toolCalls.IsArray() {
+		return nil, fmt.Errorf("choices[0].delta.tool_calls must be an array")
 	}
 	arr := toolCalls.Array()
+	indices := make([]int, len(arr))
+	for i, call := range arr {
+		index := call.Get("index")
+		if index.Type != gjson.Number {
+			return nil, fmt.Errorf("choices[0].delta.tool_calls[%d].index must be a non-negative integer", i)
+		}
+		if err := json.Unmarshal([]byte(index.Raw), &indices[i]); err != nil || indices[i] < 0 {
+			return nil, fmt.Errorf("choices[0].delta.tool_calls[%d].index must be a non-negative integer", i)
+		}
+	}
 	for i := range arr {
 		argPath := "choices.0.delta.tool_calls." + itoa(i) + ".function.arguments"
 		argVal := gjson.GetBytes(data, argPath)
@@ -180,15 +191,17 @@ func restoreToolCallArgs(data []byte, format llm.APIFormat, restorer *mask.Strea
 		if s == "" {
 			continue
 		}
-		// 按 tool-call index 独立通道缓冲, 跨 chunk 拆分的占位符可闭合。
-		channel := mask.ToolChannelPrefix + itoa(i)
+		channel := mask.ToolChannelPrefix + itoa(indices[i])
 		restored := restorer.PushChannel(channel, []byte(s))
 		if string(restored) != s {
-			out, _ := sjson.SetBytes(data, argPath, string(restored))
+			out, err := sjson.SetBytes(data, argPath, string(restored))
+			if err != nil {
+				return nil, err
+			}
 			data = out
 		}
 	}
-	return data
+	return data, nil
 }
 
 // itoa 轻 int → string, 避免 fmt.Sprintf 开销。
@@ -225,7 +238,7 @@ func flushStreamRestorer(restorer *mask.StreamRestorer, format llm.APIFormat) []
 	if len(pending) == 0 {
 		return nil
 	}
-	// 出队顺序确定性: default → reasoning → tool-N(按槽位升序)。
+	// 通道名排序，保持输出顺序稳定。
 	channels := make([]string, 0, len(pending))
 	for ch := range pending {
 		channels = append(channels, ch)
@@ -249,7 +262,8 @@ func flushStreamRestorer(restorer *mask.StreamRestorer, format llm.APIFormat) []
 			out = append(out, mustSetJSONBytes(nil, "choices.0.delta.reasoning_content", string(pending[ch])))
 		case strings.HasPrefix(ch, mask.ToolChannelPrefix):
 			idx := strings.TrimPrefix(ch, mask.ToolChannelPrefix)
-			out = append(out, mustSetJSONBytes(nil, "choices.0.delta.tool_calls."+idx+".function.arguments", string(pending[ch])))
+			data := []byte(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":` + idx + `}]}}]}`)
+			out = append(out, mustSetJSONBytes(data, "choices.0.delta.tool_calls.0.function.arguments", string(pending[ch])))
 		}
 	}
 	return out

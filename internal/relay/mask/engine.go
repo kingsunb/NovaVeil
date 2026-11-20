@@ -30,7 +30,7 @@ func (e *Engine) DeleteSession(sessionKey string) {
 // SessionStore 返回引擎内置会话映射表, 供外部按需回收。
 func (e *Engine) SessionStore() *SessionStore { return e.store }
 
-// CustomTerm 自定义敏感词(人名、项目代号、内部术语), 整词匹配, 占位符标签用 TERM。
+// CustomTerm 自定义敏感词(人名、项目代号、内部术语), 整词匹配, 规则标签用 TERM。
 type CustomTerm struct {
 	Value    string
 	Category string // 分类元信息, 不参与占位符标签
@@ -88,8 +88,8 @@ func (e *Engine) Apply(body string, sessionKey string, enabledRules map[string]b
 		}
 	}
 	seen := make(map[string]bool)
-	maskText := func(text string) string {
-		return maskCandidates(text, rules, mapping, &result.Matches, seen)
+	maskText := func(context, text string) string {
+		return maskCandidates(context, text, rules, mapping, &result.Matches, seen)
 	}
 	result.Masked = body
 	if len(rules) != 0 {
@@ -98,7 +98,7 @@ func (e *Engine) Apply(body string, sessionKey string, enabledRules map[string]b
 		if len(trimmed) > 0 && strings.ContainsAny(trimmed[:1], "{[\"") && json.Valid([]byte(body)) {
 			result.Masked = mapJSONStringValues(body, maskText)
 		} else {
-			result.Masked = maskText(body)
+			result.Masked = maskText("", body)
 		}
 	}
 	return result, nil
@@ -430,7 +430,7 @@ func applyRuleSub(segment string, rule Rule, replMap map[string]string) string {
 // 已有占位符片段跳过(不收集、不替换, 占位符原样保留)。seen 跨规则去重同一原文:
 // 同一原文只产出一条 Match(首次命中规则标签), 但在不重叠的多处位置都替换为同一占位符,
 // 保证多轮会话内同一实体占位符一致。
-func maskCandidates(text string, rules []Rule, mapping *Mapping, matches *[]Match, seen map[string]bool) string {
+func maskCandidates(context, text string, rules []Rule, mapping *Mapping, matches *[]Match, seen map[string]bool) string {
 	if text == "" || len(rules) == 0 {
 		return text
 	}
@@ -455,10 +455,13 @@ func maskCandidates(text string, rules []Rule, mapping *Mapping, matches *[]Matc
 				if orig == "" {
 					continue
 				}
+				os, oe := captureGroupBounds(loc, rule.Group)
+				if rule.Label == "IP" && !publicIPv4CandidateAllowed(text, sr[0]+os, sr[0]+oe, context) {
+					continue
+				}
 				if validator != nil && !validator(orig) {
 					continue
 				}
-				os, oe := captureGroupBounds(loc, rule.Group)
 				cands = append(cands, cand{
 					origStart: sr[0] + os,
 					origEnd:   sr[0] + oe,
@@ -541,25 +544,25 @@ func captureGroupBounds(loc []int, group int) (int, int) {
 
 // ---- JSON 感知扫描 ----
 
-// mapJSONStringValues 对合法 JSON 文本, 仅对解码后的字符串值调用 mask, 键名与非字符串字段
-// (number/bool/null)不变。用 token 流式重建紧凑 JSON, 保留键序与数字原字面量, 只替换命中的
-// 字符串值: 对紧凑输入, 除被脱敏的字符串值外字节逐字一致, 保证脱敏→还原 roundtrip 字节稳定
-// (网关不应因脱敏改变请求体格式)。解码失败或非单值时回退为对整段文本调用 mask(纯文本处理)。
-func mapJSONStringValues(body string, mask func(string) string) string {
+// mapJSONStringValues 对合法 JSON 文本, 仅对解码后的字符串值调用 mask(键名作为上下文),
+// 键名与非字符串字段 (number/bool/null) 不变。用 token 流式重建紧凑 JSON, 保留键序与数字
+// 原字面量, 只替换命中的字符串值: 对紧凑输入, 除被脱敏的字符串值外字节逐字一致, 保证脱敏→
+// 还原 roundtrip 字节稳定(网关不应因脱敏改变请求体格式)。解码失败或非单值时回退纯文本处理。
+func mapJSONStringValues(body string, mask func(context, text string) string) string {
 	dec := json.NewDecoder(strings.NewReader(body))
 	dec.UseNumber()
 	var b strings.Builder
-	if err := maskJSONStream(dec, &b, mask); err != nil {
-		return mask(body) // 解码失败回退纯文本
+	if err := maskJSONStream(dec, &b, mask, ""); err != nil {
+		return mask("", body) // 解码失败回退纯文本
 	}
 	if dec.More() {
-		return mask(body) // 非单值(尾随垃圾), 回退纯文本
+		return mask("", body) // 非单值(尾随垃圾), 回退纯文本
 	}
 	return b.String()
 }
 
-// maskJSONStream 读取一个 JSON 值并写入 b; 字符串值调用 mask, 键名与其他标量原样保留。
-func maskJSONStream(dec *json.Decoder, b *strings.Builder, mask func(string) string) error {
+// maskJSONStream 读取一个 JSON 值并写入 b; 字符串值按上下文调用 mask, 键名与其他标量原样保留。
+func maskJSONStream(dec *json.Decoder, b *strings.Builder, mask func(context, text string) string, context string) error {
 	tok, err := dec.Token()
 	if err != nil {
 		return err
@@ -569,16 +572,16 @@ func maskJSONStream(dec *json.Decoder, b *strings.Builder, mask func(string) str
 		case '{':
 			return maskJSONObject(dec, b, mask)
 		case '[':
-			return maskJSONArray(dec, b, mask)
+			return maskJSONArray(dec, b, mask, context)
 		}
 		return fmt.Errorf("mask: unexpected delim %q", d)
 	}
-	writeJSONScalar(b, tok, mask)
+	writeJSONScalar(b, tok, mask, context)
 	return nil
 }
 
-// maskJSONObject 读取对象内容并写入 b; 键原样(不脱敏), 值递归(字符串值 mask)。
-func maskJSONObject(dec *json.Decoder, b *strings.Builder, mask func(string) string) error {
+// maskJSONObject 读取对象内容并写入 b; 键原样(不脱敏), 值递归(字符串值按 key 上下文 mask)。
+func maskJSONObject(dec *json.Decoder, b *strings.Builder, mask func(context, text string) string) error {
 	b.WriteByte('{')
 	first := true
 	for dec.More() {
@@ -593,7 +596,7 @@ func maskJSONObject(dec *json.Decoder, b *strings.Builder, mask func(string) str
 		key, _ := keyTok.(string)
 		writeJSONString(b, key) // 键名不脱敏
 		b.WriteByte(':')
-		if err := maskJSONStream(dec, b, mask); err != nil {
+		if err := maskJSONStream(dec, b, mask, key+": "); err != nil {
 			return err
 		}
 	}
@@ -604,8 +607,8 @@ func maskJSONObject(dec *json.Decoder, b *strings.Builder, mask func(string) str
 	return nil
 }
 
-// maskJSONArray 读取数组内容并写入 b; 元素递归(字符串值 mask)。
-func maskJSONArray(dec *json.Decoder, b *strings.Builder, mask func(string) string) error {
+// maskJSONArray 读取数组内容并写入 b; 元素递归(字符串值按上下文 mask)。
+func maskJSONArray(dec *json.Decoder, b *strings.Builder, mask func(context, text string) string, context string) error {
 	b.WriteByte('[')
 	first := true
 	for dec.More() {
@@ -613,7 +616,7 @@ func maskJSONArray(dec *json.Decoder, b *strings.Builder, mask func(string) stri
 			b.WriteByte(',')
 		}
 		first = false
-		if err := maskJSONStream(dec, b, mask); err != nil {
+		if err := maskJSONStream(dec, b, mask, context); err != nil {
 			return err
 		}
 	}
@@ -624,11 +627,11 @@ func maskJSONArray(dec *json.Decoder, b *strings.Builder, mask func(string) stri
 	return nil
 }
 
-// writeJSONScalar 写标量 token; string 调用 mask, json.Number 原字面量, bool/null 原样。
-func writeJSONScalar(b *strings.Builder, tok json.Token, mask func(string) string) {
+// writeJSONScalar 写标量 token; string 按上下文调用 mask, json.Number 原字面量, bool/null 原样。
+func writeJSONScalar(b *strings.Builder, tok json.Token, mask func(context, text string) string, context string) {
 	switch v := tok.(type) {
 	case string:
-		writeJSONString(b, mask(v))
+		writeJSONString(b, mask(context, v))
 	case json.Number:
 		b.WriteString(v.String()) // 保留原数字字面量(UseNumber)
 	case bool:

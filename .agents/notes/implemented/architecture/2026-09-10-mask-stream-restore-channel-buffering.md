@@ -11,10 +11,15 @@ Status: implemented
 `internal/relay/mask/stream_restore.go` 增量还原器：
 
 1. **每个增量文本槽位用独立通道键缓冲**（`DefaultChannel` / `ReasoningChannel` / `ToolChannelPrefix + "<index>"`），半截占位符只在本通道缓冲，不跨字段串；`Push`/`Flush` 委托给 `PushChannel(DefaultChannel, …)`/`FlushChannel(DefaultChannel)`，`FlushChannels` 返回按通道名索引的残留。
-2. **并行工具用 `tool_calls[].index` 标识**（协议标明增量属于第几个工具），不用数组下标。
-3. **中途无事件返回空列表**，不写出、不 Flush——绝不返回空字节触发 chunked 终止块。
+2. **并行工具用 `tool_calls[].index` 标识**（协议标明增量属于第几个工具），数组位置只用于改写当前帧的 JSON 字段。索引必须能精确解码为非负 Go `int`；缺失、负数、溢出以及小数或指数表示（包括 `1.0` / `1e0`）直接报错，不分配默认槽位。补发工具参数使用单元素 `tool_calls` 数组并显式携带原索引，避免按索引构造稀疏数组。
+3. **单字段全部待拼接时只清空该字段**，仍处理同帧的其他正文、推理及工具字段并保留事件元数据；跨通道处理不会因某字段暂无输出而提前退出。
 4. **终止事件前吐净各通道滞留缓冲**，补发用最后一个同通道事件做模板（克隆真实事件保证客户端 SDK 字段校验通过），补发事件不带 `finish_reason`。
 5. 一个 SSE 事件到手立刻还原、立刻下发，首字延迟不等于整段生成时长。
+6. `restoreStreamEvent` 把索引及 JSON 改写错误返回转发器。转发器记录首个错误、抑制当前坏帧并结束流，不补发待拼接残留或成功终止帧。
+
+## 实现边界
+
+第 4 条的模板克隆与终止前补发尚未落地：`handler.go` 的现有补发仍位于事件循环之后，`mask_integration.go` 构造最小增量事件，未缓存最后的真实事件模板。因此这次索引修复只保证补发工具的身份与数组结构，不能作为所有 SDK 的收尾兼容性证明。正文和工具都只读取 `choices[0]`；多 choice（即：一次请求返回多个候选回答）不在当前还原契约内。
 
 ## 备选方案
 
@@ -25,9 +30,11 @@ Status: implemented
 
 ## 后果
 
-- **收益**：首字延迟低（逐事件还原）、字段不串尾、并行工具调用正确、不误发终止块、终止前不吞字。
+- **收益**：逐事件还原、字段不串尾，单元素交错工具帧按协议索引隔离，非法工具身份不会被默认为 0 后继续下发。
 - **代价与已知上限**：每通道独立缓冲的状态机复杂度上升，跨 chunk 拆分/并行工具/终止前吐净需单测守死。重访信号：上游新增 SSE 事件结构（如新增量字段类型）需补对应通道键。
 
 ## 验证
 
 流式还原在 `internal/relay/mask/stream_restore.go` + `*_test.go`；接入 `internal/relay/handler.go` 流式分支。设计溯源见 [docs/脱敏开发/03-流式还原设计.md](../../../../docs/脱敏开发/03-流式还原设计.md)。
+
+`internal/relay/mask_integration_test.go` 包含 `0/1` 与 `3/9` 工具索引交错分片、同帧多通道待拼接、非法索引、非零索引补发及转发失败收尾的回归源码。按仓库执行口径，本轮未运行编译与测试；由用户执行 `go test ./internal/relay/... -run 'Test(RestoreStreamEvent|FlushStreamRestorer|ForwardMaskedStream)'`。

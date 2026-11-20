@@ -36,7 +36,7 @@ func RestoreJSONBytes(body []byte, mapping *Mapping) []byte {
 		return RestoreBytes(body, mapping)
 	}
 	changed := false
-	restored := mapJSONStringValues(string(body), func(s string) string {
+	restored := mapJSONStringValues(string(body), func(_, s string) string {
 		out := RestoreString(s, mapping)
 		if out != s {
 			changed = true

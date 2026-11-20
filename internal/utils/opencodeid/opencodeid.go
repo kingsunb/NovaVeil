@@ -6,6 +6,7 @@
 package opencodeid
 
 import (
+	"container/list"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -133,7 +134,7 @@ func SessionIDFromSignal(signal string, v1Lane bool) string {
 		return signal
 	}
 	sum := sha256.Sum256(saltedSessionSeed(signal))
-	mixed := sessionClockMillis(signal)<<12 | uint64(sum[5])&0x3f
+	mixed := sessionClock.millis(sum)<<12 | uint64(sum[5])&0x3f
 	inverted := ^mixed & 0xFFFFFFFFFFFF
 	hexPart := hex.EncodeToString([]byte{
 		byte(inverted >> 40), byte(inverted >> 32), byte(inverted >> 24),
@@ -148,20 +149,56 @@ const sessionClockMaxAgeMillis = 3600 * 1000
 // sessionDayMillis 旧窗口测试引用的天毫秒数。
 const sessionDayMillis = 24 * 3600 * 1000
 
-// sessionClockMillis 缓存信号首次解析时的毫秒时间。
-func sessionClockMillis(signal string) uint64 {
-	now := uint64(time.Now().UnixMilli())
-	if v, ok := sessionClock.Load(signal); ok {
-		if cached, _ := v.(uint64); now >= cached && now-cached < sessionClockMaxAgeMillis {
-			return cached
-		}
-	}
-	sessionClock.Store(signal, now)
-	return now
+const sessionClockLimit = 8192
+
+type sessionClockEntry struct {
+	key    [sha256.Size]byte
+	millis uint64
 }
 
-// sessionClock 缓存每个信号的解析时间, 会话号在进程内保持稳定。
-var sessionClock sync.Map
+type sessionClockStore struct {
+	mu      sync.Mutex
+	entries map[[sha256.Size]byte]*list.Element
+	order   list.List
+}
+
+var sessionClock = newSessionClockStore()
+
+func newSessionClockStore() *sessionClockStore {
+	return &sessionClockStore{entries: make(map[[sha256.Size]byte]*list.Element)}
+}
+
+func (s *sessionClockStore) millis(key [sha256.Size]byte) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.millisLocked(key, uint64(time.Now().UnixMilli()))
+}
+
+func (s *sessionClockStore) millisLocked(key [sha256.Size]byte, now uint64) uint64 {
+	for oldest := s.order.Front(); oldest != nil; oldest = s.order.Front() {
+		entry := oldest.Value.(sessionClockEntry)
+		if now >= entry.millis && now-entry.millis < sessionClockMaxAgeMillis {
+			break
+		}
+		delete(s.entries, entry.key)
+		s.order.Remove(oldest)
+	}
+	if cached, ok := s.entries[key]; ok {
+		created := cached.Value.(sessionClockEntry).millis
+		if now >= created && now-created < sessionClockMaxAgeMillis {
+			return created
+		}
+		delete(s.entries, key)
+		s.order.Remove(cached)
+	}
+	if s.order.Len() >= sessionClockLimit {
+		oldest := s.order.Front()
+		delete(s.entries, oldest.Value.(sessionClockEntry).key)
+		s.order.Remove(oldest)
+	}
+	s.entries[key] = s.order.PushBack(sessionClockEntry{key: key, millis: now})
+	return now
+}
 
 // processSalt 进程盐, 重启重铸防跨号复用。
 var (

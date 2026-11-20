@@ -1,11 +1,12 @@
 package relay
 
 import (
+	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/op"
 )
 
 func TestEstimateRequestTokens(t *testing.T) {
@@ -38,178 +39,39 @@ func TestEstimateRequestTokensTextMatchesBytes(t *testing.T) {
 	}
 }
 
-func TestObserveTokenDensityEWMA(t *testing.T) {
-	const baseURL = "https://observe.example/"
-	const modelName = "observe-model"
-	key := tokenDensityKey(0, baseURL, modelName)
-	tokenDensityCache.Delete(key)
-	t.Cleanup(func() { tokenDensityCache.Delete(key) })
-
-	body := strings.Repeat("a", tokenDensityMinBase*4)
-	observeTokenDensity(0, baseURL, modelName, int64(tokenDensityMinBase*2), body)
-	if got := modelTokenDensity(0, baseURL, modelName); got != 2 {
-		t.Fatalf("首次观测应直接初始化 = %v, want 2", got)
-	}
-	observeTokenDensity(0, baseURL, modelName, int64(tokenDensityMinBase), body)
-	want := 2 + tokenDensityAlpha*(1-2)
-	if got := modelTokenDensity(0, baseURL, modelName); got != want {
-		t.Fatalf("第二次观测 = %v, want %v", got, want)
-	}
-}
-
-func TestObserveTokenDensityInitializesAfterDefaultCache(t *testing.T) {
-	const baseURL = "https://observe-default.example/"
-	const modelName = "observe-default-model"
-	key := tokenDensityKey(0, baseURL, modelName)
-	tokenDensityCache.Delete(key)
-	t.Cleanup(func() { tokenDensityCache.Delete(key) })
-	tokenDensityCache.Store(key, tokenDensityState{Density: defaultTokenDensity})
-
-	body := strings.Repeat("a", tokenDensityMinBase*4)
-	observeTokenDensity(0, baseURL, modelName, int64(tokenDensityMinBase*2), body)
-	if got := modelTokenDensity(0, baseURL, modelName); got != 2 {
-		t.Fatalf("默认缓存后首次观测应直接初始化 = %v, want 2", got)
-	}
-}
-
-func TestObserveTokenDensitySkipsSmallRequests(t *testing.T) {
-	const baseURL = "https://observe-small.example/"
-	const modelName = "observe-small-model"
-	key := tokenDensityKey(0, baseURL, modelName)
-	tokenDensityCache.Delete(key)
-	t.Cleanup(func() { tokenDensityCache.Delete(key) })
-
-	observeTokenDensity(0, baseURL, modelName, 10, strings.Repeat("a", 400))
-	if got := modelTokenDensity(0, baseURL, modelName); got != defaultTokenDensity {
-		t.Fatalf("小请求不应写入密度, got %v", got)
-	}
-}
-
-func TestObserveTokenDensityDailyLimit(t *testing.T) {
-	const baseURL = "https://observe-daily.example/"
-	const modelName = "observe-daily-model"
-	key := tokenDensityKey(0, baseURL, modelName)
-	tokenDensityCache.Store(key, tokenDensityState{
-		Density:      1,
-		Samples:      tokenDensityBootstrapSamples,
-		DailySamples: 0,
-		SampleDay:    tokenDensityDay(time.Now().AddDate(0, 0, -1)),
-	})
-	t.Cleanup(func() { tokenDensityCache.Delete(key) })
-
-	body := strings.Repeat("a", tokenDensityMinBase*4)
-	for i := 0; i < 4; i++ {
-		observeTokenDensity(0, baseURL, modelName, int64(tokenDensityMinBase*2), body)
-	}
-
-	state, _ := tokenDensityCache.Load(key)
-	current, _ := state.(tokenDensityState)
-	if current.Density != 2 {
-		t.Fatalf("超差应更新密度 = %v, want 2", current.Density)
-	}
-	if current.Samples != tokenDensityBootstrapSamples+3 || current.DailySamples != 3 {
-		t.Fatalf("每日只验证三条, state = %+v", current)
-	}
-}
-
-func TestObserveTokenDensityTolerance(t *testing.T) {
-	const baseURL = "https://observe-tolerance.example/"
-	const modelName = "observe-tolerance-model"
-	key := tokenDensityKey(0, baseURL, modelName)
-	body := strings.Repeat("a", tokenDensityMinBase*4)
-	promptBase := int64(tokenDensityMinBase)
-
-	tokenDensityCache.Store(key, tokenDensityState{
-		Density:      1,
-		Samples:      tokenDensityBootstrapSamples,
-		DailySamples: 0,
-		SampleDay:    tokenDensityDay(time.Now().AddDate(0, 0, -1)),
-	})
-	t.Cleanup(func() { tokenDensityCache.Delete(key) })
-
-	observeTokenDensity(0, baseURL, modelName, promptBase*102/100, body)
-	if got := modelTokenDensity(0, baseURL, modelName); got != 1 {
-		t.Fatalf("3%% 内不应改密度, got %v", got)
-	}
-
-	tokenDensityCache.Store(key, tokenDensityState{
-		Density:      1,
-		Samples:      tokenDensityBootstrapSamples,
-		DailySamples: 0,
-		SampleDay:    tokenDensityDay(time.Now().AddDate(0, 0, -1)),
-	})
-	observeTokenDensity(0, baseURL, modelName, promptBase*105/100, body)
-	if got := modelTokenDensity(0, baseURL, modelName); got != 1.05 {
-		t.Fatalf("超差应直接更新, got %v", got)
-	}
-}
-
-func TestObserveTokenDensityValidatesAfterBootstrap(t *testing.T) {
-	const baseURL = "https://observe-bootstrap.example/"
-	const modelName = "observe-bootstrap-model"
-	key := tokenDensityKey(0, baseURL, modelName)
-	tokenDensityCache.Delete(key)
-	t.Cleanup(func() { tokenDensityCache.Delete(key) })
-
-	body := strings.Repeat("a", tokenDensityMinBase*4)
-	for i := 0; i < tokenDensityBootstrapSamples; i++ {
-		observeTokenDensity(0, baseURL, modelName, int64(tokenDensityMinBase), body)
-	}
-	for i := 0; i < 4; i++ {
-		observeTokenDensity(0, baseURL, modelName, int64(tokenDensityMinBase*2), body)
-	}
-
-	state, _ := tokenDensityCache.Load(key)
-	current, _ := state.(tokenDensityState)
-	if current.Density != 2 || current.Samples != tokenDensityBootstrapSamples+3 || current.DailySamples != 3 {
-		t.Fatalf("满十条后当日只验证三条, state = %+v", current)
-	}
-}
-
-func TestInvalidateChannelTokenDensityRemovesAllModels(t *testing.T) {
-	first := tokenDensityKey(7, "", "model-a")
-	second := tokenDensityKey(7, "", "model-b")
-	other := tokenDensityKey(8, "", "model-a")
-	tokenDensityCache.Store(first, tokenDensityState{Density: 1, Samples: 1})
-	tokenDensityCache.Store(second, tokenDensityState{Density: 1, Samples: 1})
-	tokenDensityCache.Store(other, tokenDensityState{Density: 1, Samples: 1})
+func contextFitDensityChannel(t *testing.T, density float64) model.Channel {
+	t.Helper()
+	setupFailoverTest(t)
+	channel := createIntegrationChannel(t, "context-fit-density", model.ChannelProviderOpenAI, "https://density.example", "density-model")
 	t.Cleanup(func() {
-		tokenDensityCache.Delete(first)
-		tokenDensityCache.Delete(second)
-		tokenDensityCache.Delete(other)
+		if err := op.ChannelDel(channel.ID, context.Background()); err != nil {
+			t.Errorf("清理密度测试渠道失败: %v", err)
+		}
 	})
-
-	InvalidateChannelTokenDensity(7)
-
-	if _, ok := tokenDensityCache.Load(first); ok {
-		t.Fatal("first density should be removed")
+	if density > 0 {
+		if err := op.TokenDensitySave(context.Background(), channel.ID, "density-model", density, 1, 1, "2026-11-20"); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, ok := tokenDensityCache.Load(second); ok {
-		t.Fatal("second density should be removed")
-	}
-	if _, ok := tokenDensityCache.Load(other); !ok {
-		t.Fatal("other channel density should remain")
-	}
+	return channel
 }
 
 func TestEstimateModelTokensUsesSharedDensity(t *testing.T) {
-	const baseURL = "https://upstream.example/"
-	const modelName = "shared-density-model"
-	key := tokenDensityKey(0, baseURL, modelName)
-	tokenDensityCache.Delete(key)
-	t.Cleanup(func() { tokenDensityCache.Delete(key) })
-
+	channel := contextFitDensityChannel(t, 0)
 	body := []byte(strings.Repeat("a", 4000))
-	if got := estimateModelTokens(body, 0, baseURL, modelName); got != 563 {
-		t.Fatalf("未实测按默认密度 4/7.1 = %d, want 563", got)
+	if got := estimateModelTokens(body, channel.ID, channel.BaseURL, "density-model"); got != 563 {
+		t.Fatalf("未观测应使用默认密度: %d", got)
 	}
-	tokenDensityCache.Store(key, tokenDensityState{Density: 0.5})
-	if got := estimateModelTokens(body, 0, baseURL, modelName); got != 500 {
-		t.Fatalf("实测密度 0.5 时 = %d, want 500", got)
-	}
-	tokenDensityCache.Store(key, tokenDensityState{Density: 1.0})
-	if got := estimateModelTokens(body, 0, baseURL, modelName); got != 1000 {
-		t.Fatalf("实测密度 1.0 覆盖默认后 = %d, want 1000", got)
+	for _, test := range []struct {
+		density float64
+		tokens  int
+	}{{0.5, 500}, {1, 1000}} {
+		if err := op.TokenDensitySave(context.Background(), channel.ID, "density-model", test.density, 1, 1, "2026-11-20"); err != nil {
+			t.Fatal(err)
+		}
+		if got := estimateModelTokens(body, channel.ID, channel.BaseURL, "density-model"); got != test.tokens {
+			t.Fatalf("密度 %v 应估算 %d token, 实际 %d", test.density, test.tokens, got)
+		}
 	}
 }
 
@@ -225,15 +87,8 @@ func TestEstimateModelTokensScale(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			const baseURL = "https://scale.example/"
-			modelName := "model-" + tc.name
-			key := tokenDensityKey(0, baseURL, modelName)
-			// 实测密度 1 锚定基准口径, 验证大规模下线性。
-			tokenDensityCache.Store(key, tokenDensityState{Density: 1.0})
-			t.Cleanup(func() { tokenDensityCache.Delete(key) })
-
 			body := []byte(strings.Repeat("a", tc.tokens*4))
-			if got := estimateModelTokens(body, 0, baseURL, modelName); got != tc.tokens {
+			if got := scaleBaseTokens(estimateRequestTokens(body), 1); got != tc.tokens {
 				t.Fatalf("estimateModelTokens(%s) = %d, want %d", tc.name, got, tc.tokens)
 			}
 		})
@@ -241,11 +96,7 @@ func TestEstimateModelTokensScale(t *testing.T) {
 }
 
 func TestContextFitsWindow(t *testing.T) {
-	const baseURL = "https://upstream.example/"
-	const modelName = "window-model"
-	key := tokenDensityKey(0, baseURL, modelName)
-	tokenDensityCache.Store(key, tokenDensityState{Density: 1.0})
-	t.Cleanup(func() { tokenDensityCache.Delete(key) })
+	channel := contextFitDensityChannel(t, 1)
 
 	body := []byte(strings.Repeat("a", 4000))
 	cases := []struct {
@@ -259,7 +110,7 @@ func TestContextFitsWindow(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := contextFitsWindow(body, tc.window, 0, baseURL, modelName); got != tc.want {
+			if got := contextFitsWindow(body, tc.window, channel.ID, channel.BaseURL, "density-model"); got != tc.want {
 				t.Fatalf("contextFitsWindow(window=%d) = %v, want %v", tc.window, got, tc.want)
 			}
 		})
@@ -269,9 +120,6 @@ func TestContextFitsWindow(t *testing.T) {
 func TestContextFitsWindowDefaultDensityMatchesUpstream(t *testing.T) {
 	const baseURL = "https://default-density.example/"
 	const modelName = "default-density-model"
-	key := tokenDensityKey(0, baseURL, modelName)
-	tokenDensityCache.Delete(key)
-	t.Cleanup(func() { tokenDensityCache.Delete(key) })
 
 	// 语料实测锚定: 约 1,420,000 个 ASCII 字符即上游 200K 实际 token。
 	fits := []byte(strings.Repeat("a", 1_420_000))

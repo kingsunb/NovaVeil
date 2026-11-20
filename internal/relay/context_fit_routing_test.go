@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
@@ -288,5 +291,61 @@ func TestContextFitKnownSmallWindowStillSkippedWithUnknownCandidate(t *testing.T
 	}
 	if strings.Contains(recorder.Body.String(), errContextWindowTooSmall.Error()) {
 		t.Fatalf("存在未知窗口候选时不应本地拒绝: %s", recorder.Body.String())
+	}
+}
+
+func TestContextDensityIgnoresInFlightRequestAfterReset(t *testing.T) {
+	setupFailoverTest(t)
+	arrived := make(chan struct{})
+	release := make(chan struct{})
+	var arrivedOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arrivedOnce.Do(func() { close(arrived) })
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write(chatCompletionBody("density-response", "ok", 4000, 1)); err != nil {
+			t.Errorf("写出测试响应失败: %v", err)
+		}
+	}))
+	defer upstream.Close()
+	defer unblock()
+	channel := createIntegrationChannel(t, "density-inflight", model.ChannelProviderOpenAI, upstream.URL, "density-model")
+	group := createIntegrationGroup(t, "density-inflight-group", contextFitRouteConfig(), integrationLeafItem(t, channel, "density-model"))
+	engine, path := newIntegrationEngine(llm.APIFormatOpenAIChatCompletion)
+	body := contextFitBody(group.Name, 3000)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- postRelayJSON(t, engine, path, body, "", nil) }()
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("请求未到达上游")
+	}
+	if err := op.TokenDensityDelete(context.Background(), channel.ID, "density-model"); err != nil {
+		t.Fatal(err)
+	}
+	unblock()
+	select {
+	case recorder := <-done:
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("请求应正常成功: %d %s", recorder.Code, recorder.Body.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("请求定稿阻塞")
+	}
+	if _, found, err := op.TokenDensityGet(context.Background(), channel.ID, "density-model"); err != nil || found {
+		t.Fatalf("在途请求恢复了已清除密度: found=%v err=%v", found, err)
+	}
+	recorder := postRelayJSON(t, engine, path, body, "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("清除后的新请求应成功: %d %s", recorder.Code, recorder.Body.String())
+	}
+	row, found, err := op.TokenDensityGet(context.Background(), channel.ID, "density-model")
+	if err != nil || !found || row.SampleCount != 1 {
+		t.Fatalf("新请求未重新学习: row=%+v found=%v err=%v", row, found, err)
 	}
 }

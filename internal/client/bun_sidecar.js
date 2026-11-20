@@ -26,10 +26,10 @@ const server = Bun.serve({
     }
     const body = input.body ? Buffer.from(input.body, "base64") : undefined
     try {
-      if (process.env.NOVEIL_SIDECAR_DEBUG) {
-      console.error('[sidecar-js] url=' + input.url + ' hdrs=' + JSON.stringify(input.headers || []))
-    }
-    const upstream = await fetch(input.url, {
+      if (process.env.NOVEIL_SIDECAR_DEBUG === "1") {
+        console.error("[sidecar-js] hdr_names=" + JSON.stringify(Array.from(headers.keys())))
+      }
+      const upstream = await fetch(input.url, {
         method: input.method,
         headers,
         body,

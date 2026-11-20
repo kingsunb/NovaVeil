@@ -9,6 +9,39 @@ import (
 	"strings"
 )
 
+const ipv4ContextWindow = 96
+
+var ipv4VersionContextPattern = regexp.MustCompile(`(?i)(?:(?:^|[^A-Za-z0-9])(?:version(?:[ \t_]+number)?|ver|build|release|revision|rev|chrome|chromium|firefox|safari|edge|opera|opencode)\b|版本(?:号|號)?|构建(?:号|版本)?|发布版本)(?:[ \t]*["']?(?:[:：=_/-][ \t]*["']?)?v?[ \t]*|[ \t]+["']?v?[ \t]*)$|(?:\bv)["']?[ \t]*$`)
+
+// 检查 IPv4 候选边界与版本上下文。
+func publicIPv4CandidateAllowed(text string, start, end int, context string) bool {
+	if start < 0 || end < start || end > len(text) {
+		return false
+	}
+	if start > 0 && isIPv4Adjacent(text[start-1]) {
+		return false
+	}
+	if end < len(text) && isIPv4Adjacent(text[end]) {
+		if text[end] != '.' || end+1 < len(text) && isIPv4Adjacent(text[end+1]) {
+			return false
+		}
+	}
+	windowStart := max(0, start-ipv4ContextWindow)
+	prefix := text[windowStart:start]
+	lineStart := strings.LastIndexByte(prefix, '\n') + 1
+	if lineStart > 0 {
+		prefix = prefix[lineStart:]
+	} else if windowStart == 0 && context != "" && len(prefix) < ipv4ContextWindow {
+		contextStart := max(0, len(context)-(ipv4ContextWindow-len(prefix)))
+		prefix = context[contextStart:] + prefix
+	}
+	return !ipv4VersionContextPattern.MatchString(prefix)
+}
+
+func isIPv4Adjacent(c byte) bool {
+	return c == '.' || c == '_' || c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
+}
+
 // PersonalExtraRules 个人数据补充规则, 默认全关.
 var PersonalExtraRules = []Rule{
 	// 吞整段数字串, 形状不符由校验拒绝

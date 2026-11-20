@@ -24,6 +24,7 @@ func init() {
 		Use(middleware.Auth()).
 		AddRoute(
 			router.NewRoute("/overview/stream", http.MethodGet).
+				Use(middleware.AuthStream()).
 				Handle(streamOverview),
 		).
 		AddRoute(
@@ -217,6 +218,9 @@ func streamOverview(c *gin.Context) {
 	snapshot, updates := relay.OpenRequestStream()
 	defer relay.CloseRequestStream(updates)
 	for _, request := range snapshot {
+		if c.Request.Context().Err() != nil {
+			return
+		}
 		if err := sse.Encode(c.Writer, sse.Event{Event: "log", Data: request}); err != nil {
 			return
 		}
@@ -230,12 +234,15 @@ func streamOverview(c *gin.Context) {
 		case <-c.Request.Context().Done():
 			return
 		case <-heartbeat.C:
+			if c.Request.Context().Err() != nil {
+				return
+			}
 			if _, err := c.Writer.Write([]byte(": ping\n\n")); err != nil {
 				return
 			}
 			c.Writer.Flush()
 		case request, ok := <-updates:
-			if !ok {
+			if !ok || c.Request.Context().Err() != nil {
 				return
 			}
 			if err := sse.Encode(c.Writer, sse.Event{Event: "log", Data: request}); err != nil {

@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> 缓存生命周期与诊断输出边界见 [会话与密度缓存生命周期及 sidecar 诊断边界](2026-11-20-session-density-cache-lifecycle-and-sidecar-diagnostics.md)；本文的会话号编码算法继续有效。
+
 ## 问题
 
 免费档所有请求持续返回 429 `FreeUsageLimitError`（表面是「额度耗尽」），而同一台机器上的官方 opencode cli v2.3.0 正常工作。逐项排除后定位到根因：**上游按 `x-opencode-session` 做准入校验，Nova 派生的会话号不满足官方形态**。
@@ -30,7 +32,7 @@ return c + 随机段(62 字符表);                       // "ses_" 前缀
 
 `SessionIDFromSignal` 的 v2 分支重写为官方算法：
 
-- 时间段取「信号首次解析时刻」的真实毫秒（进程内 `sync.Map` 缓存，缓存超 1 小时刷新），同一信号在进程内会话号稳定；重启后刷新仍保持时间新鲜。
+- 时间段取「信号首次解析时刻」的真实毫秒（进程内 `sessionClockStore` 缓存，缓存超 1 小时刷新），同一信号在进程内会话号稳定；重启后刷新仍保持时间新鲜。
 - 序号段取哈希低 6 位（`&0x3f`），满足 `<64` 约束且确定性派生。
 - 随机段保持 `base62Fixed(sum[6:16], 14)`（信号哈希派生，形态与官方 62 字符表一致）。
 - v1 分支（1.19.5 已停售）同样收敛到 `<64` 约束，模板不变。
@@ -46,8 +48,8 @@ return c + 随机段(62 字符表);                       // "ses_" 前缀
 
 - 免费档请求上游放行，429 消失（部署实测 200，模型正常回复）。
 - 会话号的时间段真实反映请求时刻，`descendingTimePartPattern` 形态校验通过；同信号进程内稳定，重启后派生新号（上游视为新会话，Nova 全量重发 messages 无状态推理，安全）。
-- `descendingTimePart` 与天锚/小时锚常量删除；`sessionClockMillis` 新增（进程内 Map，按信号缓存，无淘汰——信号数量受会话粘合缓存约束）。
-- 诊断日志保留：`NOVEIL_SIDECAR_DEBUG=1` 时 sidecar 打印 Go 侧转发载荷与 bun 侧收到的头（`1321d97`）。
+- 时间缓存由 `sessionClockStore` 持有摘要键，容量与并发约束见 [会话与密度缓存生命周期及 sidecar 诊断边界](2026-11-20-session-density-cache-lifecycle-and-sidecar-diagnostics.md)。
+- `NOVEIL_SIDECAR_DEBUG=1` 时 Go 与 Bun 诊断日志只记录头名，Go 端另记录源站与正文长度。
 
 ## 验证
 

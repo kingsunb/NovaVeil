@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -8,6 +9,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/kingsunb/NovaVeil/internal/conf"
+	"github.com/kingsunb/NovaVeil/internal/db"
+	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/kingsunb/NovaVeil/internal/testutil"
 )
@@ -196,5 +199,63 @@ func TestVerifyAcceptsProperlyIssuedToken(t *testing.T) {
 	token := signTokenWithClaims(t, jwt.SigningMethodHS256, validClaims())
 	if !VerifyJWTToken(token) {
 		t.Fatal("token with correct alg/exp/issuer/audience must verify")
+	}
+}
+
+func TestVerifySessionRetainsExpiryAndRevocation(t *testing.T) {
+	claims := validClaims()
+	token := signTokenWithClaims(t, jwt.SigningMethodHS256, claims)
+	session, err := VerifyJWTSession(token)
+	if err != nil {
+		t.Fatalf("verify session: %v", err)
+	}
+	if !session.ExpiresAt.Equal(claims.ExpiresAt.Time) || session.Revoked.Err() != nil {
+		t.Fatal("verified session must retain expiry and active secret generation")
+	}
+	if err := op.AuthJWTRotateSecret(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if session.Revoked.Err() == nil {
+		t.Fatal("previous session must be revoked on secret rotation")
+	}
+	if _, err := VerifyJWTSession(token); err == nil {
+		t.Fatal("revoked token must fail verification")
+	}
+}
+
+func TestVerifiedLoginSecretCannotSignAfterPasswordChange(t *testing.T) {
+	user := model.User{Username: "admin", Password: "login-before-change"}
+	if err := user.HashPassword(); err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if err := db.GetDB().Exec("DELETE FROM users").Error; err != nil {
+		t.Fatalf("clear users: %v", err)
+	}
+	if err := db.GetDB().Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if err := op.UserInit(t.TempDir()); err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	secret, err := op.UserVerifyAndGetJWTSecret(user.Username, "login-before-change")
+	if err != nil {
+		t.Fatalf("verify login: %v", err)
+	}
+	if err := op.UserChangePassword("login-before-change", "login-after-change"); err != nil {
+		t.Fatalf("change password: %v", err)
+	}
+	token, _, err := generateJWTToken(secret, true)
+	if err != nil {
+		t.Fatalf("sign delayed login: %v", err)
+	}
+	if VerifyJWTToken(token) {
+		t.Fatal("old password verification must not mint a token for the new secret")
+	}
+	if _, _, err := GenerateLoginToken(user.Username, "login-before-change", true); !errors.Is(err, op.ErrInvalidCredentials) {
+		t.Fatalf("old credentials: %v", err)
+	}
+	token, maxAge, err := GenerateLoginToken(user.Username, "login-after-change", false)
+	if err != nil || maxAge != 0 || !VerifyJWTToken(token) {
+		t.Fatalf("new credentials must issue a valid session token: maxAge=%d err=%v", maxAge, err)
 	}
 }
