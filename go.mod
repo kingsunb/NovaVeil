@@ -22,10 +22,10 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.12.1
-	github.com/tidwall/gjson v1.20.2
-	github.com/tidwall/sjson v1.2.9
+	github.com/tidwall/gjson v1.20.4
+	github.com/tidwall/sjson v1.2.10
 	golang.org/x/crypto v0.59.0
-	golang.org/x/net v0.62.0
+	golang.org/x/net v0.63.0
 	golang.org/x/sys v0.50.0
 	golang.org/x/time v0.16.0
 	gorm.io/driver/mysql v1.6.0
