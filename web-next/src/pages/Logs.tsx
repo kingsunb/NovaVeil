@@ -1372,6 +1372,32 @@ function DetailTab({
           )}
         </span>
       </DetailRow>
+      {req.estimated_tokens != null && (
+        <DetailRow label="上下文预估">
+          <span className="num text-ink">
+            约 {formatNumber(req.estimated_tokens ?? 0)} token
+            {req.context_fit_state === "disabled" && (
+              <span className="ml-2 text-ink-subtle">过滤未开启</span>
+            )}
+            {req.context_fit_state === "unconfigured" && (
+              <span className="ml-2 text-ink-subtle">窗口未配置，放行</span>
+            )}
+            {req.context_fit_state === "skipped" && (
+              <span className="ml-2 text-amber-600 dark:text-amber-400">
+                跳过 {req.context_skipped ?? 0} 个成员
+              </span>
+            )}
+            {req.context_fit_state === "fits" && (
+              <span className="ml-2 text-ink-subtle">可容纳</span>
+            )}
+            {req.context_window_max ? (
+              <span className="ml-2 text-ink-muted">
+                生效窗口 {formatNumber(req.context_window_max)}
+              </span>
+            ) : null}
+          </span>
+        </DetailRow>
+      )}
     </div>
   );
 }
@@ -1458,6 +1484,16 @@ function AttemptLine({ a }: { a: AttemptRecord }) {
             <span>总耗时 {a.latency_ms}ms</span>
           )}
         </div>
+        {(a.estimated_tokens != null || a.density != null) && (
+          <div className="flex items-center gap-1.5 pl-5 tabular-nums text-ink-subtle">
+            <span>
+              预估 {formatNumber(a.estimated_tokens ?? 0)} token · 窗口{" "}
+              {a.effective_window ? formatNumber(a.effective_window) : "未配置"} · 密度{" "}
+              {a.density != null ? a.density.toFixed(3) : "-"}（
+              {a.density_source === "learned" ? `实测(${a.density_samples ?? 0} 条)` : "默认"}）
+            </span>
+          </div>
+        )}
       </li>
     );
   }
@@ -1517,6 +1553,16 @@ function AttemptLine({ a }: { a: AttemptRecord }) {
           >
             {a.err_brief}
           </p>
+        </div>
+      )}
+      {(a.estimated_tokens != null || a.density != null) && (
+        <div className="flex items-center gap-1.5 tabular-nums text-ink-subtle">
+          <span>
+            预估 {formatNumber(a.estimated_tokens ?? 0)} token · 窗口{" "}
+            {a.effective_window ? formatNumber(a.effective_window) : "未配置"} · 密度{" "}
+            {a.density != null ? a.density.toFixed(3) : "-"}（
+            {a.density_source === "learned" ? `实测(${a.density_samples ?? 0} 条)` : "默认"}）
+          </span>
         </div>
       )}
     </li>

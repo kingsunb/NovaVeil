@@ -106,7 +106,11 @@ func settingGetInternal(key model.SettingKey) (string, error) {
 // 不走 model.Setting 的自动迁移, 避免在 SettingGetString 内触发不必要的 schema 同步。
 func loadSettingFromDB(key model.SettingKey) (string, error) {
 	row := model.Setting{}
-	if err := db.GetDB().Where("key = ?", key).First(&row).Error; err != nil {
+	database := db.GetDB()
+	if database == nil {
+		return "", errSettingNotFound
+	}
+	if err := database.Where("key = ?", key).First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return "", errSettingNotFound
 		}

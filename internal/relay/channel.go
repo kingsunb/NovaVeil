@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/kingsunb/NovaVeil/internal/model"
+	"github.com/kingsunb/NovaVeil/internal/op"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/auth"
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -286,15 +287,27 @@ func maxReasoningEffortFor(channel model.Channel, modelName string) string {
 	return ""
 }
 
-// effectiveContextWindow 仅手动窗口参与选路, 同步值仅供展示。
-func effectiveContextWindow(limits map[string]model.ChannelModelLimit, channelModel *model.ChannelModel) int {
+// effectiveContextWindow 返回生效窗口: 渠道手动值优先, 免费档回退到全局窗口, 同步值仅供展示。
+func effectiveContextWindow(channel model.Channel, channelModel *model.ChannelModel) int {
 	if channelModel == nil {
 		return 0
 	}
-	if limit, ok := lookupModelLimit(limits, channelModel.Name); ok && limit.ContextWindow != nil && *limit.ContextWindow > 0 {
+	if limit, ok := lookupModelLimit(channel.ModelLimits, channelModel.Name); ok && limit.ContextWindow != nil && *limit.ContextWindow > 0 {
 		return *limit.ContextWindow
 	}
+	if isOpencodeFreeLane(channel) {
+		return opencodeFreeContextWindow()
+	}
 	return 0
+}
+
+// opencodeFreeContextWindow 读取免费档全局窗口; 未配置或读取失败返回 0。
+var opencodeFreeContextWindow = func() int {
+	window, err := op.SettingGetInt(model.SettingKeyOpencodeFreeContextWindow)
+	if err != nil {
+		return 0
+	}
+	return window
 }
 
 // applyChannelModelLimits 将模型输出与思考配置按渠道协议写入上游请求体。

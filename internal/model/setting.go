@@ -20,17 +20,24 @@ const (
 	SettingKeyConversationRetentionDays SettingKey = "conversation_retention_days" // 对话留存归档保留天数(天), 默认 3, 受 ConversationRetentionDaysMin/Max 校验
 	SettingKeyConversationDirMaxGB      SettingKey = "conversation_dir_max_gb"     // 对话留存目录硬预算(GB), 默认 5, 受 ConversationDirMaxGBMin/Max 校验
 	// #nosec G101 -- 设置键名字符串是配置项名称，不是硬编码凭据。
-	SettingKeyAuthJWTSecret            SettingKey = "auth_jwt_secret"             // JWT 签名密钥(32字节随机数的hex, 64字符). 为空时首次使用自动生成并持久化; 轮换后所有已签发 token 失效. 仅内部管理, 禁止通过设置接口读写
-	SettingKeyHeaderTemplates          SettingKey = "header_templates"            // 渠道自定义请求头模板(JSON 数组), 供渠道表单一键填充
-	SettingKeyChannelRandomHeaders     SettingKey = "channel_random_headers"      // 按渠道指向头名的随机请求头规则(JSON 数组), 值由系统按会话自动生成并注入
-	SettingKeyUsageRetentionDays       SettingKey = "usage_retention_days"        // 用量分桶保留天数(天); 0=永久保留, 否则必须 >= 365(至少覆盖 1 年)
-	SettingKeyMaskConfig               SettingKey = "mask_config"                 // 脱敏功能配置(JSON): 全局开关/内置规则开关/自定义敏感词, 默认全关
-	SettingKeyModelFilter              SettingKey = "model_filter"                // 渠道获取模型时的全局过滤表达式(ECMAScript 正则); 留空表示不过滤, 与渠道级 MatchRegex 取 AND
-	SettingKeyClientStatMaxCount       SettingKey = "client_stat_max_count"       // 调用客户端统计最大保留条数, 默认 10000, 0=不限制
-	SettingKeyProxyPool                SettingKey = "proxy_pool"                  // 代理池(JSON 数组), 供设置页管理与测试多个可选代理
-	SettingKeyConvTrace                SettingKey = "conv_trace_enabled"          // 协议转换追踪开关: "1"开启后对跨协议转换记录耗时/大小/降级诊断等 Debug 日志, "0"(默认)关闭, 关闭时仅一次缓存查询零开销
-	SettingKeyOpencodeAccountAutoProbe SettingKey = "opencode_account_auto_probe" // OpenCode 账号 24h 自动体检开关: "1"开启(默认)由后台任务每天体检一次台账内到期账号, "0"关闭。不进 DefaultSettings, 由 op 层惰性补种
-	SettingKeyPromptEnvironment        SettingKey = "prompt_environment"          // 注入提示词环境字段覆盖(JSON): 工作目录/工作区根/平台/是否 git 仓库, 空值保持官方模板原值
+	SettingKeyAuthJWTSecret             SettingKey = "auth_jwt_secret"              // JWT 签名密钥(32字节随机数的hex, 64字符). 为空时首次使用自动生成并持久化; 轮换后所有已签发 token 失效. 仅内部管理, 禁止通过设置接口读写
+	SettingKeyHeaderTemplates           SettingKey = "header_templates"             // 渠道自定义请求头模板(JSON 数组), 供渠道表单一键填充
+	SettingKeyChannelRandomHeaders      SettingKey = "channel_random_headers"       // 按渠道指向头名的随机请求头规则(JSON 数组), 值由系统按会话自动生成并注入
+	SettingKeyUsageRetentionDays        SettingKey = "usage_retention_days"         // 用量分桶保留天数(天); 0=永久保留, 否则必须 >= 365(至少覆盖 1 年)
+	SettingKeyMaskConfig                SettingKey = "mask_config"                  // 脱敏功能配置(JSON): 全局开关/内置规则开关/自定义敏感词, 默认全关
+	SettingKeyModelFilter               SettingKey = "model_filter"                 // 渠道获取模型时的全局过滤表达式(ECMAScript 正则); 留空表示不过滤, 与渠道级 MatchRegex 取 AND
+	SettingKeyClientStatMaxCount        SettingKey = "client_stat_max_count"        // 调用客户端统计最大保留条数, 默认 10000, 0=不限制
+	SettingKeyProxyPool                 SettingKey = "proxy_pool"                   // 代理池(JSON 数组), 供设置页管理与测试多个可选代理
+	SettingKeyConvTrace                 SettingKey = "conv_trace_enabled"           // 协议转换追踪开关: "1"开启后对跨协议转换记录耗时/大小/降级诊断等 Debug 日志, "0"(默认)关闭, 关闭时仅一次缓存查询零开销
+	SettingKeyOpencodeAccountAutoProbe  SettingKey = "opencode_account_auto_probe"  // OpenCode 账号 24h 自动体检开关: "1"开启(默认)由后台任务每天体检一次台账内到期账号, "0"关闭。不进 DefaultSettings, 由 op 层惰性补种
+	SettingKeyPromptEnvironment         SettingKey = "prompt_environment"           // 注入提示词环境字段覆盖(JSON): 工作目录/工作区根/平台/是否 git 仓库, 空值保持官方模板原值
+	SettingKeyOpencodeFreeContextWindow SettingKey = "opencode_free_context_window" // 免费档全局上下文窗口(token): 仅 isOpencodeFreeLane 生效, 渠道手动窗口优先, 0=不启用
+)
+
+// 免费档全局上下文窗口的取值上限(1000 万 token), 防止误填溢出。
+const (
+	OpencodeFreeContextWindowMin = 0
+	OpencodeFreeContextWindowMax = 10_000_000
 )
 
 // 用量数据保留时间设置项的默认值与下限。
@@ -162,6 +169,7 @@ func DefaultSettings() []Setting {
 		{Key: SettingKeyProxyPool, Value: "[]"},                                                           // 代理池默认为空
 		{Key: SettingKeyConvTrace, Value: "0"},                                                            // 协议转换追踪默认关闭
 		{Key: SettingKeyPromptEnvironment, Value: "{}"},                                                   // 环境覆盖默认空, 官方模板原值生效
+		{Key: SettingKeyOpencodeFreeContextWindow, Value: "0"},                                            // 免费档全局窗口默认不启用
 	}
 }
 
@@ -287,6 +295,12 @@ func (s *Setting) Validate() error {
 		return nil
 	case SettingKeyProxyPool:
 		return validateProxyPool(s.Value)
+	case SettingKeyOpencodeFreeContextWindow:
+		n, err := strconv.Atoi(s.Value)
+		if err != nil || n < OpencodeFreeContextWindowMin || n > OpencodeFreeContextWindowMax {
+			return fmt.Errorf("免费档上下文窗口必须为 %d-%d 的整数(0=不启用)", OpencodeFreeContextWindowMin, OpencodeFreeContextWindowMax)
+		}
+		return nil
 	case SettingKeyProxyURL:
 		if s.Value == "" {
 			return nil

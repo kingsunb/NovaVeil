@@ -265,6 +265,7 @@ function SystemSection() {
   const [proxy, setProxy] = useState("");
   const [cors, setCors] = useState("");
   const [modelFilter, setModelFilter] = useState("");
+  const [freeWindow, setFreeWindow] = useState("");
   const [hydrated, setHydrated] = useState(false);
 
   // 后端 list 返回原始值（JWT 密钥除外）；首次拉到后同步进编辑态。
@@ -280,6 +281,9 @@ function SystemSection() {
     );
     setModelFilter(
       settings.find((s) => s.key === "model_filter")?.value ?? "",
+    );
+    setFreeWindow(
+      settings.find((s) => s.key === "opencode_free_context_window")?.value ?? "0",
     );
     setHydrated(true);
   }, [settings, hydrated]);
@@ -303,9 +307,12 @@ function SystemSection() {
     settings?.find((s) => s.key === "cors_allow_origins")?.value ?? "";
   const initialModelFilter =
     settings?.find((s) => s.key === "model_filter")?.value ?? "";
+  const initialFreeWindow =
+    settings?.find((s) => s.key === "opencode_free_context_window")?.value ?? "0";
   const proxyDirty = hydrated && proxy !== initialProxy;
   const corsDirty = hydrated && originsForStorage(cors) !== initialCors;
   const modelFilterDirty = hydrated && modelFilter !== initialModelFilter;
+  const freeWindowDirty = hydrated && freeWindow.trim() !== initialFreeWindow;
 
   return (
     <Card>
@@ -392,6 +399,35 @@ function SystemSection() {
                 saveMut.mutate({
                   key: "model_filter",
                   value: modelFilter.trim(),
+                })
+              }
+            >
+              保存
+            </Button>
+          </div>
+        </Field>
+        <Field
+          label="全局 OpenCode 免费档上下文窗口（token，可选）"
+          hint="仅对 isOpencodeFreeLane（OpencodeCompat + zen 档）渠道生效；渠道内手动窗口优先。0 表示不启用，取值上限 10000000；付费 OpenCode 与其他渠道不受影响。分组仍需开启「上下文窗口过滤」才会真正拦截"
+        >
+          <div className="flex gap-2">
+            <Input
+              value={freeWindow}
+              onChange={(e) => setFreeWindow(e.target.value.replace(/[^\d]/g, ""))}
+              inputMode="numeric"
+              placeholder="0"
+              className="mono"
+            />
+            <Button
+              variant="primary"
+              size="sm"
+              loading={saveMut.isPending}
+              disabled={!freeWindowDirty}
+              aria-label="保存 全局 OpenCode 免费档上下文窗口"
+              onClick={() =>
+                saveMut.mutate({
+                  key: "opencode_free_context_window",
+                  value: freeWindow.trim() === "" ? "0" : String(Number(freeWindow)),
                 })
               }
             >

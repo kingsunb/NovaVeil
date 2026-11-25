@@ -134,15 +134,80 @@ func TestContextFitsWindowDefaultDensityMatchesUpstream(t *testing.T) {
 
 func TestEffectiveContextWindowOnlyUsesManualValue(t *testing.T) {
 	channelModel := &model.ChannelModel{Name: "manual-only", ContextWindow: 200_000}
-	if got := effectiveContextWindow(nil, channelModel); got != 0 {
+	if got := effectiveContextWindow(model.Channel{}, channelModel); got != 0 {
 		t.Fatalf("同步窗口不应参与过滤, got %d", got)
 	}
 
 	manual := 300_000
-	limits := map[string]model.ChannelModelLimit{
+	channel := model.Channel{ModelLimits: map[string]model.ChannelModelLimit{
 		"manual-only": {ContextWindow: &manual},
-	}
-	if got := effectiveContextWindow(limits, channelModel); got != manual {
+	}}
+	if got := effectiveContextWindow(channel, channelModel); got != manual {
 		t.Fatalf("手动窗口 = %d, want %d", got, manual)
+	}
+}
+
+func TestEffectiveContextWindowOpencodeFreeGlobalFallback(t *testing.T) {
+	original := opencodeFreeContextWindow
+	opencodeFreeContextWindow = func() int { return 250_000 }
+	t.Cleanup(func() { opencodeFreeContextWindow = original })
+
+	freeLane := model.Channel{OpencodeCompat: true, BaseURL: "https://opencode.ai/inference"}
+	paidGo := model.Channel{OpencodeCompat: true, BaseURL: "https://opencode.ai/zen/v1"}
+	other := model.Channel{BaseURL: "https://api.example.com"}
+	modelName := &model.ChannelModel{Name: "free-model"}
+
+	if got := effectiveContextWindow(freeLane, modelName); got != 250_000 {
+		t.Fatalf("免费档应回退全局窗口, got %d", got)
+	}
+	if got := effectiveContextWindow(paidGo, modelName); got != 0 {
+		t.Fatalf("付费 go 档不应使用全局窗口, got %d", got)
+	}
+	if got := effectiveContextWindow(other, modelName); got != 0 {
+		t.Fatalf("非 OpenCode 渠道不应使用全局窗口, got %d", got)
+	}
+
+	manual := 400_000
+	freeLane.ModelLimits = map[string]model.ChannelModelLimit{
+		"free-model": {ContextWindow: &manual},
+	}
+	if got := effectiveContextWindow(freeLane, modelName); got != manual {
+		t.Fatalf("渠道手动窗口应优先于全局, got %d", got)
+	}
+}
+
+func TestContextFitState(t *testing.T) {
+	cases := []struct {
+		name string
+		scan contextFitScan
+		want string
+	}{
+		{"skipped", contextFitScan{candidates: 2, skipped: map[int]bool{1: true}, maxWindow: 100}, "skipped"},
+		{"unconfigured", contextFitScan{candidates: 1}, "unconfigured"},
+		{"fits", contextFitScan{candidates: 1, maxWindow: 100, fitting: 1}, "fits"},
+	}
+	for _, c := range cases {
+		if got := contextFitState(c.scan); got != c.want {
+			t.Fatalf("%s: contextFitState = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestObserveRoundContext(t *testing.T) {
+	original := opencodeFreeContextWindow
+	opencodeFreeContextWindow = func() int { return 128_000 }
+	t.Cleanup(func() { opencodeFreeContextWindow = original })
+
+	channel := model.Channel{ID: 424242, OpencodeCompat: true, BaseURL: "https://opencode.ai/inference"}
+	channelModel := &model.ChannelModel{Name: "observe-model"}
+	obs := observeRoundContext(channel, channelModel, []byte("hello world"))
+	if obs.EffectiveWindow != 128_000 {
+		t.Fatalf("生效窗口 = %d, want 128000", obs.EffectiveWindow)
+	}
+	if obs.EstimatedTokens <= 0 {
+		t.Fatalf("预估 token 应大于 0, got %d", obs.EstimatedTokens)
+	}
+	if obs.DensitySource != "default" {
+		t.Fatalf("未观测密度来源应为 default, got %q", obs.DensitySource)
 	}
 }

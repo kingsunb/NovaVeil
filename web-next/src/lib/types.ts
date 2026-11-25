@@ -539,6 +539,16 @@ export interface AttemptRecord {
   outcome: AttemptOutcome;
   err_class?: ErrClass;
   err_brief?: string;
+  /** 本轮按该成员密度估算的请求 token。 */
+  estimated_tokens?: number;
+  /** 本轮该成员生效的上下文窗口，0/缺省表示未配置。 */
+  effective_window?: number;
+  /** 本轮生效的 token 密度。 */
+  density?: number;
+  /** 密度来源：default=未观测（默认 4/7.1），learned=真实流量校准。 */
+  density_source?: "default" | "learned";
+  /** 密度已观测样本数，default 时为 0/缺省。 */
+  density_samples?: number;
 }
 
 export interface RequestState {
@@ -571,6 +581,14 @@ export interface RequestState {
     };
   };
   usage_estimated: boolean;
+  /** 入口按默认密度估算的请求 token。 */
+  estimated_tokens?: number;
+  /** 候选集最大生效窗口 token，0/缺省表示全部未配置。 */
+  context_window_max?: number;
+  /** 本轮扫描中因窗口不足被跳过的成员数。 */
+  context_skipped?: number;
+  /** 上下文过滤状态：disabled=未开启，unconfigured=窗口未配置，skipped=有成员被跳过，fits=可容纳。 */
+  context_fit_state?: "disabled" | "unconfigured" | "skipped" | "fits";
   round: number;
   target_channel: string;
   target_model: string;

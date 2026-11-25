@@ -94,6 +94,11 @@ type RequestState struct {
 
 	UsageEstimated bool `json:"usage_estimated,omitempty"` // 终态用量是否因上游上报可疑零输入而经本地估算修复, 面板据此区分真实上报与估算值。
 
+	EstimatedTokens  int    `json:"estimated_tokens,omitempty"`   // 入口按默认密度估算的请求 token, 供日志识别未配置/密度低/被跳过。
+	ContextWindowMax int    `json:"context_window_max,omitempty"` // 候选集最大生效窗口 token, 0 表示全部未配置。
+	ContextSkipped   int    `json:"context_skipped,omitempty"`    // 本轮扫描中因窗口不足被跳过的成员数。
+	ContextFitState  string `json:"context_fit_state,omitempty"`  // 上下文过滤状态: disabled/unconfigured/skipped/fits。
+
 	Round           int         `json:"round"`                    // 最新一轮循环的递增序号, 人工中止按此匹配以免误杀下一轮。
 	TargetChannel   string      `json:"target_channel"`           // 最新一轮选中的渠道名称。
 	TargetChannelID int         `json:"-"`                        // 最新一轮渠道主键，仅用于密度校准。
@@ -128,18 +133,23 @@ type RequestState struct {
 
 // AttemptRecord 一轮上游尝试的轨迹记录, 面板据此渲染请求的时间线。
 type AttemptRecord struct {
-	Seq          int            `json:"seq"`                      // 轮次序号, 与 Round 一致。
-	ChannelID    int            `json:"channel_id"`               // 本轮选中的渠道 ID。
-	ChannelName  string         `json:"channel_name"`             // 本轮选中的渠道名称。
-	MemberID     int            `json:"member_id"`                // 本轮使用的分组成员 ID。
-	Model        string         `json:"model"`                    // 本轮实际请求上游的模型名称。
-	KeyLabel     string         `json:"key_label,omitempty"`      // 本轮使用的渠道 Key 标签: "#序号(别名)", 旧式单 Key 为空。
-	ProxyAddr    string         `json:"proxy_addr,omitempty"`     // 本轮出口代理地址(密码打码); 空为直连。
-	FirstTokenMS int64          `json:"first_token_ms,omitempty"` // 本轮首字耗时毫秒(TTFT), 首字未到为 0。
-	LatencyMS    int64          `json:"latency_ms"`               // 本轮从发起到结束的耗时毫秒。
-	Outcome      AttemptOutcome `json:"outcome"`                  // 结束形态: 成功/失败/取消。
-	ErrClass     ErrClass       `json:"err_class,omitempty"`      // 失败分类, 成功时为空。
-	ErrBrief     string         `json:"err_brief,omitempty"`      // 失败摘要, 超长按字节截断。
+	Seq             int            `json:"seq"`                        // 轮次序号, 与 Round 一致。
+	ChannelID       int            `json:"channel_id"`                 // 本轮选中的渠道 ID。
+	ChannelName     string         `json:"channel_name"`               // 本轮选中的渠道名称。
+	MemberID        int            `json:"member_id"`                  // 本轮使用的分组成员 ID。
+	Model           string         `json:"model"`                      // 本轮实际请求上游的模型名称。
+	KeyLabel        string         `json:"key_label,omitempty"`        // 本轮使用的渠道 Key 标签: "#序号(别名)", 旧式单 Key 为空。
+	ProxyAddr       string         `json:"proxy_addr,omitempty"`       // 本轮出口代理地址(密码打码); 空为直连。
+	FirstTokenMS    int64          `json:"first_token_ms,omitempty"`   // 本轮首字耗时毫秒(TTFT), 首字未到为 0。
+	LatencyMS       int64          `json:"latency_ms"`                 // 本轮从发起到结束的耗时毫秒。
+	Outcome         AttemptOutcome `json:"outcome"`                    // 结束形态: 成功/失败/取消。
+	ErrClass        ErrClass       `json:"err_class,omitempty"`        // 失败分类, 成功时为空。
+	ErrBrief        string         `json:"err_brief,omitempty"`        // 失败摘要, 超长按字节截断。
+	EstimatedTokens int            `json:"estimated_tokens,omitempty"` // 本轮按该成员密度估算的请求 token。
+	EffectiveWindow int            `json:"effective_window,omitempty"` // 本轮该成员生效的上下文窗口, 0 表示未配置。
+	Density         float64        `json:"density,omitempty"`          // 本轮生效的 token 密度。
+	DensitySource   string         `json:"density_source,omitempty"`   // 密度来源: default(未观测)/learned(真实流量)。
+	DensitySamples  int64          `json:"density_samples,omitempty"`  // 密度已观测样本数, default 时为 0。
 }
 
 const streamBuffer = 16 // 单个状态流连接的非阻塞消息缓冲容量。
@@ -246,6 +256,10 @@ func (r RequestState) MarshalJSON() ([]byte, error) {
 		KeyName              string          `json:"key_name,omitempty"`
 		Usage                llm.Usage       `json:"usage"`
 		UsageEstimated       bool            `json:"usage_estimated,omitempty"`
+		EstimatedTokens      int             `json:"estimated_tokens,omitempty"`
+		ContextWindowMax     int             `json:"context_window_max,omitempty"`
+		ContextSkipped       int             `json:"context_skipped,omitempty"`
+		ContextFitState      string          `json:"context_fit_state,omitempty"`
 		Round                int             `json:"round"`
 		TargetChannel        string          `json:"target_channel"`
 		TargetModel          string          `json:"target_model"`
@@ -276,6 +290,8 @@ func (r RequestState) MarshalJSON() ([]byte, error) {
 		FirstTokenAt: r.FirstTokenAt, OutputChars: r.OutputChars, Duration: nanoseconds,
 		DurationMS: milliseconds, Model: r.Model, ClientIP: r.ClientIP, APIKey: maskAPIKey(r.APIKey),
 		KeyName: r.KeyName, Usage: r.Usage, UsageEstimated: r.UsageEstimated, Round: r.Round,
+		EstimatedTokens: r.EstimatedTokens, ContextWindowMax: r.ContextWindowMax,
+		ContextSkipped: r.ContextSkipped, ContextFitState: r.ContextFitState,
 		TargetChannel: r.TargetChannel, TargetModel: r.TargetModel, KeyLabel: r.KeyLabel,
 		ThinkingLevel: r.ThinkingLevel, ClientFormat: r.ClientFormat, UpstreamType: r.UpstreamType,
 		RelayMode: r.RelayMode, ProxyAddr: r.ProxyAddr, AccountProbe: r.AccountProbe, Masked: r.Masked,
@@ -342,6 +358,12 @@ type RoundTarget struct {
 	UpstreamType  string // 上游渠道的协议类型。
 	Passthrough   bool   // 是否同协议透传。
 	ProxyAddr     string // 本轮使用的渠道代理完整地址(密码已打码); 未走渠道代理为空。
+
+	EstimatedTokens int     // 本轮按密度估算的请求 token。
+	EffectiveWindow int     // 本轮生效的上下文窗口, 0 表示未配置。
+	Density         float64 // 本轮生效的 token 密度。
+	DensitySource   string  // 密度来源: default/learned。
+	DensitySamples  int64   // 密度已观测样本数。
 }
 
 // StopRequest 请求整体终止: 置位终止标记并立即中止当前等待中的轮次。
@@ -404,16 +426,36 @@ func (r *RequestState) startRound(cancel context.CancelFunc, target RoundTarget)
 		r.Attempts = r.Attempts[len(r.Attempts)-maxAttempts+1:]
 	}
 	r.Attempts = append(r.Attempts, AttemptRecord{
-		Seq:         r.Round,
-		ChannelID:   target.ChannelID,
-		ChannelName: target.ChannelName,
-		MemberID:    target.MemberID,
-		Model:       target.Model,
-		KeyLabel:    target.KeyLabel,
-		ProxyAddr:   target.ProxyAddr,
+		Seq:             r.Round,
+		ChannelID:       target.ChannelID,
+		ChannelName:     target.ChannelName,
+		MemberID:        target.MemberID,
+		Model:           target.Model,
+		KeyLabel:        target.KeyLabel,
+		ProxyAddr:       target.ProxyAddr,
+		EstimatedTokens: target.EstimatedTokens,
+		EffectiveWindow: target.EffectiveWindow,
+		Density:         target.Density,
+		DensitySource:   target.DensitySource,
+		DensitySamples:  target.DensitySamples,
 	})
 	publishRequestLocked(r)
 	return r.Round
+}
+
+// setContextSummary 记录请求级上下文预估摘要, 值未变时不重复发布。
+func (r *RequestState) setContextSummary(estimated, windowMax, skipped int, state string) {
+	mu.Lock()
+	defer mu.Unlock()
+	if r.EstimatedTokens == estimated && r.ContextWindowMax == windowMax &&
+		r.ContextSkipped == skipped && r.ContextFitState == state {
+		return
+	}
+	r.EstimatedTokens = estimated
+	r.ContextWindowMax = windowMax
+	r.ContextSkipped = skipped
+	r.ContextFitState = state
+	publishRequestLocked(r)
 }
 
 // setRelayMode 在候选选定后记录实际转发方式。

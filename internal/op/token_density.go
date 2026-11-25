@@ -45,6 +45,19 @@ type TokenDensitySnapshot struct {
 	entry   *tokenDensityEntry
 }
 
+// Learned 报告密度是否来自真实流量观测。
+func (s TokenDensitySnapshot) Learned() bool {
+	return s.entry != nil && s.entry.row.SampleCount > 0
+}
+
+// SampleCount 返回已观测样本数, 未观测为 0。
+func (s TokenDensitySnapshot) SampleCount() int64 {
+	if s.entry == nil {
+		return 0
+	}
+	return s.entry.row.SampleCount
+}
+
 var (
 	tokenDensityMu    sync.Mutex
 	tokenDensityCache = make(map[tokenDensityKey]*tokenDensityEntry)

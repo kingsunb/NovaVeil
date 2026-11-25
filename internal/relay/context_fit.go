@@ -97,6 +97,44 @@ func contextFitsWindow(body []byte, contextWindow int, channelID int, baseURL, m
 	return estimateModelTokens(body, channelID, baseURL, modelName) <= contextWindow
 }
 
+// roundContextObservation 汇总一轮尝试的上下文可视信息。
+type roundContextObservation struct {
+	EstimatedTokens int
+	EffectiveWindow int
+	Density         float64
+	DensitySource   string
+	DensitySamples  int64
+}
+
+// observeRoundContext 计算本轮成员的预估 token、生效窗口与密度来源。
+func observeRoundContext(channel model.Channel, channelModel *model.ChannelModel, body []byte) roundContextObservation {
+	obs := roundContextObservation{}
+	if channelModel == nil {
+		return obs
+	}
+	snapshot := requestTokenDensitySnapshot(channel.ID, channel.BaseURL, channelModel.Name)
+	obs.EstimatedTokens = scaleBaseTokens(estimateRequestTokens(body), snapshot.Density)
+	obs.EffectiveWindow = effectiveContextWindow(channel, channelModel)
+	obs.Density = snapshot.Density
+	obs.DensitySource = "default"
+	obs.DensitySamples = snapshot.SampleCount()
+	if snapshot.Learned() {
+		obs.DensitySource = "learned"
+	}
+	return obs
+}
+
+// contextFitState 归纳一次扫描的过滤状态, 供日志识别未配置/被跳过/可容纳。
+func contextFitState(scan contextFitScan) string {
+	if len(scan.skipped) > 0 {
+		return "skipped"
+	}
+	if scan.candidates > 0 && scan.maxWindow == 0 {
+		return "unconfigured"
+	}
+	return "fits"
+}
+
 type contextFitScan struct {
 	baseTokens      int
 	candidates      int
@@ -160,7 +198,7 @@ func (s *contextFitScan) scanGroup(group model.Group, refDepth int, visiting map
 			s.fitting++
 			continue
 		}
-		window := effectiveContextWindow(channel.ModelLimits, item.ChannelModel)
+		window := effectiveContextWindow(channel, item.ChannelModel)
 		if window > s.maxWindow {
 			s.maxWindow = window
 			s.maxWindowTokens = estimateModelTokensFromBase(s.baseTokens, channel.ID, channel.BaseURL, item.ChannelModel.Name)

@@ -257,6 +257,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 
 			selectionSkipped := contextSkipped
 			allContextSkipped := false
+			estimatedTokens := estimateDefaultTokens(estimateRequestTokens(raw.Body))
 			if relayConfig.ContextFitEnabled {
 				scan := scanContextFit(group, raw.Body)
 				for itemID := range scan.skipped {
@@ -267,6 +268,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					maxCandidateTokens = scan.maxWindowTokens
 				}
 				allContextSkipped = scan.candidates > 0 && scan.fitting == 0
+				request.setContextSummary(estimatedTokens, scan.maxWindow, len(scan.skipped), contextFitState(scan))
 				if len(scan.blockedRefs) > 0 {
 					selectionSkipped = make(map[int]bool, len(contextSkipped)+len(scan.blockedRefs))
 					for itemID := range contextSkipped {
@@ -276,6 +278,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 						selectionSkipped[itemID] = true
 					}
 				}
+			} else {
+				request.setContextSummary(estimatedTokens, 0, 0, "disabled")
 			}
 			if len(infeasibleForRequest) > 0 {
 				combined := make(map[int]bool, len(selectionSkipped)+len(infeasibleForRequest))
@@ -455,7 +459,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			request.setRelayMode(relayModeFor(channel, channelModel, format))
 
 			// 上下文装不下时跳过该成员, 不计成员失败。
-			contextWindow := effectiveContextWindow(channel.ModelLimits, channelModel)
+			contextWindow := effectiveContextWindow(channel, channelModel)
 			if relayConfig.ContextFitEnabled && !contextFitsWindow(raw.Body, contextWindow, channel.ID, channel.BaseURL, channelModel.Name) {
 				contextSkipped[item.ID] = true
 				if contextWindow > maxCandidateWindow {
@@ -544,6 +548,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 				roundCtx, cancelRound := context.WithCancelCause(ctx)
 				lifecycle = newRoundLifecycle(cancelRound)
+				obs := observeRoundContext(channel, channelModel, raw.Body)
 				request.startRound(lifecycle.Stop, RoundTarget{
 					MemberID:     item.ID,
 					ChannelID:    channel.ID,
@@ -555,6 +560,12 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					UpstreamType: upstreamTypeLabel(channel, channelModel),
 					Passthrough:  passthrough,
 					ProxyAddr:    roundProxyLabel(channel, effective),
+
+					EstimatedTokens: obs.EstimatedTokens,
+					EffectiveWindow: obs.EffectiveWindow,
+					Density:         obs.Density,
+					DensitySource:   obs.DensitySource,
+					DensitySamples:  obs.DensitySamples,
 				})
 				request.finishRound(AttemptFailed, classifyRound(dispatchErr, ctx, roundCtx), dispatchErr.Error())
 				request.releaseRoundLifecycle()
@@ -635,6 +646,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				effective.ChannelProxy = &addr
 			}
 			modelLimit, _ := lookupModelLimit(channel.ModelLimits, channelModel.Name)
+			obs := observeRoundContext(channel, channelModel, raw.Body)
 			request.startRound(lifecycle.Stop, RoundTarget{
 				MemberID:      item.ID,
 				ChannelID:     channel.ID,
@@ -647,6 +659,12 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				UpstreamType:  upstreamTypeLabel(channel, channelModel),
 				Passthrough:   passthrough,
 				ProxyAddr:     roundProxyLabel(channel, effective),
+
+				EstimatedTokens: obs.EstimatedTokens,
+				EffectiveWindow: obs.EffectiveWindow,
+				Density:         obs.Density,
+				DensitySource:   obs.DensitySource,
+				DensitySamples:  obs.DensitySamples,
 			})
 			// 成员级响应超时: 流式只约束等待首个有效事件的阶段, 非流式约束等待完整响应的阶段。
 			timeoutSeconds := memberTimeoutSeconds(group.RelayConfig, metadataStreaming)
