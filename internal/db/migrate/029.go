@@ -22,6 +22,13 @@ var retiredOpencodeFreeV1Names = []string{
 	"OpenCode Free V1 备用2",
 }
 
+// DeleteRetiredOpencodeFreeV1Channels 幂等清理被旧版本重新补回的 V1 内置渠道。
+// 迁移 29/32 只在升级当次执行, 旧实例或备份可能在记录成功后把行补回;
+// 启动时复用同一清理逻辑可消除该残留。
+func DeleteRetiredOpencodeFreeV1Channels(db *gorm.DB) error {
+	return deleteRetiredOpencodeFreeV1Channels(db)
+}
+
 // 删除 v1 内置渠道, 并按 op.ChannelDel 的口径级联清理派生数据。
 func deleteRetiredOpencodeFreeV1Channels(db *gorm.DB) error {
 	if db == nil || !db.Migrator().HasTable("channels") {

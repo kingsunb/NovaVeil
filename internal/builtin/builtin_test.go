@@ -738,3 +738,39 @@ func TestEnsureBuiltinChannelsPreservesOfficialIsFreeFalse(t *testing.T) {
 		t.Fatalf("official channel wrong: IsFree=%v Builtin=%v Enabled=%v", official.IsFree, official.Builtin, official.Enabled)
 	}
 }
+
+func TestEnsureFreeBuiltinChannelsRetiresReintroducedV1(t *testing.T) {
+	ctx := context.Background()
+	const name = "OpenCode Free V1"
+	t.Cleanup(func() { db.GetDB().Where("name = ?", name).Delete(&model.Channel{}) })
+	db.GetDB().Where("name = ?", name).Delete(&model.Channel{})
+
+	builtinV1 := model.Channel{Name: name, Type: model.ChannelProviderOpenAI, Enabled: true, Builtin: true, IsFree: true, BaseURL: "https://opencode.ai/inference"}
+	if err := db.GetDB().Create(&builtinV1).Error; err != nil {
+		t.Fatalf("seed builtin v1: %v", err)
+	}
+	if err := ensureFreeBuiltinChannels(ctx); err != nil {
+		t.Fatalf("ensureFreeBuiltinChannels: %v", err)
+	}
+	var count int64
+	if err := db.GetDB().Model(&model.Channel{}).Where("name = ? AND builtin = ?", name, true).Count(&count).Error; err != nil {
+		t.Fatalf("count builtin v1: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("重新补回的内置 V1 应被启动清理, got %d", count)
+	}
+
+	customV1 := model.Channel{Name: name, Type: model.ChannelProviderOpenAI, Enabled: true, Builtin: false, BaseURL: "https://opencode.ai/inference"}
+	if err := db.GetDB().Create(&customV1).Error; err != nil {
+		t.Fatalf("seed custom v1: %v", err)
+	}
+	if err := ensureFreeBuiltinChannels(ctx); err != nil {
+		t.Fatalf("ensureFreeBuiltinChannels: %v", err)
+	}
+	if err := db.GetDB().Model(&model.Channel{}).Where("name = ? AND builtin = ?", name, false).Count(&count).Error; err != nil {
+		t.Fatalf("count custom v1: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("同名自建渠道必须保留, got %d", count)
+	}
+}

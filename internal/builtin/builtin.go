@@ -436,6 +436,10 @@ func ensureFreeBuiltinChannels(ctx context.Context) error {
 		Updates(map[string]interface{}{"opencode_compat": false}).Error; err != nil {
 		return fmt.Errorf("清理自定义渠道 opencode 兼容标记失败: %w", err)
 	}
+	// 迁移只执行一次; 旧实例/备份可能在迁移记录成功后补回退役渠道, 启动时幂等清理。
+	if err := migrate.DeleteRetiredOpencodeFreeV1Channels(gormDB); err != nil {
+		return fmt.Errorf("清理退役内置免费渠道失败: %w", err)
+	}
 	for _, def := range BuiltinFreeChannels {
 		channel := freeChannelFromDefinition(def)
 		if channel.Name == "" {

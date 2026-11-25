@@ -14,7 +14,8 @@ Status: implemented
 - 新增迁移 32（`internal/db/migrate/032.go`），复用迁移 29 的 `deleteRetiredOpencodeFreeV1Channels`：按 `builtin = 1` 精确匹配四条 V1 渠道名，事务内级联清理模型、分组成员、评估排序、生效成员指针、密度与账号池；`builtin = 0` 的同名自建渠道保留。
 - 旧名 `OpenCode Free Old` 由迁移 28 负责：目标存在则迁移账号后删除，目标缺失则直接删除账号、密度与渠道；新增迁移 33 清理历史遗留的无主账号池，迁移 34 清理无主密度。当前库已同步清理该行。
 - 迁移 29 不改动，负责首次升级；迁移 32 负责迁移 29 已记录但被种子补回的存量库。
-- 测试同步：`TestBuiltinFreeChannelsDefinitions` 计数 16；`TestBuiltinFreeChannelsOpencodeLaneMapping` 把 V1 列入 retired；`TestBuiltinOpencodeFreeRetiredChannels` 要求所有 OpenCode 兼容内置渠道必须是 v2。
+- 迁移 32 仍是一次性记录：若旧实例、回滚容器或恢复备份在记录成功后又把 V1 补回，最新版本不会重跑。`EnsureBuiltinChannels` 启动时因此每次调用 `migrate.DeleteRetiredOpencodeFreeV1Channels` 做幂等清理，复用迁移 29 的级联删除口径；只删 `builtin = 1` 的四条 V1 名称，同名自建渠道保留。
+- 测试同步：`TestBuiltinFreeChannelsDefinitions` 计数 16；`TestBuiltinFreeChannelsOpencodeLaneMapping` 把 V1 列入 retired；`TestBuiltinOpencodeFreeRetiredChannels` 要求所有 OpenCode 兼容内置渠道必须是 v2；`TestEnsureFreeBuiltinChannelsRetiresReintroducedV1` 覆盖「迁移记录成功后被重新补回」的场景。
 
 ## 取代检查
 
@@ -34,6 +35,7 @@ Status: implemented
 - 新库与升级库都不再出现 V1；升级库会删除 V1 的模型、分组成员与评估排序，历史用量仍按模型名保留。
 - 仍需要 1.x 形态做实验的实例可自建渠道并把 `opencode_lane` 设为 `v1`，代码路径仍支持。
 - 内置免费渠道总数变为 16，OpenCode 免费档收敛为 V2 主渠道与两条 V2 备用。
+- 启动清理是幂等的：新库与无残留库每次启动零改动；旧库即使 V1 在迁移 32 之后被重新补回，也会在下次启动被删除。
 
 ## 验证
 
