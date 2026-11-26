@@ -147,35 +147,6 @@ func TestEffectiveContextWindowOnlyUsesManualValue(t *testing.T) {
 	}
 }
 
-func TestEffectiveContextWindowOpencodeFreeGlobalFallback(t *testing.T) {
-	original := opencodeFreeContextWindow
-	opencodeFreeContextWindow = func() int { return 250_000 }
-	t.Cleanup(func() { opencodeFreeContextWindow = original })
-
-	freeLane := model.Channel{OpencodeCompat: true, BaseURL: "https://opencode.ai/inference"}
-	paidGo := model.Channel{OpencodeCompat: true, BaseURL: "https://opencode.ai/zen/v1"}
-	other := model.Channel{BaseURL: "https://api.example.com"}
-	modelName := &model.ChannelModel{Name: "free-model"}
-
-	if got := effectiveContextWindow(freeLane, modelName); got != 250_000 {
-		t.Fatalf("免费档应回退全局窗口, got %d", got)
-	}
-	if got := effectiveContextWindow(paidGo, modelName); got != 0 {
-		t.Fatalf("付费 go 档不应使用全局窗口, got %d", got)
-	}
-	if got := effectiveContextWindow(other, modelName); got != 0 {
-		t.Fatalf("非 OpenCode 渠道不应使用全局窗口, got %d", got)
-	}
-
-	manual := 400_000
-	freeLane.ModelLimits = map[string]model.ChannelModelLimit{
-		"free-model": {ContextWindow: &manual},
-	}
-	if got := effectiveContextWindow(freeLane, modelName); got != manual {
-		t.Fatalf("渠道手动窗口应优先于全局, got %d", got)
-	}
-}
-
 func TestContextFitState(t *testing.T) {
 	cases := []struct {
 		name string
@@ -194,11 +165,10 @@ func TestContextFitState(t *testing.T) {
 }
 
 func TestObserveRoundContext(t *testing.T) {
-	original := opencodeFreeContextWindow
-	opencodeFreeContextWindow = func() int { return 128_000 }
-	t.Cleanup(func() { opencodeFreeContextWindow = original })
-
-	channel := model.Channel{ID: 424242, OpencodeCompat: true, BaseURL: "https://opencode.ai/inference"}
+	window := 128_000
+	channel := model.Channel{ID: 424242, ModelLimits: map[string]model.ChannelModelLimit{
+		"observe-model": {ContextWindow: &window},
+	}}
 	channelModel := &model.ChannelModel{Name: "observe-model"}
 	obs := observeRoundContext(channel, channelModel, []byte("hello world"))
 	if obs.EffectiveWindow != 128_000 {
@@ -209,5 +179,47 @@ func TestObserveRoundContext(t *testing.T) {
 	}
 	if obs.DensitySource != "default" {
 		t.Fatalf("未观测密度来源应为 default, got %q", obs.DensitySource)
+	}
+}
+
+func TestEstimateRequestTokensMediaPayloadNotCountedAsText(t *testing.T) {
+	blob := strings.Repeat("A", 40000)
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"OpenAI Chat data URI 图片", `{"messages":[{"role":"user","content":[{"type":"text","text":"hi"},{"type":"image_url","image_url":{"url":"data:image/png;base64,` + blob + `"}}]}]}`},
+		{"OpenAI Responses input_image", `{"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,` + blob + `"}]}]}`},
+		{"Anthropic image source", `{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + blob + `"}}]}]}`},
+		{"OpenAI input_audio", `{"messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"` + blob + `","format":"wav"}}]}]}`},
+		{"OpenAI video_url", `{"messages":[{"role":"user","content":[{"type":"video_url","video_url":{"url":"data:video/mp4;base64,` + blob + `"}}]}]}`},
+	}
+	for _, tc := range cases {
+		base := estimateRequestTokens([]byte(tc.body))
+		if base > mediaBaseEquivalent*2 {
+			t.Fatalf("%s: 基准 %d 仍被 base64 撑大(应约 %d)", tc.name, base, mediaBaseEquivalent)
+		}
+		tokens := scaleBaseTokens(base, defaultTokenDensity)
+		if tokens < mediaTokenCost/2 || tokens > mediaTokenCost*2 {
+			t.Fatalf("%s: 折算 token %d 不在约 %d 附近", tc.name, tokens, mediaTokenCost)
+		}
+	}
+}
+
+func TestEstimateRequestTokensMediaIndependentOfPayloadSize(t *testing.T) {
+	mk := func(n int) []byte {
+		return []byte(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,` + strings.Repeat("A", n) + `"}}]}]}`)
+	}
+	small := estimateRequestTokens(mk(1000))
+	large := estimateRequestTokens(mk(200000))
+	if small != large {
+		t.Fatalf("媒体载荷大小不应影响预估: %d != %d", small, large)
+	}
+}
+
+func TestEstimateRequestTokensTextMatchesBytesWithMedia(t *testing.T) {
+	body := `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,` + strings.Repeat("A", 5000) + `"}}]}]}`
+	if got, want := estimateRequestTokensText(body), estimateRequestTokens([]byte(body)); got != want {
+		t.Fatalf("含媒体时文本与字节估算不一致: %d != %d", got, want)
 	}
 }

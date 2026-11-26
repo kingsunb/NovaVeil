@@ -14,8 +14,8 @@ import (
 	"github.com/looplj/axonhub/llm"
 )
 
-// createFreeLaneChannel 构造免费档渠道并注入免费档通道属性。
-func createFreeLaneChannel(t *testing.T, baseURL, modelName string) model.Channel {
+// createFreeLaneChannel 构造带手动窗口的免费档渠道并注入免费档通道属性。
+func createFreeLaneChannel(t *testing.T, baseURL, modelName string, window int) model.Channel {
 	t.Helper()
 	channel := model.Channel{
 		Name:    integrationUniqueName("it-free-log-ch"),
@@ -24,6 +24,11 @@ func createFreeLaneChannel(t *testing.T, baseURL, modelName string) model.Channe
 		BaseURL: baseURL,
 		Key:     "integration-key",
 		Models:  []model.ChannelModel{{Name: modelName, Source: model.ChannelModelSourceManual, UpstreamProtocol: model.UpstreamProtocolChat}},
+	}
+	if window > 0 {
+		channel.ModelLimits = map[string]model.ChannelModelLimit{
+			modelName: {ContextWindow: &window},
+		}
 	}
 	if err := op.ChannelCreate(&channel, context.Background()); err != nil {
 		t.Fatalf("创建免费档渠道失败: %v", err)
@@ -53,15 +58,12 @@ func freeLaneSSEUpstream(t *testing.T, hits *atomic.Int64, content string) *http
 	return server
 }
 
-func TestFreeLaneGlobalWindowAppliesToRoutingAndAttemptLog(t *testing.T) {
+func TestFreeLaneManualWindowAppliesToRoutingAndAttemptLog(t *testing.T) {
 	setupFailoverTest(t)
-	original := opencodeFreeContextWindow
-	opencodeFreeContextWindow = func() int { return 1_000_000 }
-	t.Cleanup(func() { opencodeFreeContextWindow = original })
 
 	var hits atomic.Int64
 	upstream := freeLaneSSEUpstream(t, &hits, "free-lane-ok")
-	channel := createFreeLaneChannel(t, upstream.URL+"/inference", "deepseek-v4-flash-free")
+	channel := createFreeLaneChannel(t, upstream.URL+"/inference", "deepseek-v4-flash-free", 1_000_000)
 	group := createIntegrationGroup(t, "it-free-log-fit", contextFitRouteConfig(),
 		integrationLeafItem(t, channel, "deepseek-v4-flash-free"))
 
@@ -100,15 +102,12 @@ func TestFreeLaneGlobalWindowAppliesToRoutingAndAttemptLog(t *testing.T) {
 	}
 }
 
-func TestFreeLaneGlobalWindowSkipsOversizeMember(t *testing.T) {
+func TestFreeLaneManualWindowSkipsOversizeMember(t *testing.T) {
 	setupFailoverTest(t)
-	original := opencodeFreeContextWindow
-	opencodeFreeContextWindow = func() int { return 1 }
-	t.Cleanup(func() { opencodeFreeContextWindow = original })
 
 	var hits atomic.Int64
 	upstream := freeLaneSSEUpstream(t, &hits, "should-not-serve")
-	channel := createFreeLaneChannel(t, upstream.URL+"/inference", "deepseek-v4-flash-free")
+	channel := createFreeLaneChannel(t, upstream.URL+"/inference", "deepseek-v4-flash-free", 1)
 	group := createIntegrationGroup(t, "it-free-log-skip", contextFitRouteConfig(),
 		integrationLeafItem(t, channel, "deepseek-v4-flash-free"))
 

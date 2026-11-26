@@ -3,6 +3,7 @@
 Status: implemented
 
 > 估算口径与密度校准见 [上下文 token 密度改由真实流量校准、落库并删除探测页](2026-11-19-context-token-density-from-upstream-usage.md)。本文只记录窗口取值来源与日志展示。
+> 全局窗口设置项已下线（窗口只保留渠道手动值），见 [移除 OpenCode 免费档全局上下文窗口设置项](2026-11-26-remove-opencode-free-global-context-window.md)；本文的请求级/尝试级日志可见性部分继续有效。
 
 ## 问题
 
