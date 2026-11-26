@@ -36,7 +36,7 @@ const LICENSE_NAMES = new Set([
 const SPDX_HINTS = [
   ['MIT', /\bMIT License\b|\bPermission is hereby granted, free of charge\b/i],
   ['Apache-2.0', /\bApache License\b|Version 2\.0/i],
-  ['ISC', /\bPermission to use, copy, modify, and\/or distribute\b/i, /\bISC License\b/i],
+  ['ISC', /\bPermission to use, copy, modify, and(?:\/or)? distribute\b/i, /\bISC License\b/i],
   ['MPL-2.0', /Mozilla Public License/i],
   ['LGPL-3.0', /GNU LESSER GENERAL PUBLIC LICENSE\s+Version 3/i],
   ['LGPL-2.1', /GNU LESSER GENERAL PUBLIC LICENSE\s+Version 2\.1/i],

@@ -18,7 +18,7 @@
 - Compose 生产模板：`NOVAVEIL_IMAGE` 必填且建议 pin `@sha256:<digest>`；非 root 10001:10001、只读 rootfs + /tmp tmpfs、`cap_drop: ALL` + no-new-privileges、pids/mem/cpus 限额、宿主仅绑 `127.0.0.1:8888`、外部卷预置 0700@10001。
 - Dockerfile：Alpine 按 digest pin、二进制 0555 root 所有、entrypoint umask 0077、wget healthcheck；另从 `oven/bun:1.4.4-alpine`（digest pin）复制 Bun 到 `/usr/local/bin/bun`，供 OpenCode 免费档 sidecar 使用。
 
-### CI（8 个 workflow）
+### CI（9 个 workflow）
 
 | workflow | 触发 | 职责 |
 |---|---|---|
@@ -29,6 +29,7 @@
 | verify-notes | push main / PR | 树 + 格式 + 归档封印；PR 额外要求非平凡 diff 新增/更新 Agent Note（可加 `skip-agent-note` 豁免），tsx 固定版本 |
 | security-scan | 周一 cron / 手动 / 依赖清单变更的 push main 或 PR | go vet + gosec（high，排除 G115）+ govulncheck + pnpm audit |
 | build | 仅手动 | 80+ 分钟全审计：Trivy secret 扫 → 多平台构建 → 漏洞门禁 + SBOM + 镜像校验 + smoke → artifact |
+| release | 仅手动 | 构建 Windows exe 归档（含许可证 + SHA256SUMS）并创建 GitHub Release |
 | template-check | issue / PR | 模板合规自动关闭 |
 
 - lefthook：pre-commit 跑前端 typecheck+lint，pre-push 跑 agent-notes 校验；test/build 一律留给 CI。
