@@ -18,7 +18,7 @@
 
 # ---- Stage 1: builder ----
 # 基础镜像固定到与 CI 相同的完整版本 tag，并 pin 到不可变 digest。
-FROM node:22.19.0-alpine@sha256:d2166de198f26e17e5a442f537754dd616ab069c47cc57b889310a717e0abbf9 AS builder
+FROM node:22.23.5-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS builder
 WORKDIR /app
 
 # 利用层缓存：单独先装依赖。

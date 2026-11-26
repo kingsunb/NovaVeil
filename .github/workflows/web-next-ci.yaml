@@ -37,7 +37,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "22.19.0"
+          node-version: "22.23.5"
           cache: pnpm
           cache-dependency-path: web-next/pnpm-lock.yaml
 
@@ -80,7 +80,7 @@ jobs:
           version: "11.21.0"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "22.19.0"
+          node-version: "22.23.5"
           cache: pnpm
           cache-dependency-path: web-next/pnpm-lock.yaml
       - working-directory: web-next
@@ -103,7 +103,7 @@ jobs:
           version: "11.21.0"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "22.19.0"
+          node-version: "22.23.5"
           cache: pnpm
           cache-dependency-path: web-next/pnpm-lock.yaml
       - working-directory: web-next

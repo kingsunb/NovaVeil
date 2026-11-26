@@ -63,7 +63,7 @@ The runtime base is pinned to the Alpine 3.21.7 multi-platform OCI index digest
 Every platform build therefore resolves through the reviewed immutable index rather
 than a mutable tag. The OpenCode free-tier sidecar uses the Bun 1.4.4 runtime copied
 from the digest-pinned `oven/bun:1.4.4-alpine` image and installed at
-`/usr/local/bin/bun`; Compose needs no host Bun installation. Release binaries use Go 1.27.3 so the image vulnerability gate does not ship
+`/usr/local/bin/bun`; Compose needs no host Bun installation. Release binaries use Go 1.27.4 so the image vulnerability gate does not ship
 known fixed standard-library CVEs.
 
 ## Runtime restrictions
