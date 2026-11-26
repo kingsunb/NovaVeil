@@ -1,22 +1,67 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"math"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/log"
 	"github.com/kingsunb/NovaVeil/internal/model"
 	"github.com/kingsunb/NovaVeil/internal/op"
+	"github.com/tidwall/gjson"
 )
 
 // errContextWindowTooSmall 表示全部候选成员的手动窗口都装不下本请求。
 var errContextWindowTooSmall = errors.New("没有候选模型的手动上下文窗口能容纳当前请求")
 
+// mediaTokenCost 单个媒体片段(图片/音频/视频)的固定 token 估算, 粗估用。
+const mediaTokenCost = 1000
+
+// mediaBaseEquivalent 把媒体固定 token 折算回字符基准口径, 供密度换算前叠加。
+var mediaBaseEquivalent = int(math.Round(mediaTokenCost / defaultTokenDensity))
+
+// mediaPartTypes 视为媒体载体的内容块类型(OpenAI Chat/Responses、Anthropic 等)。
+var mediaPartTypes = map[string]bool{
+	"image_url": true, "input_image": true, "image": true,
+	"input_audio": true, "audio_url": true, "audio": true,
+	"video_url": true, "video": true,
+}
+
+// mediaPayloadPaths 媒体块内承载 base64 或 URL 的字段, 取最长值视作载荷。
+var mediaPayloadPaths = []string{
+	"image_url.url", "image_url", "source.data", "source.url",
+	"input_audio.data", "audio_url.url", "video_url.url", "video_url",
+	"inline_data.data", "inlineData.data", "file_data.file_uri", "data",
+}
+
 // estimateRequestTokens 按字符宽度粗估请求 token 数: 非 ASCII 字按 1, ASCII 每 4 字按 1。
-// 全渠道共用这一基准口径; 真实流量观测出的密度比统一在 estimateModelTokens 叠加。
+// 媒体载荷(image/audio/video 的 base64 或 URL)不计字符, 每个媒体按固定值折算。
 func estimateRequestTokens(body []byte) int {
-	narrow, wide := 0, 0
+	narrow, wide := countBodyWidthBytes(body)
+	payload, media := scanMediaBytes(body)
+	return tokensFromWidths(narrow, wide, payload, media)
+}
+
+// estimateRequestTokensText 与字节版同口径, 避免热路径整包转换。
+func estimateRequestTokensText(body string) int {
+	narrow, wide := countBodyWidthText(body)
+	payload, media := scanMediaText(body)
+	return tokensFromWidths(narrow, wide, payload, media)
+}
+
+// tokensFromWidths 汇总字符宽度并扣除媒体载荷, 再叠加每个媒体的固定 token。
+func tokensFromWidths(narrow, wide, payload, media int) int {
+	narrow -= payload
+	if narrow < 0 {
+		narrow = 0
+	}
+	return wide + narrow/4 + media*mediaBaseEquivalent
+}
+
+func countBodyWidthBytes(body []byte) (narrow, wide int) {
 	for i := 0; i < len(body); {
 		r, size := utf8.DecodeRune(body[i:])
 		if r >= 0x80 {
@@ -26,12 +71,10 @@ func estimateRequestTokens(body []byte) int {
 		}
 		i += size
 	}
-	return wide + narrow/4
+	return
 }
 
-// estimateRequestTokensText 与字节版同口径, 避免热路径整包转换。
-func estimateRequestTokensText(body string) int {
-	narrow, wide := 0, 0
+func countBodyWidthText(body string) (narrow, wide int) {
 	for _, r := range body {
 		if r >= 0x80 {
 			wide++
@@ -39,7 +82,64 @@ func estimateRequestTokensText(body string) int {
 			narrow++
 		}
 	}
-	return wide + narrow/4
+	return
+}
+
+func scanMediaBytes(body []byte) (payload, count int) {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || (trimmed[0] != '{' && trimmed[0] != '[') {
+		return 0, 0
+	}
+	walkMedia(gjson.ParseBytes(trimmed), &payload, &count)
+	return
+}
+
+func scanMediaText(body string) (payload, count int) {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') {
+		return 0, 0
+	}
+	walkMedia(gjson.Parse(trimmed), &payload, &count)
+	return
+}
+
+// walkMedia 递归遍历 JSON, 命中媒体块时累计载荷长度与数量, 且不再深入该块。
+func walkMedia(v gjson.Result, payload, count *int) {
+	if v.IsObject() {
+		if isMediaObject(v) {
+			*payload += mediaPayloadLen(v)
+			*count++
+			return
+		}
+		v.ForEach(func(_, child gjson.Result) bool {
+			walkMedia(child, payload, count)
+			return true
+		})
+		return
+	}
+	if v.IsArray() {
+		v.ForEach(func(_, child gjson.Result) bool {
+			walkMedia(child, payload, count)
+			return true
+		})
+	}
+}
+
+func isMediaObject(v gjson.Result) bool {
+	if mediaPartTypes[v.Get("type").String()] {
+		return true
+	}
+	return v.Get("inline_data").Exists() || v.Get("inlineData").Exists() || v.Get("file_data").Exists()
+}
+
+func mediaPayloadLen(v gjson.Result) int {
+	longest := 0
+	for _, path := range mediaPayloadPaths {
+		if r := v.Get(path); r.Type == gjson.String && len(r.Str) > longest {
+			longest = len(r.Str)
+		}
+	}
+	return longest
 }
 
 const defaultTokenDensity = op.DefaultTokenDensity

@@ -3,6 +3,7 @@
 Status: implemented
 
 > 缓存写入顺序与失效契约见 [会话与密度缓存生命周期及 sidecar 诊断边界](../bug-fix/2026-11-20-session-density-cache-lifecycle-and-sidecar-diagnostics.md)；本文的真实流量采样与估算规则继续有效。
+> 媒体载荷（图片/音频/视频的 base64/URL）不再计入字符基准、每个媒体按约 1000 token 计，见 [上下文预估剔除媒体载荷](../bug-fix/2026-11-26-context-estimate-media-payload.md)。
 
 ## 问题
 
